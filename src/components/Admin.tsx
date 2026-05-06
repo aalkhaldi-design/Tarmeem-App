@@ -300,7 +300,6 @@ function AdminDeactivateModal({ user, activeUsers, onDeactivate, onClose }: {
     </div>
   );
 }
-
 /* ------------------------------------------------------------------ */
 /*  EditUserModal – Edit role, region, depts, head flag                */
 /* ------------------------------------------------------------------ */
@@ -525,7 +524,8 @@ export function AdminUsersPortal(props: AdminProps) {
   const [modalMode, setModalMode] = useState<'approve' | 'deactivate' | 'edit' | 'add' | null>(null);
 
   /* ---- Access control ---- */
-  if (currentRole !== 'Admin') return <AccessDeniedCard />;
+  // FIXED: Using case-insensitive trim to ensure Admin access works regardless of capital letters
+  if (currentRole?.toLowerCase().trim() !== 'admin') return <AccessDeniedCard />;
 
   /* ---- Derived data ---- */
   const activeUsers = useMemo(() => store.users.filter(u => u.status === 'active'), [store.users]);
@@ -606,7 +606,7 @@ export function AdminUsersPortal(props: AdminProps) {
               placeholder="بحث بالاسم أو البريد..."
               className="w-full pr-9 pl-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]"
             />
-          </div>
+            </div>
           <button
             onClick={() => setModalMode('add')}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-[#56B894] text-white hover:bg-[#3F9B7A] transition shadow-sm"
@@ -810,7 +810,8 @@ export function PortalSettings({ store, updateList, currentRole }: {
   const [newValue, setNewValue] = useState('');
   const [busy, setBusy] = useState(false);
 
-  if (currentRole !== 'Admin') return <AccessDeniedCard />;
+  // FIXED: Using case-insensitive trim for settings access as well
+  if (currentRole?.toLowerCase().trim() !== 'admin') return <AccessDeniedCard />;
 
   const getCurrentValues = (key: string): string[] => {
     return store.lists?.[key] || (DEFAULT_LISTS as any)[key] || [];

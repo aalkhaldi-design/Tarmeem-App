@@ -75,98 +75,6 @@ interface AppNotification {
   meta?: any;
 }
 
-// --- ADMIN APPROVAL DASHBOARD WITH RBAC ASSIGNMENT ---
-const AVAILABLE_ROLES = [
-  'user',
-  'admin',
-  'المدير التنفيذي',
-  'مدير المشاريع',
-  'المهندس المشرف',
-  'المحاسب / المالية',
-  'العقود والمشتريات',
-  'مهندس التشخيص',
-  'الفني المساعد للتشخيص'
-];
-
-const AVAILABLE_DEPTS = [
-  'المشاريع',
-  'التشخيص',
-  'المالية',
-  'العقود والمشتريات',
-  'الإدارة التنفيذية',
-  'تقنية المعلومات'
-];
-
-function PendingUserCard({ user, onApprove, currentUserId }: any) {
-  const [role, setRole] = useState(user.role || 'user');
-  const [department, setDepartment] = useState(user.departments?.[0] || 'المشاريع');
-
-  return (
-    <div className="flex flex-col gap-3 bg-white p-4 rounded-lg border border-orange-200 shadow-sm">
-      <div className="border-b pb-2">
-        <p className="font-bold text-sm text-gray-800">{user.fullName || 'مستخدم جديد'}</p>
-        <p className="text-xs text-gray-500" dir="ltr">{user.email}</p>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <div>
-          <label className="text-[10px] font-bold text-gray-500 mb-1 block">تحديد الصلاحية (Role)</label>
-          <select
-            value={role}
-            onChange={(e) => setRole(e.target.value)}
-            className="w-full text-xs p-1.5 border border-gray-300 rounded focus:outline-none focus:border-[#4A1F66]"
-          >
-            {AVAILABLE_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-          </select>
-        </div>
-
-        <div>
-          <label className="text-[10px] font-bold text-gray-500 mb-1 block">تحديد القسم (Department)</label>
-          <select
-            value={department}
-            onChange={(e) => setDepartment(e.target.value)}
-            className="w-full text-xs p-1.5 border border-gray-300 rounded focus:outline-none focus:border-[#4A1F66]"
-          >
-            {AVAILABLE_DEPTS.map(d => <option key={d} value={d}>{d}</option>)}
-          </select>
-        </div>
-      </div>
-
-      <button
-        onClick={() => onApprove(user.id, { role, departments: [department] }, currentUserId)}
-        className="w-full mt-2 bg-green-500 hover:bg-green-600 text-white text-xs font-bold px-3 py-2 rounded-md transition flex items-center justify-center gap-2"
-      >
-        <CheckCircle2 className="w-4 h-4"/>
-        اعتماد وتفعيل المستخدم
-      </button>
-    </div>
-  );
-}
-
-function AdminApprovalDashboard({ users, onApprove, currentUserProfile }: { users: UserProfile[], onApprove: (id: string, edits: any, actorId: string) => void, currentUserProfile: UserProfile }) {
-  const pendingUsers = users.filter(u => u.status === 'pending');
-
-  if (currentUserProfile.role !== 'admin' && currentUserProfile.role !== 'Admin') return null;
-  if (pendingUsers.length === 0) return null;
-
-  return (
-    <div className="max-w-7xl mx-auto px-4 mt-6">
-      <div className="bg-orange-50 border border-orange-200 rounded-xl p-5 shadow-sm">
-        <h2 className="text-orange-800 font-bold text-sm mb-4 flex items-center gap-2">
-          <AlertTriangle className="w-5 h-5"/>
-          طلبات انضمام بانتظار تحديد الصلاحيات ({pendingUsers.length})
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {pendingUsers.map(u => (
-            <PendingUserCard key={u.id} user={u} onApprove={onApprove} currentUserId={currentUserProfile.id} />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-// -----------------------------------------
-
 function App() {
   const [firebaseUser, setFirebaseUser] = useState<any>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -181,7 +89,8 @@ function App() {
 
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [globalSearch, setGlobalSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<'HOME' | 'ERP' | 'FIELD'>('HOME');
+  // Added 'ADMIN' to the possible tabs
+  const [activeTab, setActiveTab] = useState<'HOME' | 'ERP' | 'FIELD' | 'ADMIN'>('HOME');
   const [erpView, setErpView] = useState('ALL_PROJECTS');
   const [fieldView, setFieldView] = useState('TASKS');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -405,16 +314,21 @@ function App() {
   });
 
   const currentUserRole = userProfile?.role || '';
+  
+  // Role checks for visibility
+  const isAdmin = currentUserRole === 'admin' || currentUserRole === 'Admin';
+  
   const canSeeERP = userProfile?.status === 'active' && (
-    currentUserRole === 'admin' || currentUserRole === 'Admin' || currentUserRole === 'المدير التنفيذي' ||
+    isAdmin || currentUserRole === 'المدير التنفيذي' ||
     currentUserRole === 'مدير المشاريع' || currentUserRole === 'المهندس المشرف' ||
     currentUserRole === 'المحاسب / المالية' || currentUserRole === 'العقود والمشتريات' ||
     userProfile?.isDepartmentHead
   );
+  
   const canSeeField = userProfile?.status === 'active' && (
     currentUserRole === 'مهندس التشخيص' || currentUserRole === 'الفني المساعد للتشخيص' ||
     currentUserRole === 'المهندس المشرف' || currentUserRole === 'مدير المشاريع' ||
-    currentUserRole === 'admin' || currentUserRole === 'Admin'
+    isAdmin
   );
 
   const myNotifications = useMemo(() =>
@@ -423,7 +337,9 @@ function App() {
   );
   const unreadCount = myNotifications.filter(n => !n.readBy.includes(userProfile?.id || '')).length;
 
-  const theme = activeTab === 'FIELD' ? { primary: '#6B21A8', primaryLight: '#8B5CF6', accent: '#14B8A6' } : { primary: '#4A1F66', primaryLight: '#6B3D87', accent: '#56B894' };
+  const theme = activeTab === 'FIELD' ? { primary: '#6B21A8', primaryLight: '#8B5CF6', accent: '#14B8A6' } : 
+                activeTab === 'ADMIN' ? { primary: '#1F2937', primaryLight: '#374151', accent: '#F97316' } :
+                { primary: '#4A1F66', primaryLight: '#6B3D87', accent: '#56B894' };
 
   if (authLoading) {
     return (
@@ -638,17 +554,29 @@ function App() {
               <MapPin className="w-4 h-4" /> الميدان
             </button>
           )}
+          
+          {/* THE NEW ADMIN TAB DOOR */}
+          {isAdmin && (
+            <button onClick={() => setActiveTab('ADMIN')}
+              className={`px-6 py-3 font-bold text-sm flex items-center gap-2 border-b-4 transition ${activeTab === 'ADMIN' ? 'border-[#F97316] text-[#1F2937]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+              <Settings className="w-4 h-4" /> لوحة التحكم
+            </button>
+          )}
         </div>
       </div>
 
       <main className="flex-1 w-full pb-20 md:pb-0">
-        
-        {/* The New Admin Approval Dashboard */}
-        {userProfile && (
-          <AdminApprovalDashboard 
-            users={users} 
-            onApprove={approveUser} 
-            currentUserProfile={userProfile} 
+
+        {/* LOADING THE REAL ADMIN PORTAL */}
+        {activeTab === 'ADMIN' && userProfile && (
+          <AdminUsersPortal 
+            users={users}
+            approveUser={approveUser}
+            updateUser={updateUser}
+            deactivateUser={deactivateUser}
+            reactivateUser={reactivateUser}
+            rejectUser={rejectUser}
+            currentUser={userProfile}
           />
         )}
 
@@ -712,13 +640,21 @@ function App() {
         {canSeeERP && (
           <button onClick={() => setActiveTab('ERP')}
             className={`flex flex-col items-center justify-center w-full h-full ${activeTab === 'ERP' ? 'text-[#1F4E79] font-bold' : 'text-gray-400'}`}>
-            <Briefcase className="w-5 h-5 mb-1" /><span className="text-[10px]">إدارة المشاريع</span>
+            <Briefcase className="w-5 h-5 mb-1" /><span className="text-[10px]">المشاريع</span>
           </button>
         )}
         {canSeeField && (
           <button onClick={() => setActiveTab('FIELD')}
             className={`flex flex-col items-center justify-center w-full h-full ${activeTab === 'FIELD' ? 'text-[#6B21A8] font-bold' : 'text-gray-400'}`}>
             <MapPin className="w-5 h-5 mb-1" /><span className="text-[10px]">الميدان</span>
+          </button>
+        )}
+        
+        {/* MOBILE ADMIN DOOR */}
+        {isAdmin && (
+          <button onClick={() => setActiveTab('ADMIN')}
+            className={`flex flex-col items-center justify-center w-full h-full ${activeTab === 'ADMIN' ? 'text-[#1F2937] font-bold' : 'text-gray-400'}`}>
+            <Settings className="w-5 h-5 mb-1" /><span className="text-[10px]">الإدارة</span>
           </button>
         )}
       </nav>

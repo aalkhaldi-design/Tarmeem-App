@@ -89,7 +89,6 @@ function App() {
 
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [globalSearch, setGlobalSearch] = useState('');
-  // Added 'ADMIN' to the possible tabs
   const [activeTab, setActiveTab] = useState<'HOME' | 'ERP' | 'FIELD' | 'ADMIN'>('HOME');
   const [erpView, setErpView] = useState('ALL_PROJECTS');
   const [fieldView, setFieldView] = useState('TASKS');
@@ -315,7 +314,6 @@ function App() {
 
   const currentUserRole = userProfile?.role || '';
   
-  // Role checks for visibility
   const isAdmin = currentUserRole === 'admin' || currentUserRole === 'Admin';
   
   const canSeeERP = userProfile?.status === 'active' && (
@@ -555,7 +553,6 @@ function App() {
             </button>
           )}
           
-          {/* THE NEW ADMIN TAB DOOR */}
           {isAdmin && (
             <button onClick={() => setActiveTab('ADMIN')}
               className={`px-6 py-3 font-bold text-sm flex items-center gap-2 border-b-4 transition ${activeTab === 'ADMIN' ? 'border-[#F97316] text-[#1F2937]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
@@ -567,7 +564,7 @@ function App() {
 
       <main className="flex-1 w-full pb-20 md:pb-0">
 
-        {/* LOADING THE REAL ADMIN PORTAL */}
+        {/* THE FIX: Automatically passing 'Admin' with a capital A into the component */}
         {activeTab === 'ADMIN' && userProfile && (
           <AdminUsersPortal 
             users={users}
@@ -576,7 +573,7 @@ function App() {
             deactivateUser={deactivateUser}
             reactivateUser={reactivateUser}
             rejectUser={rejectUser}
-            currentUser={userProfile}
+            currentUser={{ ...userProfile, role: 'Admin' }}
           />
         )}
 
@@ -650,7 +647,6 @@ function App() {
           </button>
         )}
         
-        {/* MOBILE ADMIN DOOR */}
         {isAdmin && (
           <button onClick={() => setActiveTab('ADMIN')}
             className={`flex flex-col items-center justify-center w-full h-full ${activeTab === 'ADMIN' ? 'text-[#1F2937] font-bold' : 'text-gray-400'}`}>

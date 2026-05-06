@@ -77,7 +77,7 @@ interface AppNotification {
 
 function App() {
   const [firebaseUser, setFirebaseUser] = useState<any>(null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [rawUserProfile, setRawUserProfile] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
   const [projects, setProjects] = useState<Project[]>([]);
@@ -111,9 +111,9 @@ function App() {
       setFirebaseUser(user);
       if (user) {
         const profile = await getUserProfile(user.uid);
-        setUserProfile(profile);
+        setRawUserProfile(profile);
       } else {
-        setUserProfile(null);
+        setRawUserProfile(null);
       }
       setAuthLoading(false);
     });
@@ -132,7 +132,14 @@ function App() {
     }, (err) => console.error('Assessments listener error:', err));
 
     const unsubUsers = onSnapshot(collection(db, 'users'), (snap) => {
-      setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() } as UserProfile)));
+      const fetchedUsers = snap.docs.map(d => ({ id: d.id, ...d.data() } as UserProfile));
+      setUsers(fetchedUsers);
+      
+      // THE FIX: Force the app to continually sync your personal profile with the live database
+      const myLiveProfile = fetchedUsers.find(u => u.id === firebaseUser.uid);
+      if (myLiveProfile) {
+        setRawUserProfile(myLiveProfile);
+      }
     }, (err) => console.error('Users listener error:', err));
 
     const unsubDocs = onSnapshot(collection(db, 'documents'), (snap) => {
@@ -167,6 +174,15 @@ function App() {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  // SAFETY NET: No matter what happens, force the perfect Capital 'A' Admin profile object
+  const userProfile = useMemo(() => {
+    if (!rawUserProfile) return null;
+    if (rawUserProfile.role === 'admin' || rawUserProfile.role === 'Admin') {
+      return { ...rawUserProfile, role: 'Admin' };
+    }
+    return rawUserProfile;
+  }, [rawUserProfile]);
 
   const updateProject = useCallback(async (id: string, updates: Record<string, any>) => {
     try {
@@ -564,7 +580,6 @@ function App() {
 
       <main className="flex-1 w-full pb-20 md:pb-0">
 
-        {/* THE FIX: Automatically passing 'Admin' with a capital A into the component */}
         {activeTab === 'ADMIN' && userProfile && (
           <AdminUsersPortal 
             users={users}
@@ -573,7 +588,7 @@ function App() {
             deactivateUser={deactivateUser}
             reactivateUser={reactivateUser}
             rejectUser={rejectUser}
-            currentUser={{ ...userProfile, role: 'Admin' }}
+            currentUser={userProfile}
           />
         )}
 

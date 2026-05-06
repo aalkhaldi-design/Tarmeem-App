@@ -75,7 +75,74 @@ interface AppNotification {
   meta?: any;
 }
 
-// --- ADMIN APPROVAL DASHBOARD COMPONENT ---
+// --- ADMIN APPROVAL DASHBOARD WITH RBAC ASSIGNMENT ---
+const AVAILABLE_ROLES = [
+  'user',
+  'admin',
+  'المدير التنفيذي',
+  'مدير المشاريع',
+  'المهندس المشرف',
+  'المحاسب / المالية',
+  'العقود والمشتريات',
+  'مهندس التشخيص',
+  'الفني المساعد للتشخيص'
+];
+
+const AVAILABLE_DEPTS = [
+  'المشاريع',
+  'التشخيص',
+  'المالية',
+  'العقود والمشتريات',
+  'الإدارة التنفيذية',
+  'تقنية المعلومات'
+];
+
+function PendingUserCard({ user, onApprove, currentUserId }: any) {
+  const [role, setRole] = useState(user.role || 'user');
+  const [department, setDepartment] = useState(user.departments?.[0] || 'المشاريع');
+
+  return (
+    <div className="flex flex-col gap-3 bg-white p-4 rounded-lg border border-orange-200 shadow-sm">
+      <div className="border-b pb-2">
+        <p className="font-bold text-sm text-gray-800">{user.fullName || 'مستخدم جديد'}</p>
+        <p className="text-xs text-gray-500" dir="ltr">{user.email}</p>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <div>
+          <label className="text-[10px] font-bold text-gray-500 mb-1 block">تحديد الصلاحية (Role)</label>
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className="w-full text-xs p-1.5 border border-gray-300 rounded focus:outline-none focus:border-[#4A1F66]"
+          >
+            {AVAILABLE_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-[10px] font-bold text-gray-500 mb-1 block">تحديد القسم (Department)</label>
+          <select
+            value={department}
+            onChange={(e) => setDepartment(e.target.value)}
+            className="w-full text-xs p-1.5 border border-gray-300 rounded focus:outline-none focus:border-[#4A1F66]"
+          >
+            {AVAILABLE_DEPTS.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <button
+        onClick={() => onApprove(user.id, { role, departments: [department] }, currentUserId)}
+        className="w-full mt-2 bg-green-500 hover:bg-green-600 text-white text-xs font-bold px-3 py-2 rounded-md transition flex items-center justify-center gap-2"
+      >
+        <CheckCircle2 className="w-4 h-4"/>
+        اعتماد وتفعيل المستخدم
+      </button>
+    </div>
+  );
+}
+
 function AdminApprovalDashboard({ users, onApprove, currentUserProfile }: { users: UserProfile[], onApprove: (id: string, edits: any, actorId: string) => void, currentUserProfile: UserProfile }) {
   const pendingUsers = users.filter(u => u.status === 'pending');
 
@@ -84,25 +151,14 @@ function AdminApprovalDashboard({ users, onApprove, currentUserProfile }: { user
 
   return (
     <div className="max-w-7xl mx-auto px-4 mt-6">
-      <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 shadow-sm">
-        <h2 className="text-orange-800 font-bold text-sm mb-3 flex items-center gap-2">
+      <div className="bg-orange-50 border border-orange-200 rounded-xl p-5 shadow-sm">
+        <h2 className="text-orange-800 font-bold text-sm mb-4 flex items-center gap-2">
           <AlertTriangle className="w-5 h-5"/>
-          طلبات انضمام بانتظار الموافقة ({pendingUsers.length})
+          طلبات انضمام بانتظار تحديد الصلاحيات ({pendingUsers.length})
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {pendingUsers.map(u => (
-            <div key={u.id} className="flex items-center justify-between bg-white p-3 rounded-lg border border-orange-100 shadow-sm">
-              <div className="overflow-hidden">
-                <p className="font-bold text-sm text-gray-800 truncate">{u.fullName || 'مستخدم جديد'}</p>
-                <p className="text-xs text-gray-500 truncate" dir="ltr">{u.email}</p>
-              </div>
-              <button
-                onClick={() => onApprove(u.id, { role: u.role || 'user' }, currentUserProfile.id)}
-                className="bg-green-500 hover:bg-green-600 text-white text-xs font-bold px-3 py-1.5 rounded-md transition shrink-0"
-              >
-                موافقة
-              </button>
-            </div>
+            <PendingUserCard key={u.id} user={u} onApprove={onApprove} currentUserId={currentUserProfile.id} />
           ))}
         </div>
       </div>
@@ -142,7 +198,6 @@ function App() {
     if (!splashVisible) sessionStorage.setItem('tarmeem_splash_seen', 'true');
   }, [splashVisible]);
 
-  // Firebase Auth listener
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
@@ -157,7 +212,6 @@ function App() {
     return () => unsub();
   }, []);
 
-  // Firebase Firestore real-time listeners
   useEffect(() => {
     if (!firebaseUser) return;
 
@@ -190,7 +244,6 @@ function App() {
     };
   }, [firebaseUser]);
 
-  // Online/offline
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
     const handleOffline = () => setIsOffline(true);
@@ -199,7 +252,6 @@ function App() {
     return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); };
   }, []);
 
-  // Click outside bell
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (bellRef.current && !bellRef.current.contains(e.target as Node)) setBellOpen(false);
@@ -208,7 +260,6 @@ function App() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Firebase write operations
   const updateProject = useCallback(async (id: string, updates: Record<string, any>) => {
     try {
       await updateDoc(doc(db, 'projects', id), updates);
@@ -287,7 +338,6 @@ function App() {
     } catch (e) { console.error('Error marking all read:', e); }
   }, [notifications]);
 
-  // User management operations
   const approveUser = useCallback(async (userId: string, edits: any, approverId: string) => {
     try {
       const auditEntry = { at: new Date().toISOString(), actor: approverId, action: 'approved', from: { status: 'pending' }, to: { ...edits, status: 'active' } };
@@ -345,7 +395,6 @@ function App() {
     } catch (e) { console.error('Error adding user:', e); }
   }, []);
 
-  // Navigation helpers
   const goToProject = (id: string) => { setActiveProjectId(id); setActiveTab('ERP'); setErpView('PROJECT'); };
   const goToFieldTask = (id: string) => { setActiveProjectId(id); setActiveTab('FIELD'); setFieldView('WIZARD'); };
   const goToAllProjects = () => { setActiveTab('ERP'); setErpView('ALL_PROJECTS'); };
@@ -355,7 +404,6 @@ function App() {
     isDepartmentHead: u.isDepartmentHead, notificationPrefs: u.notificationPrefs
   });
 
-  // Computed values
   const currentUserRole = userProfile?.role || '';
   const canSeeERP = userProfile?.status === 'active' && (
     currentUserRole === 'admin' || currentUserRole === 'Admin' || currentUserRole === 'المدير التنفيذي' ||
@@ -377,7 +425,6 @@ function App() {
 
   const theme = activeTab === 'FIELD' ? { primary: '#6B21A8', primaryLight: '#8B5CF6', accent: '#14B8A6' } : { primary: '#4A1F66', primaryLight: '#6B3D87', accent: '#56B894' };
 
-  // Auth loading
   if (authLoading) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center" dir="rtl">
@@ -386,12 +433,10 @@ function App() {
     );
   }
 
-  // Not authenticated
   if (!firebaseUser) {
     return <AuthScreen onAuth={() => {}} />;
   }
 
-  // Pending approval
   if (userProfile && userProfile.status === 'pending') {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4" dir="rtl">
@@ -406,7 +451,6 @@ function App() {
     );
   }
 
-  // Deactivated
   if (userProfile && userProfile.status === 'deactivated') {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4" dir="rtl">
@@ -576,7 +620,6 @@ function App() {
         </div>
       </header>
 
-      {/* Desktop tabs */}
       <div className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm hidden md:block">
         <div className="max-w-7xl mx-auto px-4 flex">
           <button onClick={() => setActiveTab('HOME')}
@@ -600,7 +643,7 @@ function App() {
 
       <main className="flex-1 w-full pb-20 md:pb-0">
         
-        {/* The New Admin Approval Banner */}
+        {/* The New Admin Approval Dashboard */}
         {userProfile && (
           <AdminApprovalDashboard 
             users={users} 
@@ -660,7 +703,6 @@ function App() {
         )}
       </main>
 
-      {/* Mobile bottom nav */}
       <nav className="md:hidden fixed bottom-0 w-full bg-white border-t border-gray-200 flex justify-around items-center h-[60px] z-50 shadow-[0_-4px_10px_-1px_rgba(0,0,0,0.1)]">
         <div className="absolute top-0 w-full h-1" style={{ backgroundColor: theme.accent }}></div>
         <button onClick={() => setActiveTab('HOME')}

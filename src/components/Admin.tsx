@@ -27,7 +27,7 @@ interface UserProfile {
 }
 
 interface AdminProps {
-  store: {
+  store?: {
     projects: any[];
     users: UserProfile[];
     assessments: any[];
@@ -35,15 +35,19 @@ interface AdminProps {
     lists: any;
     notifications: any[];
   };
+  // Explicitly adding these to match App.tsx
+  users?: UserProfile[];
+  currentUser?: UserProfile;
+  // Functional props
   approveUser: (userId: string, edits: any, approverId: string) => Promise<void>;
   updateUser: (userId: string, edits: any, actorId: string) => Promise<void>;
   deactivateUser: (userId: string, actorId: string, reassignedTo: string) => Promise<void>;
   reactivateUser: (userId: string, actorId: string) => Promise<void>;
   rejectUser: (userId: string, actorId: string, reason?: string) => Promise<void>;
   addUser: (userData: any) => Promise<void>;
-  updateList: (key: string, values: string[]) => Promise<void>;
-  currentRole: string;
-  user: UserProfile;
+  updateList?: (key: string, values: string[]) => Promise<void>;
+  currentRole?: string;
+  user?: UserProfile;
 }
 
 type StatusFilter = 'all' | 'pending' | 'active' | 'deactivated';
@@ -523,13 +527,18 @@ export function AdminUsersPortal(props: AdminProps) {
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [modalMode, setModalMode] = useState<'approve' | 'deactivate' | 'edit' | 'add' | null>(null);
 
-  /* ---- Access control ---- */
-  // FIXED: Using case-insensitive trim to ensure Admin access works regardless of capital letters
-  if (currentRole?.toLowerCase().trim() !== 'admin') return <AccessDeniedCard />;
+/* ---- Access control ---- */
+  // UNIVERSAL KEY: This ignores case, spaces, and looks at both potential user objects
+  const activeUser = (props as any).currentUser || user;
+  const activeRole = currentRole || activeUser?.role || "";
+  const isAuthorized = activeRole.toLowerCase().trim() === 'admin';
 
-  /* ---- Derived data ---- */
-  const activeUsers = useMemo(() => store.users.filter(u => u.status === 'active'), [store.users]);
+  if (!isAuthorized) {
+    return <AccessDeniedCard/>;
+  }
 
+  // Use the users list from whichever prop App.tsx actually sent
+  const displayUsers = (props as any).users || store?.users || [];
   const filteredUsers = useMemo(() => {
     let list = store.users;
     if (statusFilter !== 'all') list = list.filter(u => u.status === statusFilter);

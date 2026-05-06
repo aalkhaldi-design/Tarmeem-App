@@ -75,6 +75,42 @@ interface AppNotification {
   meta?: any;
 }
 
+// --- ADMIN APPROVAL DASHBOARD COMPONENT ---
+function AdminApprovalDashboard({ users, onApprove, currentUserProfile }: { users: UserProfile[], onApprove: (id: string, edits: any, actorId: string) => void, currentUserProfile: UserProfile }) {
+  const pendingUsers = users.filter(u => u.status === 'pending');
+
+  if (currentUserProfile.role !== 'admin' && currentUserProfile.role !== 'Admin') return null;
+  if (pendingUsers.length === 0) return null;
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 mt-6">
+      <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 shadow-sm">
+        <h2 className="text-orange-800 font-bold text-sm mb-3 flex items-center gap-2">
+          <AlertTriangle className="w-5 h-5"/>
+          طلبات انضمام بانتظار الموافقة ({pendingUsers.length})
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {pendingUsers.map(u => (
+            <div key={u.id} className="flex items-center justify-between bg-white p-3 rounded-lg border border-orange-100 shadow-sm">
+              <div className="overflow-hidden">
+                <p className="font-bold text-sm text-gray-800 truncate">{u.fullName || 'مستخدم جديد'}</p>
+                <p className="text-xs text-gray-500 truncate" dir="ltr">{u.email}</p>
+              </div>
+              <button
+                onClick={() => onApprove(u.id, { role: u.role || 'user' }, currentUserProfile.id)}
+                className="bg-green-500 hover:bg-green-600 text-white text-xs font-bold px-3 py-1.5 rounded-md transition shrink-0"
+              >
+                موافقة
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+// -----------------------------------------
+
 function App() {
   const [firebaseUser, setFirebaseUser] = useState<any>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -322,7 +358,7 @@ function App() {
   // Computed values
   const currentUserRole = userProfile?.role || '';
   const canSeeERP = userProfile?.status === 'active' && (
-    currentUserRole === 'Admin' || currentUserRole === 'المدير التنفيذي' ||
+    currentUserRole === 'admin' || currentUserRole === 'Admin' || currentUserRole === 'المدير التنفيذي' ||
     currentUserRole === 'مدير المشاريع' || currentUserRole === 'المهندس المشرف' ||
     currentUserRole === 'المحاسب / المالية' || currentUserRole === 'العقود والمشتريات' ||
     userProfile?.isDepartmentHead
@@ -330,7 +366,7 @@ function App() {
   const canSeeField = userProfile?.status === 'active' && (
     currentUserRole === 'مهندس التشخيص' || currentUserRole === 'الفني المساعد للتشخيص' ||
     currentUserRole === 'المهندس المشرف' || currentUserRole === 'مدير المشاريع' ||
-    currentUserRole === 'Admin'
+    currentUserRole === 'admin' || currentUserRole === 'Admin'
   );
 
   const myNotifications = useMemo(() =>
@@ -563,6 +599,16 @@ function App() {
       </div>
 
       <main className="flex-1 w-full pb-20 md:pb-0">
+        
+        {/* The New Admin Approval Banner */}
+        {userProfile && (
+          <AdminApprovalDashboard 
+            users={users} 
+            onApprove={approveUser} 
+            currentUserProfile={userProfile} 
+          />
+        )}
+
         {activeTab === 'HOME' && userProfile && (
           <DashboardHome
             user={userProfile}

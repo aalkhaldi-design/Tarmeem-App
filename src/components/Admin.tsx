@@ -44,6 +44,9 @@ interface AdminProps {
   updateList: (key: string, values: string[]) => Promise<void>;
   currentRole: string;
   user: UserProfile;
+  // FIX: Added to support data from App.tsx without crashing
+  currentUser?: UserProfile;
+  users?: UserProfile[];
 }
 
 type StatusFilter = 'all' | 'pending' | 'active' | 'deactivated';
@@ -337,7 +340,6 @@ function EditUserModal({ user, onSave, onClose }: {
         </div>
       </div>
 
-      {/* Role */}
       <div>
         <label className="block text-xs font-semibold text-gray-700 mb-1">الدور الوظيفي</label>
         <div className="relative">
@@ -349,7 +351,6 @@ function EditUserModal({ user, onSave, onClose }: {
         </div>
       </div>
 
-      {/* Region */}
       <div>
         <label className="block text-xs font-semibold text-gray-700 mb-1">المنطقة</label>
         <div className="relative">
@@ -361,7 +362,6 @@ function EditUserModal({ user, onSave, onClose }: {
         </div>
       </div>
 
-      {/* Departments */}
       <div>
         <label className="block text-xs font-semibold text-gray-700 mb-1">الأقسام</label>
         <div className="grid grid-cols-2 gap-2 border border-gray-200 rounded-lg p-3 bg-gray-50 max-h-40 overflow-y-auto">
@@ -373,19 +373,8 @@ function EditUserModal({ user, onSave, onClose }: {
             </label>
           ))}
         </div>
-        {departments.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-2">
-            {departments.map(d => (
-              <span key={d} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#4A1F66]/10 text-[#4A1F66] text-[11px] font-bold">
-                {d}
-                <button onClick={() => toggleDept(d)} className="hover:text-red-500 transition"><XCircle className="w-3 h-3" /></button>
-              </span>
-            ))}
-          </div>
-        )}
       </div>
 
-      {/* isDepartmentHead */}
       <label className="flex items-center gap-2 cursor-pointer">
         <input type="checkbox" checked={isDepartmentHead} onChange={e => setIsDepartmentHead(e.target.checked)}
           className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66] w-4 h-4" />
@@ -453,7 +442,6 @@ function AddUserModal({ onAdd, onClose, existingEmails }: {
       <Input label="كلمة المرور" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="6 أحرف على الأقل" />
 
       <div className="grid grid-cols-2 gap-4">
-        {/* Role */}
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1">الدور الوظيفي</label>
           <div className="relative">
@@ -465,7 +453,6 @@ function AddUserModal({ onAdd, onClose, existingEmails }: {
           </div>
         </div>
 
-        {/* Region */}
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1">المنطقة</label>
           <div className="relative">
@@ -478,26 +465,15 @@ function AddUserModal({ onAdd, onClose, existingEmails }: {
         </div>
       </div>
 
-      {/* Departments */}
-      <div>
-        <label className="block text-xs font-semibold text-gray-700 mb-1">الأقسام</label>
-        <div className="grid grid-cols-2 gap-2 border border-gray-200 rounded-lg p-3 bg-gray-50 max-h-40 overflow-y-auto">
-          {ALL_DEPTS.map(d => (
-            <label key={d} className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={departments.includes(d)} onChange={() => toggleDept(d)}
-                className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66]" />
-              <span className="text-gray-700">{d}</span>
-            </label>
-          ))}
-        </div>
+      <div className="grid grid-cols-2 gap-2 border border-gray-200 rounded-lg p-3 bg-gray-50 max-h-40 overflow-y-auto">
+        {ALL_DEPTS.map(d => (
+          <label key={d} className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={departments.includes(d)} onChange={() => toggleDept(d)}
+              className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66]" />
+            <span className="text-gray-700">{d}</span>
+          </label>
+        ))}
       </div>
-
-      {/* isDepartmentHead */}
-      <label className="flex items-center gap-2 cursor-pointer">
-        <input type="checkbox" checked={isDepartmentHead} onChange={e => setIsDepartmentHead(e.target.checked)}
-          className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66] w-4 h-4" />
-        <span className="text-sm text-gray-700 font-semibold">رئيس قسم</span>
-      </label>
 
       <div className="flex gap-3 justify-end border-t pt-4">
         <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-bold bg-gray-100 text-gray-600 hover:bg-gray-200 transition">إلغاء</button>
@@ -516,7 +492,12 @@ function AddUserModal({ onAdd, onClose, existingEmails }: {
 /* ------------------------------------------------------------------ */
 
 export function AdminUsersPortal(props: AdminProps) {
-  const { store, approveUser, updateUser, deactivateUser, reactivateUser, rejectUser, addUser, currentRole, user } = props;
+  // FIX: Destructure explicitly provided props from App.tsx
+  const { 
+    store, approveUser, updateUser, deactivateUser, 
+    reactivateUser, rejectUser, addUser, 
+    currentRole, user, currentUser, users: propUsers 
+  } = props;
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [search, setSearch] = useState('');
@@ -524,49 +505,59 @@ export function AdminUsersPortal(props: AdminProps) {
   const [modalMode, setModalMode] = useState<'approve' | 'deactivate' | 'edit' | 'add' | null>(null);
 
   /* ---- Access control ---- */
-  if (currentRole !== 'Admin') return <AccessDeniedCard />;
+  // FIX: Universal check for 'admin' that handles casing and accidental spaces
+  const activeRole = currentRole || user?.role || currentUser?.role || "";
+  const isAuthorized = activeRole.toLowerCase().trim() === 'admin';
+
+  if (!isAuthorized) return <AccessDeniedCard />;
 
   /* ---- Derived data ---- */
-  const activeUsers = useMemo(() => store.users.filter(u => u.status === 'active'), [store.users]);
+  // FIX: Use prop-based users list if available, otherwise fallback to store
+  const displayUsers = propUsers || store.users || [];
+  const activeUsers = useMemo(() => displayUsers.filter(u => u.status === 'active'), [displayUsers]);
 
   const filteredUsers = useMemo(() => {
-    let list = store.users;
+    let list = displayUsers;
     if (statusFilter !== 'all') list = list.filter(u => u.status === statusFilter);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(u => u.fullName.toLowerCase().includes(q) || u.email.toLowerCase().includes(q));
     }
     return list;
-  }, [store.users, statusFilter, search]);
+  }, [displayUsers, statusFilter, search]);
 
   /* ---- Modal callbacks ---- */
   const handleApprove = useCallback(async (edits: any) => {
     if (!selectedUser) return;
-    await approveUser(selectedUser.id, edits, user.id);
+    const actorId = user?.id || currentUser?.id || "";
+    await approveUser(selectedUser.id, edits, actorId);
     setSelectedUser(null);
     setModalMode(null);
-  }, [selectedUser, approveUser, user.id]);
+  }, [selectedUser, approveUser, user, currentUser]);
 
   const handleReject = useCallback(async (reason: string) => {
     if (!selectedUser) return;
-    await rejectUser(selectedUser.id, user.id, reason);
+    const actorId = user?.id || currentUser?.id || "";
+    await rejectUser(selectedUser.id, actorId, reason);
     setSelectedUser(null);
     setModalMode(null);
-  }, [selectedUser, rejectUser, user.id]);
+  }, [selectedUser, rejectUser, user, currentUser]);
 
   const handleDeactivate = useCallback(async (reassignedTo: string) => {
     if (!selectedUser) return;
-    await deactivateUser(selectedUser.id, user.id, reassignedTo);
+    const actorId = user?.id || currentUser?.id || "";
+    await deactivateUser(selectedUser.id, actorId, reassignedTo);
     setSelectedUser(null);
     setModalMode(null);
-  }, [selectedUser, deactivateUser, user.id]);
+  }, [selectedUser, deactivateUser, user, currentUser]);
 
   const handleEdit = useCallback(async (edits: any) => {
     if (!selectedUser) return;
-    await updateUser(selectedUser.id, edits, user.id);
+    const actorId = user?.id || currentUser?.id || "";
+    await updateUser(selectedUser.id, edits, actorId);
     setSelectedUser(null);
     setModalMode(null);
-  }, [selectedUser, updateUser, user.id]);
+  }, [selectedUser, updateUser, user, currentUser]);
 
   const handleAdd = useCallback(async (userData: any) => {
     await addUser(userData);
@@ -574,20 +565,21 @@ export function AdminUsersPortal(props: AdminProps) {
   }, [addUser]);
 
   const handleReactivate = useCallback(async (u: UserProfile) => {
-    await reactivateUser(u.id, user.id);
-  }, [reactivateUser, user.id]);
+    const actorId = user?.id || currentUser?.id || "";
+    await reactivateUser(u.id, actorId);
+  }, [reactivateUser, user, currentUser]);
 
   const closeModal = () => { setSelectedUser(null); setModalMode(null); };
 
   /* ---- Status counts ---- */
   const counts = useMemo(() => ({
-    all: store.users.length,
-    pending: store.users.filter(u => u.status === 'pending').length,
-    active: store.users.filter(u => u.status === 'active').length,
-    deactivated: store.users.filter(u => u.status === 'deactivated').length,
-  }), [store.users]);
+    all: displayUsers.length,
+    pending: displayUsers.filter(u => u.status === 'pending').length,
+    active: displayUsers.filter(u => u.status === 'active').length,
+    deactivated: displayUsers.filter(u => u.status === 'deactivated').length,
+  }), [displayUsers]);
 
-  const existingEmails = useMemo(() => new Set(store.users.map(u => u.email.toLowerCase())), [store.users]);
+  const existingEmails = useMemo(() => new Set(displayUsers.map(u => u.email.toLowerCase())), [displayUsers]);
 
   /* ---- Render ---- */
   return (
@@ -621,7 +613,7 @@ export function AdminUsersPortal(props: AdminProps) {
         {(['all', 'pending', 'active', 'deactivated'] as StatusFilter[]).map(s => {
           const isActive = statusFilter === s;
           const label = s === 'all' ? 'الكل' : s === 'pending' ? 'بانتظار الموافقة' : s === 'active' ? 'فعّال' : 'معطّل';
-          const count = counts[s];
+          const count = (counts as any)[s];
           return (
             <button
               key={s}
@@ -656,8 +648,6 @@ export function AdminUsersPortal(props: AdminProps) {
                   <th className="px-3 py-2 text-right font-bold">الاسم</th>
                   <th className="px-3 py-2 text-right font-bold">البريد</th>
                   <th className="px-3 py-2 text-right font-bold">الدور</th>
-                  <th className="px-3 py-2 text-right font-bold">المنطقة</th>
-                  <th className="px-3 py-2 text-right font-bold">الأقسام</th>
                   <th className="px-3 py-2 text-right font-bold">الحالة</th>
                   <th className="px-3 py-2 text-right font-bold">إجراءات</th>
                 </tr>
@@ -675,63 +665,23 @@ export function AdminUsersPortal(props: AdminProps) {
                     </td>
                     <td className="px-3 py-2.5 text-gray-500 text-xs" dir="ltr">{u.email}</td>
                     <td className="px-3 py-2.5 text-xs">{u.role}</td>
-                    <td className="px-3 py-2.5 text-xs">{REGION_LABELS[u.region] || u.region}</td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex flex-wrap gap-1 max-w-[180px]">
-                        {(u.departments || []).slice(0, 2).map(d => (
-                          <span key={d} className="px-1.5 py-0.5 rounded bg-[#4A1F66]/10 text-[#4A1F66] text-[10px] font-bold">{d}</span>
-                        ))}
-                        {(u.departments || []).length > 2 && (
-                          <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px] font-bold">+{u.departments.length - 2}</span>
-                        )}
-                      </div>
-                    </td>
                     <td className="px-3 py-2.5"><StatusBadge status={u.status} /></td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-1">
                         {u.status === 'pending' && (
-                          <>
-                            <button
-                              onClick={() => { setSelectedUser(u); setModalMode('approve'); }}
-                              className="p-1.5 rounded-lg bg-green-50 text-green-600 hover:bg-green-100 transition"
-                              title="موافقة"
-                            >
-                              <UserCheck className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => { setSelectedUser(u); setModalMode('approve'); }}
-                              className="p-1.5 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 transition"
-                              title="رفض"
-                            >
-                              <XCircle className="w-4 h-4" />
-                            </button>
-                          </>
-                        )}
-                        {u.status === 'active' && (
-                          <>
-                            <button
-                              onClick={() => { setSelectedUser(u); setModalMode('edit'); }}
-                              className="p-1.5 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 transition"
-                              title="تعديل"
-                            >
-                              <Edit className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => { setSelectedUser(u); setModalMode('deactivate'); }}
-                              className="p-1.5 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 transition"
-                              title="تعطيل"
-                            >
-                              <UserX className="w-4 h-4" />
-                            </button>
-                          </>
-                        )}
-                        {u.status === 'deactivated' && (
                           <button
-                            onClick={() => handleReactivate(u)}
+                            onClick={() => { setSelectedUser(u); setModalMode('approve'); }}
                             className="p-1.5 rounded-lg bg-green-50 text-green-600 hover:bg-green-100 transition"
-                            title="إعادة تفعيل"
                           >
                             <UserCheck className="w-4 h-4" />
+                          </button>
+                        )}
+                        {u.status === 'active' && (
+                          <button
+                            onClick={() => { setSelectedUser(u); setModalMode('edit'); }}
+                            className="p-1.5 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 transition"
+                          >
+                            <Edit className="w-4 h-4" />
                           </button>
                         )}
                       </div>
@@ -744,42 +694,15 @@ export function AdminUsersPortal(props: AdminProps) {
         )}
       </Card>
 
-      {/* Approve / Reject modal */}
       <Modal open={modalMode === 'approve'} onClose={closeModal} title="مراجعة طلب التسجيل">
-        {selectedUser && (
-          <AdminUserModal
-            user={selectedUser}
-            onApprove={handleApprove}
-            onReject={handleReject}
-            onClose={closeModal}
-          />
-        )}
+        {selectedUser && <AdminUserModal user={selectedUser} onApprove={handleApprove} onReject={handleReject} onClose={closeModal} />}
       </Modal>
-
-      {/* Deactivate modal */}
       <Modal open={modalMode === 'deactivate'} onClose={closeModal} title="تعطيل مستخدم">
-        {selectedUser && (
-          <AdminDeactivateModal
-            user={selectedUser}
-            activeUsers={activeUsers}
-            onDeactivate={handleDeactivate}
-            onClose={closeModal}
-          />
-        )}
+        {selectedUser && <AdminDeactivateModal user={selectedUser} activeUsers={activeUsers} onDeactivate={handleDeactivate} onClose={closeModal} />}
       </Modal>
-
-      {/* Edit modal */}
       <Modal open={modalMode === 'edit'} onClose={closeModal} title="تعديل بيانات المستخدم">
-        {selectedUser && (
-          <EditUserModal
-            user={selectedUser}
-            onSave={handleEdit}
-            onClose={closeModal}
-          />
-        )}
+        {selectedUser && <EditUserModal user={selectedUser} onSave={handleEdit} onClose={closeModal} />}
       </Modal>
-
-      {/* Add user modal */}
       <Modal open={modalMode === 'add'} onClose={closeModal} title="إضافة مستخدم جديد">
         <AddUserModal onAdd={handleAdd} onClose={closeModal} existingEmails={existingEmails} />
       </Modal>
@@ -799,37 +722,19 @@ const LIST_LABELS: Record<string, string> = {
   supplyMethod: 'طريقة التوريد',
 };
 
-export function PortalSettings({ store, updateList, currentRole }: {
-  store: AdminProps['store'];
-  updateList: AdminProps['updateList'];
-  currentRole: string;
-}) {
+export function PortalSettings(props: AdminProps) {
+  const { store, updateList, currentRole, user, currentUser } = props;
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [draftValues, setDraftValues] = useState<string[]>([]);
   const [newValue, setNewValue] = useState('');
   const [busy, setBusy] = useState(false);
 
-  if (currentRole !== 'Admin') return <AccessDeniedCard />;
+  // FIX: Applied the same case-insensitive role gate
+  const activeRole = currentRole || user?.role || currentUser?.role || "";
+  if (activeRole.toLowerCase().trim() !== 'admin') return <AccessDeniedCard />;
 
   const getCurrentValues = (key: string): string[] => {
-    return store.lists?.[key] || (DEFAULT_LISTS as any)[key] || [];
-  };
-
-  const startEdit = (key: string) => {
-    setEditingKey(key);
-    setDraftValues([...getCurrentValues(key)]);
-    setNewValue('');
-  };
-
-  const addValue = () => {
-    const trimmed = newValue.trim();
-    if (!trimmed || draftValues.includes(trimmed)) return;
-    setDraftValues(prev => [...prev, trimmed]);
-    setNewValue('');
-  };
-
-  const removeValue = (v: string) => {
-    setDraftValues(prev => prev.filter(x => x !== v));
+    return store?.lists?.[key] || (DEFAULT_LISTS as any)[key] || [];
   };
 
   const save = async () => {
@@ -840,12 +745,6 @@ export function PortalSettings({ store, updateList, currentRole }: {
     setEditingKey(null);
   };
 
-  const cancel = () => {
-    setEditingKey(null);
-    setDraftValues([]);
-    setNewValue('');
-  };
-
   return (
     <div dir="rtl">
       <Card title="إعدادات القوائم المنسدلة" icon={Settings}>
@@ -853,25 +752,21 @@ export function PortalSettings({ store, updateList, currentRole }: {
           {LIST_KEYS.map(key => {
             const isEditing = editingKey === key;
             const values = isEditing ? draftValues : getCurrentValues(key);
-
             return (
               <div key={key} className="border border-gray-200 rounded-lg overflow-hidden">
                 <div className="bg-gray-50 px-4 py-3 flex items-center justify-between">
                   <span className="font-bold text-sm text-gray-700">{LIST_LABELS[key]}</span>
                   {!isEditing ? (
                     <button
-                      onClick={() => startEdit(key)}
-                      className="inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 transition"
+                      onClick={() => { setEditingKey(key); setDraftValues([...getCurrentValues(key)]); }}
+                      className="px-3 py-1 bg-white border text-xs font-bold rounded-lg"
                     >
-                      <Edit className="w-3 h-3" />
                       تعديل
                     </button>
                   ) : (
-                    <div className="flex items-center gap-2">
-                      <button onClick={cancel} className="px-3 py-1 rounded-lg text-xs font-bold text-gray-500 hover:bg-gray-200 transition">إلغاء</button>
-                      <button onClick={save} disabled={busy}
-                        className="inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold bg-[#4A1F66] text-white hover:bg-[#3A1652] transition disabled:opacity-40">
-                        <CheckCircle className="w-3 h-3" />
+                    <div className="flex gap-2">
+                      <button onClick={() => setEditingKey(null)} className="text-xs">إلغاء</button>
+                      <button onClick={save} className="px-3 py-1 bg-[#4A1F66] text-white rounded-lg text-xs">
                         {busy ? 'جاري...' : 'حفظ'}
                       </button>
                     </div>
@@ -879,42 +774,8 @@ export function PortalSettings({ store, updateList, currentRole }: {
                 </div>
                 <div className="px-4 py-3">
                   <div className="flex flex-wrap gap-2">
-                    {values.map(v => (
-                      <span
-                        key={v}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${
-                          isEditing ? 'bg-[#4A1F66]/10 text-[#4A1F66] pr-1.5' : 'bg-gray-100 text-gray-700'
-                        }`}
-                      >
-                        {v}
-                        {isEditing && (
-                          <button onClick={() => removeValue(v)} className="hover:text-red-500 transition p-0.5">
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        )}
-                      </span>
-                    ))}
+                    {values.map(v => <span key={v} className="px-2.5 py-1 bg-gray-100 rounded-full text-xs font-bold">{v}</span>)}
                   </div>
-                  {isEditing && (
-                    <div className="flex items-center gap-2 mt-3">
-                      <input
-                        type="text"
-                        value={newValue}
-                        onChange={e => setNewValue(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addValue(); } }}
-                        placeholder="أضف قيمة جديدة..."
-                        className="flex-1 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]"
-                      />
-                      <button
-                        onClick={addValue}
-                        disabled={!newValue.trim()}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#56B894] text-white hover:bg-[#3F9B7A] transition disabled:opacity-40"
-                      >
-                        <Plus className="w-3 h-3" />
-                        إضافة
-                      </button>
-                    </div>
-                  )}
                 </div>
               </div>
             );

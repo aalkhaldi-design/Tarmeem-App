@@ -1,18 +1,21 @@
 import React, { useState } from 'react';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { TarmeemLogo } from './ui';
-import { ROLES } from '../lib/data';
+import { ROLES_DEF, ROLE_BY_KEY, RoleKey, DEPARTMENTS, REGION_LABELS } from '../lib/data';
 
-interface UserProfile {
+export interface UserProfile {
   id: string;
   email: string;
   fullName: string;
-  role: string;
+  /** أحد مفاتيح الأدوار العشرين (RoleKey) */
+  role: RoleKey | 'ADMIN';
+  /** مفتاح الإدارة الأساسية للمستخدم */
+  department: string;
   region: string;
-  departments: string[];
-  isDepartmentHead: boolean;
+  /** يحدد ما إذا كان المستخدم مديراً للقسم (للاعتمادات) */
+  isManager: boolean;
   status: 'active' | 'pending' | 'deactivated';
   registeredAt: string;
   lastSeenAt: string;
@@ -29,14 +32,37 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
   return snap.exists() ? { id: snap.id, ...snap.data() } as UserProfile : null;
 }
 
-export async function createUserProfile(uid: string, email: string, fullName: string): Promise<void> {
+export async function createUserProfile(
+  uid: string,
+  email: string,
+  fullName: string,
+  requestedRole: RoleKey,
+  region: string,
+): Promise<void> {
+  const def = ROLE_BY_KEY[requestedRole];
   const profile: UserProfile = {
-    id: uid, email, fullName, role: 'مهندس التشخيص', region: 'DAM',
-    departments: ['المشاريع'], isDepartmentHead: false, status: 'pending',
-    registeredAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
-    approvedBy: null, approvedAt: null, deactivatedAt: null, deactivatedBy: null,
+    id: uid,
+    email,
+    fullName,
+    role: requestedRole,
+    department: def?.department || 'IT',
+    region,
+    isManager: !!def?.isManager,
+    status: 'pending',
+    registeredAt: new Date().toISOString(),
+    lastSeenAt: new Date().toISOString(),
+    approvedBy: null,
+    approvedAt: null,
+    deactivatedAt: null,
+    deactivatedBy: null,
     notificationPrefs: { inApp: true, email: true },
-    auditLog: [{ at: new Date().toISOString(), actor: 'system', action: 'registered', from: null, to: { status: 'pending' } }]
+    auditLog: [{
+      at: new Date().toISOString(),
+      actor: 'system',
+      action: 'registered',
+      from: null,
+      to: { status: 'pending', role: requestedRole },
+    }],
   };
   await setDoc(doc(db, 'users', uid), profile);
 }
@@ -46,6 +72,8 @@ export function AuthScreen({ onAuth }: { onAuth: (user: any) => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
+  const [requestedRole, setRequestedRole] = useState<RoleKey>('SOCIAL_RESEARCHER');
+  const [region, setRegion] = useState('DAM');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -60,7 +88,7 @@ export function AuthScreen({ onAuth }: { onAuth: (user: any) => void }) {
       } else {
         if (!fullName.trim()) { setError('الاسم الكامل مطلوب'); setLoading(false); return; }
         const cred = await createUserWithEmailAndPassword(auth, email, password);
-        await createUserProfile(cred.user.uid, email, fullName);
+        await createUserProfile(cred.user.uid, email, fullName, requestedRole, region);
         onAuth(cred.user);
       }
     } catch (err: any) {
@@ -74,12 +102,18 @@ export function AuthScreen({ onAuth }: { onAuth: (user: any) => void }) {
     } finally { setLoading(false); }
   };
 
+  // الأدوار مجمّعة حسب الإدارة لعرض أوضح في الاختيار
+  const rolesByDept = DEPARTMENTS.map(d => ({
+    dept: d,
+    roles: ROLES_DEF.filter(r => r.department === d.key),
+  }));
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#4A1F66] via-[#6B3D87] to-[#56B894] flex items-center justify-center p-4" dir="rtl">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
         <div className="flex flex-col items-center mb-8">
           <TarmeemLogo variant="stacked" size={60} color="auto" animated={false} />
-          <h1 className="text-xl font-bold text-[#4A1F66] mt-4">منصة إدارة المشاريع</h1>
+          <h1 className="text-xl font-bold text-[#4A1F66] mt-4">منصة إدارة العمليات</h1>
           <p className="text-xs text-gray-500 mt-1">جمعية ترميم</p>
         </div>
 
@@ -87,18 +121,42 @@ export function AuthScreen({ onAuth }: { onAuth: (user: any) => void }) {
           <button onClick={() => { setIsLogin(true); setError(''); }}
             className={`flex-1 py-2 rounded-md text-sm font-bold transition ${isLogin ? 'bg-white shadow text-[#4A1F66]' : 'text-gray-500'}`}>تسجيل الدخول</button>
           <button onClick={() => { setIsLogin(false); setError(''); }}
-            className={`flex-1 py-2 rounded-md text-sm font-bold transition ${!isLogin ? 'bg-white shadow text-[#4A1F66]' : 'text-gray-500'}`}>حساب جديد</button>
+            className={`flex-1 py-2 rounded-md text-sm font-bold transition ${!isLogin ? 'bg-white shadow text-[#4A1F66]' : 'text-gray-500'}`}>طلب حساب جديد</button>
         </div>
 
         {error && <div className="bg-red-50 border border-red-200 text-red-700 text-xs font-bold p-3 rounded-lg mb-4">{error}</div>}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {!isLogin && (
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold text-gray-700">الاسم الكامل</label>
-              <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} required
-                className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]" />
-            </div>
+            <>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-700">الاسم الكامل</label>
+                <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} required
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]" />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-700">الدور المطلوب</label>
+                <select value={requestedRole} onChange={e => setRequestedRole(e.target.value as RoleKey)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] bg-white">
+                  {rolesByDept.map(g => (
+                    <optgroup key={g.dept.key} label={g.dept.name}>
+                      {g.roles.map(r => (
+                        <option key={r.key} value={r.key}>{r.name}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-700">المنطقة</label>
+                <select value={region} onChange={e => setRegion(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] bg-white">
+                  {Object.entries(REGION_LABELS).filter(([k]) => k !== 'ALL').map(([k, v]) => (
+                    <option key={k} value={k}>{v}</option>
+                  ))}
+                </select>
+              </div>
+            </>
           )}
           <div className="flex flex-col gap-1">
             <label className="text-xs font-semibold text-gray-700">البريد الإلكتروني</label>
@@ -112,12 +170,14 @@ export function AuthScreen({ onAuth }: { onAuth: (user: any) => void }) {
           </div>
           <button type="submit" disabled={loading}
             className="w-full bg-[#4A1F66] text-white py-3 rounded-lg font-bold hover:bg-[#3A1652] transition disabled:opacity-50">
-            {loading ? 'جاري...' : isLogin ? 'دخول' : 'إنشاء حساب'}
+            {loading ? 'جاري...' : isLogin ? 'دخول' : 'إنشاء طلب'}
           </button>
         </form>
 
         {!isLogin && (
-          <p className="text-[10px] text-gray-400 text-center mt-4">بعد التسجيل، سيحتاج حسابك لموافقة المدير قبل التفعيل الكامل.</p>
+          <p className="text-[10px] text-gray-400 text-center mt-4">
+            بعد التسجيل سيراجع مدير النظام طلبك ويسند الدور والإدارة المناسبة قبل تفعيل الحساب.
+          </p>
         )}
       </div>
     </div>

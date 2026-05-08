@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CheckCircle, Clock, AlertCircle, UploadCloud, Lock, Plus, CheckSquare, X, ChevronUp, ChevronDown, Check, Bell, CheckCircle2, AlertTriangle, ClipboardList, FileText, DollarSign, MapPin, Users, Ligature as FileSignature, Camera, Mic, Mic2, StopCircle, Trash2, FileDown, Printer, Search } from 'lucide-react';
-import { TARMEEM_BRAND, THEME, CIVIL_FIELDS, ELEC_FIELDS, PLUMB_FIELDS, FURN_FIELDS, APP_FIELDS } from '../lib/data';
+import { UploadCloud, Lock, Plus, CheckCircle2, AlertTriangle, FileText, DollarSign } from 'lucide-react';
+import { THEME } from '../lib/data';
 
 export const TarmeemLogo = ({ variant = 'icon', size = 32, color = 'auto', className = '', animated = false }: {
   variant?: 'icon' | 'horizontal' | 'stacked'; size?: number; color?: string; className?: string; animated?: boolean;

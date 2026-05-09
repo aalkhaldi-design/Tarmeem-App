@@ -1,0 +1,271 @@
+```react
+import React, { useState } from 'react';
+import { 
+  Building, DollarSign, CheckCircle2, UserCheck, ShieldAlert, 
+  FileText, ArrowLeftRight, XCircle, FileSignature, CheckSquare
+} from 'lucide-react';
+
+const Card = ({ title, icon: Icon, children, className = '' }) => (
+  <div className={`bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-4 transition-all duration-300 ${className}`}>
+    <div className="bg-gradient-to-r from-purple-800 to-purple-600 px-4 py-2.5 flex items-center gap-2 text-white">
+      {Icon && <Icon className="w-5 h-5 text-teal-200" />}
+      <h3 className="text-base font-bold">{title}</h3>
+    </div>
+    <div className="p-4 md:p-5">{children}</div>
+  </div>
+);
+
+const ReadOnlyField = ({ label, value, highlight = false }) => (
+  <div className="flex flex-col gap-1">
+    <label className="text-xs font-semibold text-gray-500">{label}</label>
+    <div className={`px-3 py-2 text-sm rounded-lg border font-bold
+      ${highlight ? 'bg-teal-50 border-teal-200 text-teal-800' : 'bg-gray-100 border-gray-200 text-gray-700'}`}>
+      {value || '-'}
+    </div>
+  </div>
+);
+
+const Input = ({ label, type = 'text', value, onChange, placeholder, className = '', required = false, disabled = false }) => (
+  <div className={`flex flex-col gap-1 ${className}`}>
+    <label className="text-xs font-semibold text-gray-700">{label} {required && <span className="text-red-500">*</span>}</label>
+    <input 
+      type={type} value={value} onChange={onChange} placeholder={placeholder} required={required} disabled={disabled}
+      className={`px-3 py-1.5 text-sm rounded-lg border focus:outline-none transition-colors
+        ${disabled ? 'bg-gray-100 border-gray-200 text-gray-500 cursor-not-allowed' : 'bg-gray-50 border-gray-200 focus:border-purple-500 text-gray-800'}`} 
+    />
+  </div>
+);
+
+export default function F15_DisbursementWorkflow({ 
+  onSubmit, 
+  projectData = {}, 
+  // PM_ENTRY (مدير المشاريع), FINANCE_APPROVAL (المالية), EXECUTIVE_APPROVAL (المدير التنفيذي)
+  workflowStep = 'PM_ENTRY', 
+  existingData = {} 
+}) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Safe Extraction (Auto-filled by the system from F-85 and F-14)
+  const pData = Object.keys(projectData).length > 0 ? projectData : {
+    caseRef: 'CS-9082', projectNumber: 'PRJ-2024-884', familyName: 'عبدالله محمد السالم', 
+    cityNeighborhood: 'الدمام - حي النور', contractor: 'مؤسسة البناء الحديث',
+    contractValue: '45000', completionPercentage: '40%' // Pulled from F-14 milestone
+  };
+
+  // State Management
+  const [installmentType, setInstallmentType] = useState(existingData.installmentType || 'الثانية');
+  const [installmentValue, setInstallmentValue] = useState(existingData.installmentValue || '');
+  
+  // Extra fields for Final Disbursement (الدفعة الأخيرة)
+  const [familyNotes, setFamilyNotes] = useState(existingData.familyNotes || '');
+  const [socialResearchNotes, setSocialResearchNotes] = useState(existingData.socialResearchNotes || '');
+  const [engineerNotes, setEngineerNotes] = useState(existingData.engineerNotes || 'تم استلام كافة بنود الأعمال مطابقة للمواصفات.');
+
+  // Approval Notes
+  const [pmNotes, setPmNotes] = useState(existingData.pmNotes || '');
+  const [financeNotes, setFinanceNotes] = useState(existingData.financeNotes || '');
+  const [executiveNotes, setExecutiveNotes] = useState(existingData.executiveNotes || '');
+  
+  const [pledge, setPledge] = useState(false);
+
+  const isReadOnly = workflowStep !== 'PM_ENTRY';
+  const isFinal = installmentType === 'الأخيرة';
+
+  const handleAction = async (actionType) => {
+    if (!pledge || isSubmitting) return;
+    setIsSubmitting(true);
+    
+    let payload = { ...existingData };
+
+    if (workflowStep === 'PM_ENTRY') {
+      payload = { 
+        ...payload, 
+        installmentType, installmentValue, 
+        familyNotes: isFinal ? familyNotes : null,
+        socialResearchNotes: isFinal ? socialResearchNotes : null,
+        engineerNotes: isFinal ? engineerNotes : null,
+        pmNotes, 
+        status: 'PENDING_FINANCE' 
+      };
+    } else if (workflowStep === 'FINANCE_APPROVAL') {
+      payload = { ...payload, financeNotes, status: actionType === 'APPROVE' ? 'PENDING_EXECUTIVE' : 'RETURNED_TO_PM' };
+    } else if (workflowStep === 'EXECUTIVE_APPROVAL') {
+      payload = { ...payload, executiveNotes, status: actionType === 'APPROVE' ? 'APPROVED' : 'RETURNED_TO_FINANCE' };
+    }
+
+    if (onSubmit) {
+      await onSubmit({ formId: 'F-15', action: actionType, payload });
+    }
+  };
+
+  if (isSubmitting && !onSubmit) {
+    return (
+       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4" dir="rtl">
+         <div className="bg-teal-500 text-white rounded-xl p-8 shadow-lg text-center max-w-md w-full">
+            <CheckCircle2 className="w-16 h-16 mx-auto mb-4 text-teal-100" />
+            <h2 className="text-2xl font-bold mb-2">تم اعتماد إجراء الدفعة!</h2>
+            <p className="text-teal-100 text-sm leading-relaxed">
+              تم تحويل طلب الصرف للمرحلة التالية في سلسلة الاعتمادات بنجاح.
+            </p>
+         </div>
+       </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 font-sans text-gray-800 pb-16" dir="rtl">
+      <header className="bg-gradient-to-r from-purple-900 to-purple-700 text-white shadow-md pt-6 pb-12 px-4 text-center rounded-b-[2rem] relative z-10">
+        <h1 className="text-2xl md:text-3xl font-extrabold mb-1">
+          {isFinal ? 'طلب صرف الدفعة الأخيرة (F-15)' : 'طلب صرف دفعة (F-15)'}
+        </h1>
+        <h2 className="text-sm md:text-base text-teal-300 font-medium">
+          {workflowStep === 'PM_ENTRY' && 'المرحلة 1: مدير المشاريع (إعداد طلب الصرف)'}
+          {workflowStep === 'FINANCE_APPROVAL' && 'المرحلة 2: الإدارة المالية (الاعتماد المحاسبي)'}
+          {workflowStep === 'EXECUTIVE_APPROVAL' && 'المرحلة 3: الاعتماد النهائي للمدير التنفيذي'}
+        </h2>
+      </header>
+
+      <main className="container mx-auto px-4 -mt-8 relative z-20 max-w-4xl">
+        
+        {/* Routing Header */}
+        <Card title="بيانات التوجيه" icon={ArrowLeftRight}>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <ReadOnlyField label="من" value="إدارة المشاريع" />
+            <ReadOnlyField label="إلى" value="الإدارة المالية" />
+            <ReadOnlyField label="يصرف إلى (المقاول)" value={pData.contractor} highlight />
+          </div>
+        </Card>
+
+        {/* Project Info */}
+        <Card title="بيانات المشروع" icon={Building}>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <ReadOnlyField label="رقم المشروع" value={pData.projectNumber} />
+            <ReadOnlyField label="اسم المستفيد" value={pData.familyName} />
+            <ReadOnlyField label="المدينة - الحي" value={pData.cityNeighborhood} className="col-span-2" />
+          </div>
+        </Card>
+
+        {/* Financial Details */}
+        <Card title="البيانات المالية للدفعة" icon={DollarSign}>
+          <div className="bg-gray-50 border border-gray-200 p-4 rounded-xl mb-5">
+            <label className="block text-sm font-bold text-gray-800 mb-3">نوع الدفعة المطلوبة:</label>
+            <div className="flex flex-wrap gap-4">
+              {['الأولى', 'الثانية', 'الثالثة', 'الأخيرة'].map(type => (
+                <label key={type} className={`flex items-center gap-2 px-4 py-2 border rounded-lg cursor-pointer transition-all ${installmentType === type ? 'bg-purple-100 border-purple-500 text-purple-900 shadow-sm' : 'bg-white border-gray-300 text-gray-600'}`}>
+                  <input type="radio" name="instType" value={type} checked={installmentType === type} onChange={e => !isReadOnly && setInstallmentType(e.target.value)} disabled={isReadOnly} className="hidden" />
+                  <span className="font-bold text-sm">{type}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            <ReadOnlyField label="قيمة العقد الإجمالية" value={`${Number(pData.contractValue).toLocaleString()} ر.س`} highlight />
+            <div className="relative">
+              <Input label="قيمة الدفعة المطلوبة (ر.س) *" type="number" required disabled={isReadOnly} value={installmentValue} onChange={e => setInstallmentValue(e.target.value)} />
+            </div>
+            <div className="relative bg-teal-50 border border-teal-200 rounded-lg p-2.5">
+              <label className="text-xs font-bold text-teal-800 block mb-1">نسبة الإنجاز المعتمدة من المشرف</label>
+              <div className="text-lg font-black text-teal-900 flex items-center gap-2">
+                <CheckSquare size={18} className="text-teal-600"/> {pData.completionPercentage}
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        {/* Final Disbursement Extra Fields (Auto-shows if type is الأخيرة) */}
+        {isFinal && (
+          <Card title="متطلبات الدفعة الأخيرة (F-15)" icon={FileSignature}>
+            <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl mb-4 text-sm text-blue-800 font-medium">
+              نظراً لكونها الدفعة الأخيرة لإغلاق المشروع، يرجى استيفاء الآراء التالية بناءً على تقرير تسليم المنزل (F-07).
+            </div>
+            <div className="space-y-4">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-700">ملاحظات الأسرة المستفيدة *</label>
+                <textarea required={!isReadOnly} disabled={isReadOnly} rows={2} value={familyNotes} onChange={e => setFamilyNotes(e.target.value)} placeholder="مثال: تم استلام المنزل بحالة ممتازة..." className="px-3 py-2 text-sm rounded-lg border border-gray-300 focus:border-purple-500 outline-none resize-none disabled:bg-gray-100" />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-700">رأي البحث الاجتماعي *</label>
+                <textarea required={!isReadOnly} disabled={isReadOnly} rows={2} value={socialResearchNotes} onChange={e => setSocialResearchNotes(e.target.value)} placeholder="مثال: التدخل حقق الأثر المطلوب وحل المشكلة..." className="px-3 py-2 text-sm rounded-lg border border-gray-300 focus:border-purple-500 outline-none resize-none disabled:bg-gray-100" />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-700">رأي المهندس المشرف *</label>
+                <textarea required={!isReadOnly} disabled={isReadOnly} rows={2} value={engineerNotes} onChange={e => setEngineerNotes(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-gray-300 focus:border-purple-500 outline-none resize-none disabled:bg-gray-100" />
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {/* Read-Only History for Finance & Executive */}
+        {workflowStep !== 'PM_ENTRY' && (
+          <Card title="ملاحظات وتوصيات الإدارات السابقة" icon={FileText}>
+            <div className="space-y-4">
+              <ReadOnlyField label="توصية مدير المشاريع (طلب الصرف)" value={existingData.pmNotes} />
+              {workflowStep === 'EXECUTIVE_APPROVAL' && (
+                <ReadOnlyField label="توصية الإدارة المالية بالاستحقاق" value={existingData.financeNotes} />
+              )}
+            </div>
+          </Card>
+        )}
+
+        {/* Action Box for Current User */}
+        <Card title="الاعتماد الحالي" icon={ShieldAlert}>
+          <div className="bg-gray-50 border border-gray-200 p-4 rounded-xl mb-4">
+            <div className="flex flex-col gap-1 mb-4">
+              <label className="text-xs font-bold text-gray-700">
+                {workflowStep === 'PM_ENTRY' && 'توصية مدير المشاريع بصرف الدفعة *'}
+                {workflowStep === 'FINANCE_APPROVAL' && 'توصية المحاسب بالاستحقاق (التدقيق المالي) *'}
+                {workflowStep === 'EXECUTIVE_APPROVAL' && 'الاعتماد النهائي للمدير التنفيذي *'}
+              </label>
+              <textarea 
+                required rows={3} 
+                value={
+                  workflowStep === 'PM_ENTRY' ? pmNotes :
+                  workflowStep === 'FINANCE_APPROVAL' ? financeNotes : executiveNotes
+                }
+                onChange={e => {
+                  const val = e.target.value;
+                  if (workflowStep === 'PM_ENTRY') setPmNotes(val);
+                  else if (workflowStep === 'FINANCE_APPROVAL') setFinanceNotes(val);
+                  else setExecutiveNotes(val);
+                }}
+                placeholder="اكتب التوصية أو الملاحظات هنا..." 
+                className="px-3 py-2 text-sm rounded-lg border border-gray-300 focus:border-purple-500 outline-none resize-none bg-white shadow-sm" 
+              />
+            </div>
+
+            <div className="flex items-start gap-4 p-3 bg-white rounded-lg border border-gray-200">
+              <input type="checkbox" id="pledge" checked={pledge} onChange={(e) => setPledge(e.target.checked)} className="w-5 h-5 mt-0.5 rounded text-purple-600 focus:ring-purple-500 cursor-pointer" />
+              <label htmlFor="pledge" className="cursor-pointer select-none">
+                <h4 className="text-sm font-bold text-gray-900 mb-1">إقرار وتوقيع رقمي</h4>
+                <p className="text-xs text-gray-600 font-medium">أقر بصفتي المعتمد الحالي بصحة الإجراءات واستحقاق الدفعة، وأوافق على توجيه الطلب في النظام.</p>
+              </label>
+            </div>
+          </div>
+
+          {/* Dynamic Buttons based on Role */}
+          {workflowStep === 'PM_ENTRY' ? (
+            <button 
+              type="button" onClick={() => handleAction('APPROVE')} disabled={!pledge || isSubmitting || !installmentValue}
+              className={`w-full py-4 rounded-xl text-base font-bold flex items-center justify-center gap-2 transition-all shadow-md
+                ${(pledge && installmentValue) ? 'bg-gradient-to-r from-teal-600 to-teal-500 text-white hover:from-teal-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+            >
+              <UserCheck className="w-5 h-5" /> {isSubmitting ? 'جاري رفع الطلب...' : 'إرسال طلب الصرف للإدارة المالية'}
+            </button>
+          ) : (
+            <div className="flex gap-3">
+              <button onClick={() => handleAction('APPROVE')} disabled={!pledge || isSubmitting} className="flex-1 bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold text-sm flex justify-center items-center gap-2 shadow-md">
+                <CheckCircle2 size={18} /> اعتماد الطلب وتحويله
+              </button>
+              <button onClick={() => handleAction('REJECT')} disabled={!pledge || isSubmitting} className="flex-1 bg-red-600 hover:bg-red-700 text-white py-3 rounded-xl font-bold text-sm flex justify-center items-center gap-2 shadow-md">
+                <XCircle size={18} /> رفض وإعادة الطلب
+              </button>
+            </div>
+          )}
+        </Card>
+      </main>
+    </div>
+  );
+}
+
+```

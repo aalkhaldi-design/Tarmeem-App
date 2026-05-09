@@ -1,0 +1,85 @@
+```react
+import React, { useState } from 'react';
+import { ArrowLeftRight, XCircle, RefreshCcw, UserCheck, AlertCircle } from 'lucide-react';
+
+const ReadOnlyField = ({ label, value }) => (
+  <div className="flex flex-col gap-1">
+    <label className="text-xs font-semibold text-gray-500">{label}</label>
+    <div className="px-3 py-2 text-sm rounded-lg bg-gray-100 border border-gray-200 text-gray-700 font-medium">{value || '-'}</div>
+  </div>
+);
+
+export default function App({ onSubmit, f03_1Data = {} }) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [managerFinalNotes, setManagerFinalNotes] = useState('');
+
+  // Mock data for Executive Decision
+  const execData = Object.keys(f03_1Data).length > 0 ? f03_1Data : { decision: 'موافقة', executiveNotes: 'أوافق على الترميم حسب التوصيات.' };
+
+  const handleAction = async (actionType) => {
+    setIsSubmitting(true);
+    let payload = { managerFinalNotes };
+    if (actionType === 'TRANSFER') {
+      payload.projectNumber = `PRJ-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
+    }
+    if (onSubmit) await onSubmit({ formId: 'F-03.2', action: actionType, payload });
+  };
+
+  if (isSubmitting && !onSubmit) return (
+     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4" dir="rtl">
+       <div className="bg-teal-500 text-white rounded-xl p-8 shadow-lg text-center max-w-md w-full">
+          <h2 className="text-2xl font-bold mb-2">تم إنهاء الإجراء!</h2>
+       </div>
+     </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-gray-50 font-sans text-gray-800 pb-16" dir="rtl">
+      <header className="bg-gradient-to-r from-purple-900 to-purple-700 text-white shadow-md pt-6 pb-12 px-4 text-center rounded-b-[2rem] relative z-10">
+        <h1 className="text-2xl md:text-3xl font-extrabold mb-1">القرار التنفيذي النهائي (F-03.2)</h1>
+        <h2 className="text-sm md:text-base text-teal-300 font-medium">يُعبأ بواسطة: مدير البحث الاجتماعي</h2>
+      </header>
+
+      <main className="container mx-auto px-4 -mt-8 relative z-20 max-w-3xl">
+        <div className="bg-gray-100 rounded-xl shadow-sm border border-gray-300 mb-4 p-5">
+          <div className="flex items-center gap-2 mb-3 text-gray-600"><UserCheck className="w-5 h-5" /><h3 className="font-bold">قرار وتوصية المدير التنفيذي (للقراءة فقط)</h3></div>
+          <div className={`p-3 rounded-lg font-bold text-sm mb-3 border ${execData.decision === 'موافقة' ? 'bg-green-50 text-green-800 border-green-200' : 'bg-red-50 text-red-800 border-red-200'}`}>
+             قرار المدير التنفيذي: {execData.decision === 'موافقة' ? 'تمت الموافقة' : 'مرفوض'}
+          </div>
+          <ReadOnlyField label="ملاحظات المدير التنفيذي" value={execData.executiveNotes} />
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-purple-200 p-5">
+          <div className="flex items-center gap-2 mb-4 text-purple-800"><AlertCircle className="w-6 h-6" /><h3 className="text-lg font-bold">الإجراء النهائي</h3></div>
+          
+          {execData.decision === 'موافقة' ? (
+            <div>
+               <p className="text-sm text-gray-600 mb-6 font-semibold">المشروع جاهز للتحويل إلى إدارة المشاريع للبدء بالتشخيص الهندسي.</p>
+               <button onClick={() => handleAction('TRANSFER')} disabled={isSubmitting} className="w-full bg-purple-600 hover:bg-purple-700 text-white py-4 rounded-xl font-bold text-base flex justify-center items-center gap-2 shadow-md">
+                 <ArrowLeftRight size={20} /> تحويل لإدارة المشاريع (يولد F-08)
+               </button>
+            </div>
+          ) : (
+            <div>
+               <p className="text-sm text-red-600 font-bold mb-4">تم رفض الحالة من المدير التنفيذي. حدد الإجراء التالي:</p>
+               <div className="flex flex-col gap-1 mb-5">
+                <label className="text-xs font-semibold text-gray-700">توصية مدير البحث النهائية</label>
+                <textarea rows={3} value={managerFinalNotes} onChange={e => setManagerFinalNotes(e.target.value)} placeholder="اكتب مبررات الإغلاق أو الإرجاع..." className="px-3 py-2 text-sm rounded-lg border border-gray-300 outline-none resize-none" />
+               </div>
+               <div className="flex gap-3">
+                <button onClick={() => handleAction('CLOSE')} disabled={!managerFinalNotes || isSubmitting} className="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-3 rounded-lg font-bold text-sm flex justify-center items-center gap-2">
+                  <XCircle size={18} /> إغلاق المشروع
+                </button>
+                <button onClick={() => handleAction('RETURN_RESEARCHER')} disabled={!managerFinalNotes || isSubmitting} className="flex-1 bg-yellow-500 hover:bg-yellow-600 text-white py-3 rounded-lg font-bold text-sm flex justify-center items-center gap-2">
+                  <RefreshCcw size={18} /> إرجاع للباحث
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+```

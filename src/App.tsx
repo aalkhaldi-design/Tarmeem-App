@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  Bell, WifiOff, User as UserIcon, AlertTriangle, ClipboardList, CheckCircle2,
+  Bell, WifiOff, User as UserIcon, AlertTriangle, ClipboardList, CheckCircle2, Plus,
 } from 'lucide-react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
-  collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc, runTransaction,
+  collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc,
 } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
 import { getUserProfile, AuthScreen, type UserProfile } from './components/Auth';
@@ -16,19 +16,16 @@ import {
   DEPT_PORTALS, PortalSidebar, PortalMobileNav, type ActivePortal,
 } from './components/Departments';
 import { AdminUsersPortal } from './components/Admin';
-import { MasterProjectList, ProjectDetail } from './components/Projects';
+import { MasterProjectList, ProjectHub } from './components/Projects';
 import { EmployeeProfile } from './components/EmployeeProfile';
 import {
   DEPARTMENTS, DepartmentKey, RoleKey, FORM_BY_CODE, FormCode,
-  portalAccessForRole, roleName, isAdminEmail, formatProjectId,
+  portalAccessForRole, roleName, isAdminEmail,
 } from './lib/data';
 import type { FormRecord, FormsApi } from './components/Forms';
-import { FormDetailModal, NewFormModal } from './components/Forms';
-import { RENDERERS, CREATORS, ProjectRecord, FormsContext } from './components/forms/FormRenderers';
-
-/* ──────────────────────────────────────────────────────────────────
-   Notifications
-   ────────────────────────────────────────────────────────────────── */
+import { FormDetailModal } from './components/Forms';
+import { RENDERERS, CREATORS } from './components/forms/AllForms';
+import type { ProjectRecord, FormsContext } from './lib/types';
 
 interface AppNotification {
   id: string;
@@ -59,8 +56,7 @@ function App() {
   const [bellOpen, setBellOpen] = useState(false);
   const bellRef = useRef<HTMLDivElement>(null);
   const [openFormId, setOpenFormId] = useState<string | null>(null);
-  const [showNewForm, setShowNewForm] = useState(false);
-  const [newFormPreselect, setNewFormPreselect] = useState<FormCode | undefined>(undefined);
+  const [showGenesis, setShowGenesis] = useState(false);
 
   const [splashVisible, setSplashVisible] = useState(() => !sessionStorage.getItem('tarmeem_splash_seen'));
   useEffect(() => { if (!splashVisible) sessionStorage.setItem('tarmeem_splash_seen', 'true'); }, [splashVisible]);
@@ -72,15 +68,13 @@ function App() {
       if (user) {
         const profile = await getUserProfile(user.uid);
         setRawUserProfile(profile);
-        // Auto-promote configured admin emails on first sign-in if profile exists but isn't admin
-        if (profile && isAdminEmail(user.email) && profile.role !== 'ADMIN') {
+        // Auto-promote configured admin emails on every sign-in (sets isAdmin=true)
+        if (profile && isAdminEmail(user.email) && !profile.isAdmin) {
           await updateDoc(doc(db, 'users', user.uid), {
-            role: 'ADMIN',
+            isAdmin: true,
             status: 'active',
-            isManager: true,
-            department: profile.department || 'EXEC',
             auditLog: [...(profile.auditLog || []), {
-              at: new Date().toISOString(), actor: 'system', action: 'auto-promoted-admin', from: { role: profile.role }, to: { role: 'ADMIN' },
+              at: new Date().toISOString(), actor: 'system', action: 'auto-promoted-admin', from: { isAdmin: profile.isAdmin || false }, to: { isAdmin: true },
             }],
           });
         }
@@ -134,17 +128,16 @@ function App() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  /* ────────── Profile guard (Admin uppercase + email-based admin) ────────── */
+  /* ────────── Profile guard ────────── */
   const userProfile: UserProfile | null = useMemo(() => {
     if (!rawUserProfile) return null;
-    const r = rawUserProfile.role as string;
-    if (isAdminEmail(rawUserProfile.email) || (typeof r === 'string' && r.toLowerCase() === 'admin')) {
-      return { ...rawUserProfile, role: 'ADMIN', status: 'active' } as UserProfile;
+    if (isAdminEmail(rawUserProfile.email) && !rawUserProfile.isAdmin) {
+      return { ...rawUserProfile, isAdmin: true, status: 'active' };
     }
     return rawUserProfile;
   }, [rawUserProfile]);
 
-  const isAdmin = userProfile?.role === 'ADMIN';
+  const isAdmin = !!userProfile?.isAdmin;
 
   /* ────────── Notifications ────────── */
   const dispatchNotification = useCallback(async (n: {
@@ -192,21 +185,11 @@ function App() {
     users.filter(u => u.status === 'active' && u.department === dept && u.isManager).map(u => u.id),
   [users]);
 
-  /** مولِّد رقم المشروع TRM-YYYY-NNN — يستخدم Firestore transaction على counter */
-  const generateProjectId = useCallback(async (): Promise<{ projectId: string; serial: number }> => {
-    const year = new Date().getFullYear();
-    const counterRef = doc(db, 'counters', `projects-${year}`);
-    const serial = await runTransaction(db, async (trx) => {
-      const snap = await trx.get(counterRef);
-      const current = snap.exists() ? (snap.data().value || 0) : 0;
-      const next = current + 1;
-      trx.set(counterRef, { value: next, year }, { merge: true });
-      return next;
-    });
-    return { projectId: formatProjectId(year, serial), serial };
-  }, []);
+  const availableEngineers = useCallback((): UserProfile[] =>
+    users.filter(u => u.status === 'active' && u.role === 'DIAGNOSIS_ENGINEER'),
+  [users]);
 
-  /** ينشئ سجل مشروع في مجموعة projects ويعيد المعرّف */
+  /** ينشئ سجل مشروع جديد (Genesis F-02). يستخدم projectId المُدخَل من الباحث. */
   const createProject = useCallback(async (data: Partial<ProjectRecord>): Promise<string | null> => {
     try {
       const now = new Date().toISOString();
@@ -217,11 +200,12 @@ function App() {
         phase: data.phase || 'RESEARCH',
       });
       await updateDoc(ref, { id: ref.id });
+      // إشعار مديري إدارة البحث الاجتماعي بفتح المشروع
       await dispatchNotification({
-        text: `تم إنشاء مشروع جديد ${data.projectId} للمستفيد ${data.beneficiaryName}`,
+        text: `مشروع Genesis جديد: ${data.projectId} — ${data.beneficiaryName}`,
         subject: `${data.projectId} — مشروع جديد`,
         type: 'project_created',
-        recipients: usersByDeptManager('PROJECTS'),
+        recipients: usersByDeptManager('RESEARCH'),
         link: ref.id,
         meta: { projectId: data.projectId, projectRefId: ref.id },
       });
@@ -234,14 +218,22 @@ function App() {
     catch (e) { console.error('updateProject:', e); }
   }, []);
 
-  /** يحدّد المرحلة حسب اعتمادات النموذج المكتمل */
   const phaseTransition = useCallback((code: FormCode): { phase: ProjectRecord['phase']; progress: number } | null => {
     switch (code) {
-      case 'F-08': return { phase: 'DIAGNOSIS', progress: 25 };
+      case 'F-02': return { phase: 'RESEARCH', progress: 5 };
+      case 'F-03': return { phase: 'DIAGNOSIS', progress: 15 };
+      case 'F-08': return { phase: 'EVACUATION', progress: 30 };
       case 'F-18': return { phase: 'EVACUATION', progress: 35 };
-      case 'F-85': return { phase: 'TENDERING', progress: 50 };
-      case 'F-14': return { phase: 'EXECUTION', progress: 65 };
+      case 'F-22': return { phase: 'EVACUATION', progress: 40 };
+      case 'F-21': return { phase: 'TENDERING', progress: 45 };
+      case 'F-20': return { phase: 'TENDERING', progress: 50 };
+      case 'F-19': return { phase: 'TENDERING', progress: 55 };
+      case 'F-85': return { phase: 'EXECUTION', progress: 60 };
+      case 'F-14': return { phase: 'EXECUTION', progress: 75 };
+      case 'F-23': return { phase: 'EXECUTION', progress: 78 };
+      case 'F-15': return { phase: 'EXECUTION', progress: 80 };
       case 'F-07': return { phase: 'CLOSED', progress: 100 };
+      case 'F-52': return { phase: 'CLOSED', progress: 100 };
       default: return null;
     }
   }, []);
@@ -251,17 +243,18 @@ function App() {
       const def = FORM_BY_CODE[input.code];
       if (!def) return null;
       const role = input.user.role as RoleKey;
+      // إذا كان الدور المنشئ ليس أول دور في السلسلة، نبدأ من 0 (دور خارجي يولّد للنموذج)
       const startIdx = def.approvalChain[0] === role ? 1 : 0;
       const initialApprovals = startIdx === 1 ? [{
         role, actorId: input.user.id, actorName: input.user.fullName,
         at: new Date().toISOString(), decision: 'approved' as const, note: 'إنشاء',
       }] : [];
 
-      // إذا كان F-08 — أسنده لمهندس التشخيص الخاص بالمشروع تلقائياً
+      // F-08: يُسند تلقائياً لمهندس التشخيص إن كان معيَّناً على المشروع
       let assigneeId = input.assigneeId || null;
       if (def.code === 'F-08' && input.projectRefId) {
         const project = projects.find(p => p.id === input.projectRefId);
-        if (project?.diagnosisEngineerId) assigneeId = project.diagnosisEngineerId;
+        if (!assigneeId && project?.diagnosisEngineerId) assigneeId = project.diagnosisEngineerId;
       }
 
       const rec: Omit<FormRecord, 'id'> = {
@@ -322,7 +315,6 @@ function App() {
     } catch (e) { console.error('createForm:', e); return null; }
   }, [dispatchNotification, usersByRole, usersByDeptManager, projects]);
 
-  /** إجراءات الاعتماد المركزية */
   const advanceForm = useCallback(async (
     formId: string, user: UserProfile, decision: 'approved' | 'rejected' | 'deferred', note?: string,
     dataPatch?: Record<string, any>,
@@ -331,8 +323,8 @@ function App() {
     if (!rec) return;
     const myRole = user.role as RoleKey;
     const expected = rec.approvalChain[rec.approvalIndex];
-    if (expected !== myRole && user.role !== 'ADMIN') return;
-    if (rec.assigneeId && rec.assigneeId !== user.id && user.role !== 'ADMIN') return;
+    if (expected !== myRole && !user.isAdmin) return;
+    if (rec.assigneeId && rec.assigneeId !== user.id && !user.isAdmin) return;
 
     const now = new Date().toISOString();
     const newApproval = { role: expected, actorId: user.id, actorName: user.fullName, at: now, decision, note };
@@ -357,7 +349,6 @@ function App() {
     };
     if (dataPatch) {
       patch.data = { ...(rec.data || {}), ...(dataPatch as any) };
-      // استخراج projectId/projectRefId من dataPatch
       if (dataPatch.projectId) patch.projectId = dataPatch.projectId;
       if (dataPatch.projectRefId) patch.projectRefId = dataPatch.projectRefId;
     }
@@ -381,7 +372,7 @@ function App() {
     // إشعار التالي
     if (nextStatus === 'pending' && nextIndex < rec.approvalChain.length) {
       const nextRole = rec.approvalChain[nextIndex];
-      const recipients = (rec.code === 'F-08' && rec.assigneeId) ? [rec.assigneeId] : usersByRole(nextRole);
+      const recipients = rec.assigneeId ? [rec.assigneeId] : usersByRole(nextRole);
       await dispatchNotification({
         text: `طلب بانتظار اعتمادك: ${rec.code} ${rec.title}`,
         subject: `${rec.code} — ${rec.title}`,
@@ -394,12 +385,15 @@ function App() {
 
     // عند الاعتماد النهائي
     if (nextStatus === 'approved') {
-      // تحديث المرحلة ونسبة المشروع (إن وجد)
+      // 1) تحديث المرحلة ونسبة المشروع
       if (rec.projectRefId) {
         const t = phaseTransition(rec.code);
         if (t) await updateProject(rec.projectRefId, { phase: t.phase, progressPct: t.progress });
-        // F-08: إذا safetyHazard=true ⇒ يفتح F-18 و F-22
-        if (rec.code === 'F-08' && rec.data?.safetyHazard) {
+
+        // F-08: إذا safetyHazard=true يطلق F-18 و F-22 آلياً
+        const f08Data = rec.code === 'F-08' ? { ...(rec.data || {}), ...(dataPatch || {}) } : null;
+        if (rec.code === 'F-08' && f08Data?.safetyHazard) {
+          await updateProject(rec.projectRefId, { safetyHazard: true });
           await createForm({
             code: 'F-18', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
             beneficiaryName: rec.beneficiaryName, notes: 'أُطلق تلقائياً من F-08 (سلامة).',
@@ -407,63 +401,59 @@ function App() {
           });
         }
         // F-14: عند milestone تطلق F-15
-        if (rec.code === 'F-14' && rec.data?.milestone) {
-          await createForm({
-            code: 'F-15', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
-            beneficiaryName: rec.beneficiaryName,
-            data: { milestone: rec.data.milestone, amount: 0 },
-            notes: `أُطلق تلقائياً عند بلوغ المحطة ${rec.data.milestone}`,
-            triggeredBy: rec.id,
-          });
-        }
-        if (rec.code === 'F-14' && rec.data?.scopeChange) {
-          await createForm({
-            code: 'F-23', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
-            beneficiaryName: rec.beneficiaryName,
-            data: { items: [], reason: 'تغيير نطاق ميداني' },
-            notes: 'أُطلق تلقائياً من F-14 (تغيير نطاق).',
-            triggeredBy: rec.id,
-          });
+        if (rec.code === 'F-14') {
+          const data = { ...(rec.data || {}), ...(dataPatch || {}) };
+          if (data.milestone) {
+            await createForm({
+              code: 'F-15', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
+              beneficiaryName: rec.beneficiaryName,
+              data: { milestone: data.milestone, amount: 0 },
+              notes: `أُطلق تلقائياً عند بلوغ المحطة ${data.milestone}`,
+              triggeredBy: rec.id,
+            });
+          }
+          if (data.scopeChange) {
+            await createForm({
+              code: 'F-23', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
+              beneficiaryName: rec.beneficiaryName,
+              data: { items: [], reason: data.scopeReason || 'تغيير نطاق ميداني' },
+              notes: 'أُطلق تلقائياً من F-14 (تغيير نطاق).',
+              triggeredBy: rec.id,
+            });
+          }
         }
         // F-85: تحدّث contractor & price على المشروع
         if (rec.code === 'F-85') {
+          const data = { ...(rec.data || {}), ...(dataPatch || {}) };
           await updateProject(rec.projectRefId, {
-            contractorName: rec.data?.winnerContractor,
-            awardedPrice: rec.data?.winnerPrice,
+            contractorName: data.winnerContractor,
+            awardedPrice: data.winnerPrice,
           });
         }
         // F-07: media trigger
-        if (rec.code === 'F-07' && rec.data?.mediaRequested) {
-          await createForm({
-            code: 'F-52', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
-            beneficiaryName: rec.beneficiaryName,
-            data: { type: 'قبل/بعد', details: 'تم طلب التوثيق من شهادة التسليم.' },
-            notes: 'أُطلق تلقائياً من F-07.',
-            triggeredBy: rec.id,
-          });
+        if (rec.code === 'F-07') {
+          const data = { ...(rec.data || {}), ...(dataPatch || {}) };
+          if (data.mediaRequested) {
+            await createForm({
+              code: 'F-52', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
+              beneficiaryName: rec.beneficiaryName,
+              data: { type: 'قبل/بعد', details: 'تم طلب التوثيق من شهادة التسليم F-07.' },
+              notes: 'أُطلق تلقائياً من F-07.',
+              triggeredBy: rec.id,
+            });
+          }
         }
       }
 
-      // F-18: ينشئ F-22 آلياً
+      // F-18 معتمد ⇒ F-22 آلياً
       if (rec.code === 'F-18') {
         await createForm({
           code: 'F-22', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
           beneficiaryName: rec.beneficiaryName,
-          data: { evacDate: rec.data?.evacDate, returnDate: rec.data?.returnDate, city: '' },
+          data: { evacDate: rec.data?.evacDate, returnDate: rec.data?.returnDate },
           notes: 'أُطلق تلقائياً مع F-18.',
           triggeredBy: rec.id,
         });
-      }
-
-      // التحريك التلقائي حسب triggers الموجودة في FORMS
-      const def = FORM_BY_CODE[rec.code];
-      for (const trig of (def?.triggers || [])) {
-        // F-03 → F-08 يُعالَج خصيصاً (يحتاج إسناد المهندس عبر F-03 transfer)
-        if (rec.code === 'F-03' && trig === 'F-08') {
-          // F-08 سيُنشأ يدوياً عبر F03Renderer.transferToProjects عبر createProject + createForm
-          continue;
-        }
-        // عام: ينشئ النموذج كمسودة لاحقة (نظري — في هذا المسار نُترك يدوياً)
       }
     }
   }, [forms, dispatchNotification, usersByRole, phaseTransition, updateProject, createForm]);
@@ -490,16 +480,15 @@ function App() {
     attachFiles,
   }), [forms, createForm, advanceForm, updateFormData, attachFiles]);
 
-  /* ────────── Forms context for renderers ────────── */
   const formsContext: FormsContext = useMemo(() => ({
     projects,
-    generateProjectId,
-    createProject,
-    updateProject,
     findProjectForm: (projectRefId, code) =>
       formsApi.forms.find(f => f.projectRefId === projectRefId && f.code === code) || null,
+    updateProject,
+    createProject,
     userById: (id) => users.find(u => u.id === id),
-  }), [projects, generateProjectId, createProject, updateProject, formsApi.forms, users]);
+    availableEngineers,
+  }), [projects, updateProject, createProject, formsApi.forms, users, availableEngineers]);
 
   /* ────────── Users API ────────── */
   const approveUser = useCallback(async (userId: string, edits: any, approverId: string) => {
@@ -511,7 +500,6 @@ function App() {
         needsRoleReset: false,
         auditLog: [...(existing?.auditLog || []), auditEntry],
       });
-      // notify the user
       await dispatchNotification({
         text: `تم تفعيل حسابك بدور ${roleName(edits.role)}.`,
         subject: 'تفعيل الحساب',
@@ -526,7 +514,7 @@ function App() {
     try {
       const existing = users.find(u => u.id === userId);
       if (!existing) return;
-      const auditEntry = { at: new Date().toISOString(), actor: actorId, action: 'updated', from: { role: existing.role, department: existing.department }, to: edits };
+      const auditEntry = { at: new Date().toISOString(), actor: actorId, action: 'updated', from: { role: existing.role, department: existing.department, isAdmin: existing.isAdmin }, to: edits };
       await updateDoc(doc(db, 'users', userId), { ...edits, auditLog: [...(existing.auditLog || []), auditEntry] });
     } catch (e) { console.error('updateUser:', e); }
   }, [users]);
@@ -560,7 +548,6 @@ function App() {
     catch (e) { console.error('rejectUser:', e); }
   }, []);
 
-  /** يعيد ضبط مستخدم قديم: يضع status=pending ويفرغ role/department */
   const resetUserRole = useCallback(async (userId: string, actorId: string) => {
     try {
       const existing = users.find(u => u.id === userId);
@@ -593,6 +580,21 @@ function App() {
   );
   const unreadCount = myNotifications.filter(n => !(n.readBy || []).includes(userProfile?.id || '')).length;
 
+  /* ────────── Form creation triggered from Project Hub ────────── */
+  const handleCreateFromHub = useCallback(async (projectRefId: string, code: FormCode) => {
+    const project = projects.find(p => p.id === projectRefId);
+    if (!project || !userProfile) return;
+    // إنشاء نموذج فارغ ثم فتحه فوراً للتحرير
+    const id = await createForm({
+      code, user: userProfile,
+      projectId: project.projectId,
+      projectRefId: project.id,
+      beneficiaryName: project.beneficiaryName,
+      data: {},
+    });
+    if (id) setOpenFormId(id);
+  }, [projects, userProfile, createForm]);
+
   /* ────────── Render gates ────────── */
   if (authLoading) {
     return (
@@ -614,13 +616,14 @@ function App() {
   const openForm = (id: string) => setOpenFormId(id);
   const openProject = (id: string) => { setActiveProjectId(id); setActive('PROJECTS_LIST'); };
   const openProfile = (id: string) => { setActiveProfileId(id); setActive('PROFILE'); };
-  const openCreator = (preselect?: FormCode) => { setNewFormPreselect(preselect); setShowNewForm(true); };
 
   const openRec = openFormId ? formsApi.forms.find(f => f.id === openFormId) || null : null;
   const activeProject = activeProjectId ? projects.find(p => p.id === activeProjectId) || null : null;
-  const profileTarget = activeProfileId
-    ? users.find(u => u.id === activeProfileId) || null
-    : userProfile;
+  const profileTarget = activeProfileId ? users.find(u => u.id === activeProfileId) || null : userProfile;
+  const F02CreatorComp = CREATORS['F-02'];
+
+  // Researcher (or admin) can launch F-02 Genesis from dashboard
+  const canLaunchGenesis = userProfile && (userProfile.role === 'SOCIAL_RESEARCHER' || userProfile.isAdmin);
 
   const renderActive = () => {
     if (!userProfile) return null;
@@ -639,10 +642,11 @@ function App() {
     }
     if (active === 'PROJECTS_LIST') {
       return activeProject ? (
-        <ProjectDetail project={activeProject} user={userProfile} users={users} api={formsApi}
-          onBack={() => setActiveProjectId(null)} onOpenForm={openForm} />
+        <ProjectHub project={activeProject} user={userProfile} users={users} api={formsApi} context={formsContext}
+          onBack={() => setActiveProjectId(null)} onOpenForm={openForm}
+          onCreateForm={(code) => handleCreateFromHub(activeProject.id, code)} />
       ) : (
-        <MasterProjectList user={userProfile} api={formsApi} projects={projects} users={users} onOpenProject={openProject} />
+        <MasterProjectList projects={projects} api={formsApi} onOpenProject={openProject} />
       );
     }
     if (active === 'PROFILE' && profileTarget) {
@@ -665,8 +669,7 @@ function App() {
       );
     }
     const Portal = DEPT_PORTALS[active as DepartmentKey];
-    if (Portal) return <Portal user={userProfile} users={users} api={formsApi}
-      onOpenForm={openForm} onCreateForm={(c) => openCreator(c)} />;
+    if (Portal) return <Portal user={userProfile} users={users} api={formsApi} onOpenForm={openForm} />;
     return null;
   };
 
@@ -735,6 +738,12 @@ function App() {
           </div>
 
           <div className="flex items-center gap-2">
+            {canLaunchGenesis && (
+              <button onClick={() => setShowGenesis(true)}
+                className="hidden md:flex items-center gap-1.5 bg-[#56B894] hover:bg-[#3F9B7A] text-white px-3 py-1.5 rounded-lg font-bold text-xs transition shadow">
+                <Plus className="w-4 h-4" /> Genesis · F-02 (مشروع جديد)
+              </button>
+            )}
             <ThemeToggle />
             <div className="relative" ref={bellRef}>
               <button onClick={() => setBellOpen(v => !v)} className="relative p-1.5 hover:bg-white/10 rounded-lg transition">
@@ -768,7 +777,7 @@ function App() {
                           }}
                             className={`px-4 py-3 border-b last:border-0 dark:border-slate-700 cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-900 transition flex gap-2 ${!isRead ? 'bg-blue-50/50 dark:bg-blue-900/20' : ''}`}>
                             <div className="shrink-0 mt-0.5">
-                              {n.type === 'form_rejected' || n.type === 'form_late' ? <AlertTriangle className="w-4 h-4 text-orange-500" /> :
+                              {n.type === 'form_rejected' ? <AlertTriangle className="w-4 h-4 text-orange-500" /> :
                                 n.type === 'form_pending' ? <ClipboardList className="w-4 h-4 text-blue-500" /> :
                                   n.type === 'form_approved' ? <CheckCircle2 className="w-4 h-4 text-green-500" /> :
                                     <Bell className="w-4 h-4 text-gray-500" />}
@@ -816,15 +825,23 @@ function App() {
         <PortalMobileNav active={active} onChange={goToPortal} isAdmin={isAdmin} allowedDepts={allowedDepts} />
       )}
 
+      {/* Floating Genesis F-02 button (mobile) */}
+      {canLaunchGenesis && active === 'HOME' && (
+        <button onClick={() => setShowGenesis(true)}
+          className="md:hidden fixed bottom-20 right-4 bg-[#56B894] hover:bg-[#3F9B7A] text-white rounded-full w-14 h-14 flex items-center justify-center shadow-lg z-40 transition">
+          <Plus className="w-6 h-6" />
+        </button>
+      )}
+
       {openRec && userProfile && (
         <FormDetailModal rec={openRec} user={userProfile} api={formsApi} users={users}
           registry={RENDERERS} context={formsContext}
           onClose={() => setOpenFormId(null)} />
       )}
-      {showNewForm && userProfile && (
-        <NewFormModal user={userProfile} api={formsApi} users={users}
-          context={formsContext} creators={CREATORS} preselect={newFormPreselect}
-          onClose={() => { setShowNewForm(false); setNewFormPreselect(undefined); }} />
+
+      {showGenesis && userProfile && F02CreatorComp && (
+        <F02CreatorComp user={userProfile} api={formsApi} users={users} context={formsContext}
+          onClose={() => setShowGenesis(false)} />
       )}
     </div>
   );

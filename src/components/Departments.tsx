@@ -1,16 +1,16 @@
 import React, { useMemo, useState } from 'react';
 import {
   Building2, Users as UsersIcon, Stethoscope, Wallet, Truck, HeartHandshake,
-  Megaphone, Handshake, Mic2, FileText, Plus, Activity, Inbox,
+  Megaphone, Handshake, Mic2, FileText, Activity, Inbox,
   Shield,
 } from 'lucide-react';
 import {
-  DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, RoleKey, formsByDepartment,
-  departmentName, roleName, FormCode,
+  DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, formsByDepartment,
+  departmentName, roleName,
 } from '../lib/data';
 import { Card, Pill, EmptyState, SearchBar } from './ui';
 import {
-  FormsApi, FormCard, formCanBeOriginatedBy, formAwaitsUser,
+  FormsApi, FormCard, formAwaitsUser,
 } from './Forms';
 import type { UserProfile } from './Auth';
 
@@ -31,14 +31,14 @@ interface PortalProps {
   users: UserProfile[];
   api: FormsApi;
   onOpenForm: (id: string) => void;
-  onCreateForm: (preselect?: FormCode) => void;
+  /** فتح Project Hub الخاص بنموذج بعينه (للتنقل من قائمة النماذج) */
+  onOpenProject?: (projectRefId: string) => void;
 }
 
 const DepartmentPortalLayout: React.FC<PortalProps & { dept: DepartmentKey; extras?: React.ReactNode }> =
-  ({ dept, user, api, onOpenForm, onCreateForm, extras }) => {
+  ({ dept, user, api, onOpenForm, extras }) => {
     const def = DEPT_BY_KEY[dept];
     const Icon = DEPT_ICON[dept];
-    const myRole = user.role as RoleKey;
 
     const ownedForms = useMemo(() => formsByDepartment(dept), [dept]);
     const records = useMemo(() => api.forms.filter(f => f.ownerDept === dept || (f.bridgesTo || []).includes(dept)), [api.forms, dept]);
@@ -63,8 +63,6 @@ const DepartmentPortalLayout: React.FC<PortalProps & { dept: DepartmentKey; extr
       rejected: records.filter(f => f.status === 'rejected').length,
     };
 
-    const creatable = ownedForms.filter(f => formCanBeOriginatedBy(f, myRole) || user.role === 'ADMIN');
-
     return (
       <div dir="rtl" className="space-y-5">
         <div className="rounded-2xl p-6 text-white shadow-lg" style={{ background: `linear-gradient(135deg, ${def.color}, ${def.accent})` }}>
@@ -78,11 +76,9 @@ const DepartmentPortalLayout: React.FC<PortalProps & { dept: DepartmentKey; extr
                 <p className="text-white/80 text-sm mt-1">{def.description}</p>
               </div>
             </div>
-            {creatable.length > 0 && (
-              <button onClick={() => onCreateForm()} className="bg-white text-gray-800 px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-white/90 shadow">
-                <Plus className="w-4 h-4" /> نموذج جديد
-              </button>
-            )}
+            <div className="text-[10px] text-white/70 max-w-xs text-end">
+              النماذج لا تُنشأ من البوابة — تُنشأ فقط من Project Hub أو تتولّد آلياً من المسار.
+            </div>
           </div>
         </div>
 
@@ -114,23 +110,6 @@ const DepartmentPortalLayout: React.FC<PortalProps & { dept: DepartmentKey; extr
             <div className="space-y-2">{inbox.map(f => <FormCard key={f.id} rec={f} highlight onOpen={() => onOpenForm(f.id)} />)}</div>
           )}
         </Card>
-
-        {creatable.length > 0 && (
-          <Card title="النماذج المتاحة لدورك" icon={FileText}>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {creatable.map(f => (
-                <button key={f.code} onClick={() => onCreateForm(f.code)}
-                  className="text-right p-3 rounded-lg border border-gray-200 dark:border-slate-700 hover:border-[#4A1F66]/30 hover:shadow transition bg-white dark:bg-slate-800">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Pill tone="purple">{f.code}</Pill>
-                    <span className="text-sm font-bold text-gray-800 dark:text-slate-100">{f.title}</span>
-                  </div>
-                  <p className="text-[11px] text-gray-500 dark:text-slate-400 line-clamp-2">{f.description}</p>
-                </button>
-              ))}
-            </div>
-          </Card>
-        )}
 
         <Card title={`نماذج ${def.name} (${records.length})`} icon={FileText} accent="purple">
           <div className="flex flex-col md:flex-row gap-3 mb-4">

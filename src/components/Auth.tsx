@@ -9,13 +9,16 @@ export interface UserProfile {
   id: string;
   email: string;
   fullName: string;
-  /** أحد مفاتيح الأدوار (RoleKey) أو 'ADMIN' للمسؤول العام */
-  role: RoleKey | 'ADMIN' | 'PENDING';
+  /** أحد مفاتيح الأدوار (RoleKey)؛ 'PENDING' للمستخدمين بانتظار إعادة التصنيف.
+      ملاحظة: حالة "مسؤول النظام" (Admin) أصبحت علامة منفصلة (`isAdmin`) ولا تتبدّل بالدور. */
+  role: RoleKey | 'PENDING';
   /** مفتاح الإدارة الأساسية للمستخدم (قد يكون فارغاً للمعلّقين) */
   department: string;
   region: string;
   /** يحدّد ما إذا كان المستخدم مديراً للقسم (للاعتمادات) */
   isManager: boolean;
+  /** علامة منفصلة: مسؤول نظام (يتعايش مع أي دور). */
+  isAdmin?: boolean;
   /** هاتف للتواصل (اختياري) */
   phone?: string;
   bio?: string;
@@ -41,36 +44,29 @@ export async function createUserProfile(
   uid: string, email: string, fullName: string,
   requestedRole: RoleKey | null, region: string,
 ): Promise<void> {
-  // إذا كان البريد ضمن قائمة الأدمنز الافتراضيين، أنشئه أدمن مباشرة
-  if (isAdminEmail(email)) {
-    const profile: UserProfile = {
-      id: uid, email: email.toLowerCase().trim(), fullName,
-      role: 'ADMIN', department: 'EXEC', region,
-      isManager: true, status: 'active',
-      registeredAt: new Date().toISOString(),
-      lastSeenAt: new Date().toISOString(),
-      approvedBy: 'system', approvedAt: new Date().toISOString(),
-      deactivatedAt: null, deactivatedBy: null,
-      notificationPrefs: { inApp: true, email: true },
-      auditLog: [{ at: new Date().toISOString(), actor: 'system', action: 'auto-admin', from: null, to: { role: 'ADMIN' } }],
-    };
-    await setDoc(doc(db, 'users', uid), profile);
-    return;
-  }
+  const isPredefAdmin = isAdminEmail(email);
   const def = requestedRole ? ROLE_BY_KEY[requestedRole] : null;
   const profile: UserProfile = {
     id: uid, email: email.toLowerCase().trim(), fullName,
     role: requestedRole || 'PENDING',
-    department: def?.department || '',
+    department: def?.department || (isPredefAdmin ? 'EXEC' : ''),
     region,
     isManager: !!def?.isManager,
-    status: 'pending',
+    isAdmin: isPredefAdmin,
+    status: isPredefAdmin ? 'active' : 'pending',
     registeredAt: new Date().toISOString(),
     lastSeenAt: new Date().toISOString(),
-    approvedBy: null, approvedAt: null,
+    approvedBy: isPredefAdmin ? 'system' : null,
+    approvedAt: isPredefAdmin ? new Date().toISOString() : null,
     deactivatedAt: null, deactivatedBy: null,
     notificationPrefs: { inApp: true, email: true },
-    auditLog: [{ at: new Date().toISOString(), actor: 'system', action: 'registered', from: null, to: { status: 'pending', role: requestedRole } }],
+    auditLog: [{
+      at: new Date().toISOString(),
+      actor: 'system',
+      action: isPredefAdmin ? 'auto-admin-registered' : 'registered',
+      from: null,
+      to: { status: isPredefAdmin ? 'active' : 'pending', role: requestedRole, isAdmin: isPredefAdmin },
+    }],
   };
   await setDoc(doc(db, 'users', uid), profile);
 }

@@ -10,6 +10,21 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+
+  /* RULE 4 — kill the up/down arrow spinners on every number input.
+     Keep them only on inputs explicitly opting back in via [data-spin="on"]. */
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] { -moz-appearance: textfield; }
+  input[type="number"][data-spin="on"]::-webkit-outer-spin-button,
+  input[type="number"][data-spin="on"]::-webkit-inner-spin-button {
+    -webkit-appearance: auto;
+    margin: revert;
+  }
+  input[type="number"][data-spin="on"] { -moz-appearance: auto; }
 }
 
 @keyframes fadeIn {

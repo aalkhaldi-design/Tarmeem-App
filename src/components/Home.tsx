@@ -9,7 +9,7 @@ import {
 } from '../lib/data';
 import { Card, TarmeemLogo, ProgressBar, Pill, DonutChart, BarChart, Sparkline, EmptyState } from './ui';
 import { FormsApi, formAwaitsUser } from './Forms';
-import type { ProjectRecord } from './forms/FormRenderers';
+import type { ProjectRecord } from '../lib/types';
 import type { UserProfile } from './Auth';
 
 const ARABIC_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];

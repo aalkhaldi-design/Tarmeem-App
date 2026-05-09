@@ -376,6 +376,47 @@ export const portalAccessForRole = (role: RoleKey): DepartmentKey[] => {
 export const formatProjectId = (year: number, serial: number) =>
   `TRM-${year}-${String(serial).padStart(3, '0')}`;
 
+/** يُتحقّق من صحة صيغة المعرّف TRM-YYYY-NNN — يقبل التنسيق الحرّ من المستخدم */
+export const PROJECT_ID_PATTERN = /^TRM-\d{4}-\d{3,}$/;
+
+/* ──────────────────────────────────────────────────────────────────
+   ترتيب المسار الزمني للنماذج (Roadmap order) — للعرض في Project Hub
+   ────────────────────────────────────────────────────────────────── */
+
+export const FORMS_ROADMAP: { code: FormCode; phase: 'RESEARCH' | 'DIAGNOSIS' | 'EVACUATION' | 'TENDERING' | 'EXECUTION' | 'HANDOVER' | 'CLOSED'; label: string }[] = [
+  { code: 'F-02', phase: 'RESEARCH',   label: 'البحث الاجتماعي' },
+  { code: 'F-03', phase: 'RESEARCH',   label: 'استحقاق الخدمة' },
+  { code: 'F-08', phase: 'DIAGNOSIS',  label: 'تشخيص المبنى' },
+  { code: 'F-18', phase: 'EVACUATION', label: 'تعهد الإخلاء' },
+  { code: 'F-22', phase: 'EVACUATION', label: 'سكن بديل' },
+  { code: 'F-21', phase: 'EVACUATION', label: 'حصر الأثاث' },
+  { code: 'F-20', phase: 'TENDERING',  label: 'خطة التوريد' },
+  { code: 'F-19', phase: 'TENDERING',  label: 'تعميد المقاول' },
+  { code: 'F-85', phase: 'TENDERING',  label: 'الترسية' },
+  { code: 'F-14', phase: 'EXECUTION',  label: 'الزيارات الميدانية' },
+  { code: 'F-23', phase: 'EXECUTION',  label: 'الأعمال الإضافية' },
+  { code: 'F-15', phase: 'EXECUTION',  label: 'صرف الدفعات' },
+  { code: 'F-07', phase: 'HANDOVER',   label: 'تسليم المنزل' },
+  { code: 'F-52', phase: 'HANDOVER',   label: 'التغطية الإعلامية' },
+];
+
+/* ──────────────────────────────────────────────────────────────────
+   تنسيق رقمي — لتحويل القيم المالية كنص قابل للقراءة (12,500.00)
+   ────────────────────────────────────────────────────────────────── */
+
+export const formatNumberForDisplay = (val: number | string | null | undefined): string => {
+  if (val === null || val === undefined || val === '') return '';
+  const n = typeof val === 'number' ? val : Number(String(val).replace(/,/g, ''));
+  if (Number.isNaN(n)) return '';
+  return n.toLocaleString('en-US');
+};
+
+export const parseNumber = (val: string): number => {
+  const cleaned = (val || '').replace(/[^\d.-]/g, '');
+  const n = Number(cleaned);
+  return Number.isNaN(n) ? 0 : n;
+};
+
 /* ──────────────────────────────────────────────────────────────────
    Helpers (Time / Currency / Region)
    ────────────────────────────────────────────────────────────────── */

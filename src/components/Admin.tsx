@@ -62,15 +62,16 @@ function Modal({ open, onClose, title, children, wide }: {
 function UserAdminForm({ user, mode, onSubmit, onSecondary, busy }: {
   user: UserProfile;
   mode: 'approve' | 'edit';
-  onSubmit: (edits: { role: RoleKey; department: string; region: string; isManager: boolean }) => void;
+  onSubmit: (edits: { role: RoleKey; department: string; region: string; isManager: boolean; isAdmin: boolean }) => void;
   onSecondary?: (reason: string) => void;
   busy: boolean;
 }) {
-  const startRole = (user.role && user.role !== 'PENDING' && user.role !== 'ADMIN' ? user.role as RoleKey : 'SOCIAL_RESEARCHER');
+  const startRole = (user.role && user.role !== 'PENDING' ? user.role as RoleKey : 'SOCIAL_RESEARCHER');
   const [role, setRole] = useState<RoleKey>(startRole);
   const [department, setDepartment] = useState(user.department || ROLE_BY_KEY[startRole]?.department || 'RESEARCH');
   const [region, setRegion] = useState(user.region || 'DAM');
   const [isManager, setIsManager] = useState(user.isManager || ROLE_BY_KEY[startRole]?.isManager || false);
+  const [isAdmin, setIsAdmin] = useState<boolean>(!!user.isAdmin);
   const [showSecondary, setShowSecondary] = useState(false);
   const [reason, setReason] = useState('');
 
@@ -153,11 +154,20 @@ function UserAdminForm({ user, mode, onSubmit, onSecondary, busy }: {
         </div>
       </div>
 
-      <label className="flex items-center gap-2 cursor-pointer">
-        <input type="checkbox" checked={isManager} onChange={e => setIsManager(e.target.checked)}
-          className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66] w-4 h-4" />
-        <span className="text-sm text-gray-700 dark:text-slate-300 font-semibold">يحقّ له اعتماد طلبات قسمه (مدير)</span>
-      </label>
+      <div className="space-y-2 border-t dark:border-slate-700 pt-3">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={isManager} onChange={e => setIsManager(e.target.checked)}
+            className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66] w-4 h-4" />
+          <span className="text-sm text-gray-700 dark:text-slate-300 font-semibold">يحقّ له اعتماد طلبات قسمه (مدير)</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={isAdmin} onChange={e => setIsAdmin(e.target.checked)}
+            className="rounded border-gray-300 text-red-600 focus:ring-red-600 w-4 h-4" />
+          <span className="text-sm text-gray-700 dark:text-slate-300 font-semibold">
+            مسؤول نظام (Admin) — صلاحية ثالثة مستقلة عن الدور
+          </span>
+        </label>
+      </div>
 
       <div className="flex gap-3 justify-end border-t dark:border-slate-700 pt-4">
         {mode === 'approve' && (
@@ -166,7 +176,7 @@ function UserAdminForm({ user, mode, onSubmit, onSecondary, busy }: {
             <XCircle className="w-4 h-4" /> رفض
           </button>
         )}
-        <button onClick={() => onSubmit({ role, department, region, isManager })} disabled={busy}
+        <button onClick={() => onSubmit({ role, department, region, isManager, isAdmin })} disabled={busy}
           className={`px-4 py-2 rounded-lg text-sm font-bold transition disabled:opacity-40 flex items-center gap-1
             ${mode === 'approve' ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-[#4A1F66] text-white hover:bg-[#3A1652]'}`}>
           <CheckCircle className="w-4 h-4" />
@@ -188,7 +198,7 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
   const [mode, setMode] = useState<'approve' | 'edit' | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const isAdmin = currentUser.role === 'ADMIN' || isAdminEmail(currentUser.email);
+  const isAdmin = !!currentUser.isAdmin || isAdminEmail(currentUser.email);
 
   const filtered = useMemo(() => {
     let list = users;
@@ -248,7 +258,7 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
     try {
       for (const u of users) {
         if (isAdminEmail(u.email)) continue;
-        if (u.role === 'ADMIN') continue;
+        if (u.isAdmin) continue;
         await resetUserRole(u.id, currentUser.id);
       }
     } finally { setBusy(false); }
@@ -319,7 +329,7 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
                           </div>
                           <span className="font-semibold text-gray-800 dark:text-slate-100 truncate max-w-[140px] hover:underline">{u.fullName}</span>
                           {u.isManager && <Pill tone="purple">مدير</Pill>}
-                          {u.role === 'ADMIN' && <Pill tone="red">أدمن</Pill>}
+                          {u.isAdmin && <Pill tone="red">أدمن</Pill>}
                           {u.needsRoleReset && <Pill tone="amber">إعادة ضبط</Pill>}
                         </div>
                       </td>
@@ -341,7 +351,7 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
                                 className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-200 hover:bg-blue-100" title="تعديل">
                                 <Edit className="w-4 h-4" />
                               </button>
-                              {u.id !== currentUser.id && u.role !== 'ADMIN' && (
+                              {u.id !== currentUser.id && !u.isAdmin && (
                                 <button onClick={() => handleDeactivate(u)}
                                   className="p-1.5 rounded-lg bg-red-50 dark:bg-red-900/40 text-red-600 dark:text-red-200 hover:bg-red-100" title="تعطيل">
                                   <XCircle className="w-4 h-4" />

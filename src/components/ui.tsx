@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   UploadCloud, Lock, Plus, CheckCircle2, AlertTriangle, FileText, DollarSign, X,
-  Sun, Moon, Search, ChevronDown,
+  Sun, Moon, Search, ChevronDown, Check,
 } from 'lucide-react';
 import { THEME } from '../lib/data';
 
@@ -240,8 +240,109 @@ export const ReadOnlyField = ({ label, value, className = '' }: { label: string;
   <div className={`flex flex-col gap-1 ${className}`}>
     <label className="text-xs font-semibold text-gray-500 dark:text-slate-400">{label}</label>
     <div className="px-3 py-2 rounded-lg text-sm bg-gray-50 dark:bg-slate-700 text-gray-700 dark:text-slate-200 border border-gray-200 dark:border-slate-600 min-h-[36px]">
-      {value || <span className="text-gray-300 italic">—</span>}
+      {value !== undefined && value !== null && value !== '' ? value : <span className="text-gray-300 italic">—</span>}
     </div>
+  </div>
+);
+
+/* ──────────────────────────────────────────────────────────────────
+   Money Input — لا يحتوي على أسهم زيادة/إنقاص (per Rule 4).
+   يقبل أرقاماً ضخمة بإدخال نصّي مع تنسيق تلقائي بالفاصلة وعرض ر.س.
+   ────────────────────────────────────────────────────────────────── */
+
+export const MoneyInput = ({
+  label, value, onChange, placeholder = '0', className = '', readOnly = false, required = false,
+}: {
+  label?: string;
+  value: number | string | null | undefined;
+  onChange: (v: number) => void;
+  placeholder?: string;
+  className?: string;
+  readOnly?: boolean;
+  required?: boolean;
+}) => {
+  const display = (() => {
+    if (value === null || value === undefined || value === '') return '';
+    const n = typeof value === 'number' ? value : Number(String(value).replace(/[^\d.-]/g, ''));
+    if (Number.isNaN(n)) return '';
+    return n.toLocaleString('en-US');
+  })();
+  return (
+    <div className={`flex flex-col gap-1 ${className}`}>
+      {label && (
+        <label className="text-xs font-semibold text-gray-700 dark:text-slate-300">
+          {label} {required && <span className="text-red-500">*</span>}
+        </label>
+      )}
+      <div className="relative">
+        <input
+          type="text"
+          inputMode="decimal"
+          dir="ltr"
+          value={display}
+          readOnly={readOnly}
+          placeholder={placeholder}
+          onChange={(e) => {
+            const cleaned = e.target.value.replace(/[^\d.-]/g, '');
+            const n = Number(cleaned);
+            onChange(Number.isNaN(n) ? 0 : n);
+          }}
+          className={`w-full text-right pl-12 pr-3 py-2 border rounded-lg text-sm outline-none transition
+            border-gray-300 dark:border-slate-600
+            focus:ring-2 focus:ring-[#56B894] focus:border-[#56B894]
+            ${readOnly
+              ? 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 cursor-not-allowed'
+              : 'bg-white dark:bg-slate-900 text-gray-900 dark:text-slate-100'}`}
+        />
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-gray-400 dark:text-slate-500">ر.س</span>
+      </div>
+    </div>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   ReadOnlyBlock — قسم رمادي للقراءة فقط (لاستخراج بيانات النماذج السابقة)
+   ────────────────────────────────────────────────────────────────── */
+
+export const ReadOnlyBlock: React.FC<{
+  title: string; icon?: React.ElementType; children: React.ReactNode; subtitle?: string;
+}> = ({ title, icon: Icon = FileText, children, subtitle }) => (
+  <div className="rounded-lg border border-dashed border-gray-300 dark:border-slate-600 bg-gray-50 dark:bg-slate-800/60 overflow-hidden">
+    <div className="px-3 py-2 bg-gray-100 dark:bg-slate-700/60 border-b border-gray-200 dark:border-slate-700 flex items-center gap-2">
+      <Icon className="w-4 h-4 text-gray-500 dark:text-slate-400" />
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-bold text-gray-600 dark:text-slate-300">{title}</p>
+        {subtitle && <p className="text-[10px] text-gray-500 dark:text-slate-400">{subtitle}</p>}
+      </div>
+      <Pill tone="gray">للاطلاع فقط</Pill>
+    </div>
+    <div className="p-3 text-xs text-gray-700 dark:text-slate-300 space-y-2">{children}</div>
+  </div>
+);
+
+/* ──────────────────────────────────────────────────────────────────
+   ProjectIdField — حقل خاص لرقم المشروع. عند Genesis قابل للكتابة،
+   وفيما تبعه يصبح مقفلاً تماماً (موروث من المشروع).
+   ────────────────────────────────────────────────────────────────── */
+
+export const ProjectIdField: React.FC<{
+  value: string; onChange?: (v: string) => void; locked?: boolean; required?: boolean; helper?: string;
+}> = ({ value, onChange, locked = true, required, helper = 'بصيغة TRM-2026-001' }) => (
+  <div className="flex flex-col gap-1">
+    <label className="text-xs font-semibold text-gray-700 dark:text-slate-300 flex items-center gap-1">
+      رقم المشروع {required && <span className="text-red-500">*</span>}
+      {locked && <Lock className="w-3 h-3 text-gray-400" />}
+    </label>
+    <input
+      type="text" dir="ltr" value={value || ''} readOnly={locked}
+      onChange={onChange ? (e) => onChange(e.target.value.toUpperCase()) : undefined}
+      placeholder="TRM-2026-001"
+      className={`px-3 py-2 border rounded-lg text-sm outline-none transition font-mono
+        border-gray-300 dark:border-slate-600
+        focus:ring-2 focus:ring-[#56B894] focus:border-[#56B894]
+        ${locked ? 'bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-slate-300 cursor-not-allowed' : 'bg-white dark:bg-slate-900'}`}
+    />
+    {!locked && helper && <span className="text-[10px] text-gray-400 dark:text-slate-500">{helper}</span>}
   </div>
 );
 
@@ -265,15 +366,16 @@ export const NumberCounter = ({ label, value, onChange, min = 0, className = '' 
    ────────────────────────────────────────────────────────────────── */
 
 export const FileUploader = ({
-  files, onAdd, onRemove, label = 'إرفاق ملفات', accept,
+  files, onAdd, onRemove, label = 'إرفاق ملفات', accept, className = '',
 }: {
   files: { name: string; url?: string; size?: number; uploadedAt?: string }[];
   onAdd: (fileList: FileList) => void;
   onRemove: (idx: number) => void;
   label?: string;
   accept?: string;
+  className?: string;
 }) => (
-  <div className="space-y-3">
+  <div className={`space-y-3 ${className}`}>
     <div className="border-2 border-dashed border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/20 rounded-xl p-5 text-center">
       <UploadCloud className="w-9 h-9 text-purple-500 mx-auto mb-2" />
       <p className="text-sm font-bold text-purple-900 dark:text-purple-200 mb-2">{label}</p>
@@ -391,6 +493,95 @@ export const ProgressBar = ({ value, total = 100, label }: { value: number; tota
       <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-1.5 overflow-hidden">
         <div className="h-full rounded-full bg-gradient-to-l from-[#4A1F66] to-[#56B894] transition-all duration-1000" style={{ width: `${pct}%` }} />
       </div>
+    </div>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   Roadmap Timeline — عرض مسار النماذج للمشروع
+   ────────────────────────────────────────────────────────────────── */
+
+export type RoadmapStatus = 'completed' | 'current' | 'upcoming' | 'skipped' | 'pending';
+
+export const RoadmapTimeline: React.FC<{
+  steps: { code: string; label: string; status: RoadmapStatus; onOpen?: () => void; tone?: string }[];
+}> = ({ steps }) => (
+  <div className="overflow-x-auto pb-2" dir="rtl">
+    <ol className="flex items-stretch min-w-max gap-1">
+      {steps.map((s, idx) => {
+        const isLast = idx === steps.length - 1;
+        const tone =
+          s.status === 'completed' ? 'bg-green-500 text-white border-green-500'
+          : s.status === 'current' ? 'bg-amber-500 text-white border-amber-500 ring-4 ring-amber-200 dark:ring-amber-900/40 animate-pulse'
+          : s.status === 'pending' ? 'bg-blue-500 text-white border-blue-500'
+          : s.status === 'skipped' ? 'bg-gray-300 text-gray-600 border-gray-300'
+          : 'bg-white dark:bg-slate-800 text-gray-400 border-gray-300 dark:border-slate-600';
+        return (
+          <li key={s.code} className="flex flex-col items-center min-w-[88px] relative">
+            <button
+              onClick={s.onOpen}
+              disabled={!s.onOpen}
+              className={`w-9 h-9 rounded-full border-2 flex items-center justify-center text-[10px] font-bold transition shadow-sm ${tone} ${s.onOpen ? 'cursor-pointer hover:scale-110' : 'cursor-default'}`}>
+              {s.status === 'completed' ? <Check className="w-4 h-4" /> : s.code.replace('F-', '')}
+            </button>
+            <p className={`mt-2 text-[10px] text-center max-w-[88px] leading-tight font-bold
+              ${s.status === 'current' ? 'text-amber-700 dark:text-amber-300'
+                : s.status === 'completed' ? 'text-green-700 dark:text-green-300'
+                : 'text-gray-400 dark:text-slate-500'}`}>
+              {s.label}
+            </p>
+            <p className="text-[9px] font-mono text-gray-400 dark:text-slate-500">{s.code}</p>
+            {!isLast && (
+              <div className={`hidden sm:block absolute top-4 -left-1 w-2 h-0.5
+                ${s.status === 'completed' ? 'bg-green-500' : 'bg-gray-300 dark:bg-slate-600'}`} />
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  </div>
+);
+
+/* ──────────────────────────────────────────────────────────────────
+   File Gallery — معرض ملفات قابل للتمرير (read-only preview).
+   ────────────────────────────────────────────────────────────────── */
+
+export const FileGallery: React.FC<{
+  files: { name: string; url?: string; uploadedAt?: string; formCode?: string }[];
+  emptyHint?: string;
+}> = ({ files, emptyHint = 'لا توجد مرفقات.' }) => {
+  if (files.length === 0) {
+    return (
+      <div className="text-center py-8 text-gray-400 dark:text-slate-500">
+        <FileText className="w-10 h-10 mx-auto mb-2 opacity-40" />
+        <p className="text-sm font-semibold">{emptyHint}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+      {files.map((f, i) => {
+        const isImage = /\.(png|jpe?g|gif|webp)$/i.test(f.name);
+        return (
+          <a key={i} href={f.url || '#'} target={f.url ? '_blank' : undefined} rel="noopener noreferrer"
+            className="group block rounded-lg overflow-hidden border border-gray-200 dark:border-slate-700 hover:shadow-md transition bg-white dark:bg-slate-800">
+            <div className="aspect-square bg-gray-100 dark:bg-slate-900 flex items-center justify-center overflow-hidden">
+              {isImage && f.url ? (
+                <img src={f.url} alt={f.name} className="w-full h-full object-cover group-hover:scale-105 transition" />
+              ) : (
+                <FileText className="w-10 h-10 text-purple-300" />
+              )}
+            </div>
+            <div className="p-2">
+              <p className="text-[11px] font-bold text-gray-700 dark:text-slate-200 truncate">{f.name}</p>
+              <div className="flex items-center justify-between mt-1">
+                <p className="text-[9px] text-gray-400 dark:text-slate-500">{f.uploadedAt ? new Date(f.uploadedAt).toLocaleDateString('ar-SA') : ''}</p>
+                {f.formCode && <Pill tone="purple">{f.formCode}</Pill>}
+              </div>
+            </div>
+          </a>
+        );
+      })}
     </div>
   );
 };

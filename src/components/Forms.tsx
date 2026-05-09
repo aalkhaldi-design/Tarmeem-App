@@ -361,7 +361,7 @@ export const NewFormModal: React.FC<{
   onClose: () => void;
 }> = ({ user, api, users, context, creators, preselect, onClose }) => {
   const allowed = useMemo(
-    () => FORMS.filter(f => formCanBeOriginatedBy(f, user.role as RoleKey) || user.role === 'ADMIN'),
+    () => FORMS.filter(f => formCanBeOriginatedBy(f, user.role as RoleKey) || !!user.isAdmin),
     [user.role],
   );
   const [code, setCode] = useState<FormCode | null>(preselect && allowed.some(f => f.code === preselect) ? preselect : null);

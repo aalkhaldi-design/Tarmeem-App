@@ -23,9 +23,9 @@ export const THEME = {
    ────────────────────────────────────────────────────────────────── */
 
 export type DepartmentKey =
-  | 'EXEC'        // الإدارة التنفيذية والأمانة العامة
+  | 'EXEC'        // الإدارة التنفيذية
   | 'RESEARCH'    // البحث الاجتماعي
-  | 'PROJECTS'    // إدارة المشاريع والترميم
+  | 'PROJECTS'    // إدارة المشاريع
   | 'FINANCE'     // المالية
   | 'SUPPORT'     // الخدمات المساندة
   | 'VOLUNTEER'   // التطوع
@@ -42,9 +42,9 @@ export interface DepartmentDef {
 }
 
 export const DEPARTMENTS: DepartmentDef[] = [
-  { key: 'EXEC',        name: 'الإدارة التنفيذية والأمانة العامة', shortName: 'تنفيذية', nameEn: 'Executive Management & Secretariate', color: '#4A1F66', accent: '#56B894', description: 'القيادة التنفيذية، الأمانة العامة، والاعتمادات الكبرى.' },
+  { key: 'EXEC',        name: 'الإدارة التنفيذية', shortName: 'تنفيذية', nameEn: 'Executive Management & Secretariate', color: '#4A1F66', accent: '#56B894', description: 'القيادة التنفيذية، الأمانة العامة، والاعتمادات الكبرى.' },
   { key: 'RESEARCH',    name: 'البحث الاجتماعي',                   shortName: 'البحث',    nameEn: 'Social Research',                    color: '#0EA5E9', accent: '#0284C7', description: 'دراسة الحالات وتحديد الاستحقاق.' },
-  { key: 'PROJECTS',    name: 'إدارة المشاريع والترميم',            shortName: 'المشاريع', nameEn: 'Projects & Renovation',              color: '#7C3AED', accent: '#8B5CF6', description: 'التشخيص الهندسي، الإشراف والتنفيذ، ولجنة إتقان.' },
+  { key: 'PROJECTS',    name: 'إدارة المشاريع',            shortName: 'المشاريع', nameEn: 'Projects & Renovation',              color: '#7C3AED', accent: '#8B5CF6', description: 'التشخيص الهندسي، الإشراف والتنفيذ، ولجنة إتقان.' },
   { key: 'FINANCE',     name: 'الشؤون المالية',                    shortName: 'المالية',  nameEn: 'Finance',                            color: '#16A34A', accent: '#22C55E', description: 'الميزانية والصرف والمحاسبة.' },
   { key: 'SUPPORT',     name: 'الخدمات المساندة',                  shortName: 'الخدمات',  nameEn: 'Support Services',                   color: '#F97316', accent: '#FB923C', description: 'سلسلة التوريد والمشتريات والمستودعات.' },
   { key: 'VOLUNTEER',   name: 'التطوع - مركز سمايا',                shortName: 'التطوع',   nameEn: 'Volunteering / Samaya',              color: '#EA580C', accent: '#FB923C', description: 'إدارة التطوع وتنسيق الأعمال الإضافية.' },

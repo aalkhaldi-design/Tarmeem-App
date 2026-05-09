@@ -8,7 +8,7 @@ import {
   X, Send, Plus, Building2, Users as UsersIcon, Home as HomeIcon, Activity,
   ClipboardList, Calculator, Trophy, ShieldCheck, Camera, Truck, ShoppingCart,
   DollarSign, Briefcase, FileSignature, AlertTriangle, CheckCircle2,
-  Calendar,
+  Calendar, Trash2, ChevronUp, ChevronDown, Image as ImageIcon, Sofa, PenTool,
 } from 'lucide-react';
 
 import {
@@ -418,34 +418,134 @@ export const F03Renderer: FormRenderer = ({ rec, user, api, context, onClose }) 
 /* ──────────────────────────────────────────────────────────────────
    F-08 — كراسة تشخيص المبنى
    سلسلة: مهندس التشخيص ➡️ رئيس التشخيص ➡️ مدير المشاريع
+   البنية: 4 خطوات — البيانات الأساسية، حصر الأعمال، الأثاث والأجهزة، الاعتماد
    ────────────────────────────────────────────────────────────────── */
 
-export const F08Creator: FormCreator = ({ user, api, context, onClose }) => {
-  const myAssignments = api.forms.filter(f => f.code === 'F-08' && f.assigneeId === user.id);
-  const projects = context.projects.filter((p: ProjectRecord) => p.diagnosisEngineerId === user.id);
+interface F08WorkSpace {
+  id: number;
+  name: string;
+  isExpanded: boolean;
+  images: { name: string; url?: string }[];
+  civil: {
+    concrete: string; roof: string; insulation: string; shinko: string; ceramic: string;
+    paint: string; plaster: string; wood: string; aluminum: string; steel: string; notes: string;
+  };
+  electrical: {
+    panel: number; ceilingLight: number; concreteLight: number; spotlight: number;
+    sockets: number; doubleSwitch: number; acSwitch: number; heaterSocket: number;
+  };
+  plumbing: {
+    toiletFr: number; toiletAr: number; heater: number; bidet: number;
+    showerMixer: number; sink: number; sinkMixer: number; exhaust: number;
+  };
+}
 
+const newF08WorkSpace = (): F08WorkSpace => ({
+  id: Date.now() + Math.floor(Math.random() * 1000),
+  name: '', isExpanded: true, images: [],
+  civil: { concrete: '', roof: '', insulation: '', shinko: '', ceramic: '', paint: '', plaster: '', wood: '', aluminum: '', steel: '', notes: '' },
+  electrical: { panel: 0, ceilingLight: 0, concreteLight: 0, spotlight: 0, sockets: 0, doubleSwitch: 0, acSwitch: 0, heaterSocket: 0 },
+  plumbing: { toiletFr: 0, toiletAr: 0, heater: 0, bidet: 0, showerMixer: 0, sink: 0, sinkMixer: 0, exhaust: 0 },
+});
+
+export const F08Creator: FormCreator = ({ user, api, context, onClose }) => {
+  const projects = context.projects.filter((p: ProjectRecord) => p.diagnosisEngineerId === user.id);
   const [projectRefId, setProjectRefId] = useState<string>(projects[0]?.id || '');
-  const [data, setData] = useState({
-    visitDate: '', team: user.fullName,
-    area: '', age: '', summary: '',
-    safetyHazard: false,
-    civilNotes: '', elecNotes: '', plumbingNotes: '',
-    finalRecommendation: '',
-  });
+  const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
 
-  void myAssignments;
+  const linkedProject = context.projects.find((p: ProjectRecord) => p.id === projectRefId);
+
+  const [data, setData] = useState<any>({
+    /* top-level — تستهلكها محرّك سير العمل (App.tsx) */
+    safetyHazard: false,
+    visitDate: new Date().toISOString().split('T')[0],
+    team: user.fullName,
+    area: '', age: '', summary: '',
+    finalRecommendation: '',
+
+    /* أقسام مفصّلة */
+    general: {
+      caseRef: '', projectNumber: '', familyName: '', contactNumber: '',
+      cityNeighborhood: '', partnerEntity: '', partnerRep: '', repContact: '',
+    },
+    visit: { type: 'منزل', diagnosis: 'المبنى قابل للترميم' },
+    works: [] as F08WorkSpace[],
+    furnitureInfo: { type: 'منزل', condition: 'ترميم', males: 0, females: 0 },
+    furnitureItems: {
+      bed15: 0, mattress15: 0, bed1: 0, mattress1: 0, bedDouble: 0, mattressDouble: 0,
+      carpet: 0, sofaSeats: 0, sofaMeters: 0, floorSeating: 0,
+      nightstand: 0, dresser: 0, wardrobe2: 0, wardrobe3: 0, wardrobe4: 0,
+    },
+    appliances: {
+      acSplit1: 0, acSplit15: 0, acWindow15: 0,
+      washer: 0, fridge: 0, stove: 0, vacuum: 0, waterCooler: 0,
+    },
+    diagnosisNotes: '',
+    pledge: false,
+  });
+
+  /* جلب البيانات تلقائياً من سجل المشروع المرتبط (يقابل F-02 في الكراسة) */
+  useEffect(() => {
+    if (!linkedProject) return;
+    setData((d: any) => ({
+      ...d,
+      general: {
+        ...d.general,
+        familyName: linkedProject.beneficiaryName || d.general.familyName,
+        caseRef: linkedProject.caseRef || d.general.caseRef,
+        projectNumber: linkedProject.projectId || d.general.projectNumber,
+        cityNeighborhood: [linkedProject.city, linkedProject.neighborhood].filter(Boolean).join(' — ') || d.general.cityNeighborhood,
+        partnerEntity: linkedProject.partnerEntity || d.general.partnerEntity,
+      },
+    }));
+  }, [linkedProject?.id]);
+
+  const updateNested = (section: string, field: string, value: any) =>
+    setData((d: any) => ({ ...d, [section]: { ...d[section], [field]: value } }));
+
+  const addWorkSpace = () =>
+    setData((d: any) => ({ ...d, works: [...d.works, newF08WorkSpace()] }));
+
+  const toggleExpand = (id: number) =>
+    setData((d: any) => ({ ...d, works: d.works.map((w: F08WorkSpace) => w.id === id ? { ...w, isExpanded: !w.isExpanded } : w) }));
+
+  const removeWorkSpace = (id: number) =>
+    setData((d: any) => ({ ...d, works: d.works.filter((w: F08WorkSpace) => w.id !== id) }));
+
+  const updateWorkSpace = (id: number, category: keyof F08WorkSpace | null, field: string, value: any) =>
+    setData((d: any) => ({
+      ...d,
+      works: d.works.map((w: F08WorkSpace) => {
+        if (w.id !== id) return w;
+        if (category) return { ...w, [category]: { ...(w as any)[category], [field]: value } };
+        return { ...w, [field]: value };
+      }),
+    }));
+
+  const handleSpaceImageNames = (id: number, fileList: FileList) => {
+    const names = Array.from(fileList).map(f => ({ name: f.name }));
+    setData((d: any) => ({
+      ...d,
+      works: d.works.map((w: F08WorkSpace) => w.id === id ? { ...w, images: [...w.images, ...names] } : w),
+    }));
+  };
+
+  const removeSpaceImage = (id: number, idx: number) =>
+    setData((d: any) => ({
+      ...d,
+      works: d.works.map((w: F08WorkSpace) => w.id === id ? { ...w, images: w.images.filter((_, i) => i !== idx) } : w),
+    }));
 
   const submit = async () => {
-    const project = context.projects.find((p: ProjectRecord) => p.id === projectRefId);
-    if (!project) return;
+    if (!linkedProject || !data.pledge) return;
     setBusy(true);
     try {
       await api.createForm({
         code: 'F-08', user,
-        projectId: project.projectId,
-        projectRefId: project.id,
-        beneficiaryName: project.beneficiaryName,
+        projectId: linkedProject.projectId,
+        projectRefId: linkedProject.id,
+        beneficiaryName: linkedProject.beneficiaryName,
         notes: data.summary,
         data,
       });
@@ -453,50 +553,360 @@ export const F08Creator: FormCreator = ({ user, api, context, onClose }) => {
     } finally { setBusy(false); }
   };
 
+  const steps = [
+    { id: 0, title: 'البيانات الأساسية', icon: HomeIcon },
+    { id: 1, title: 'حصر الأعمال', icon: ClipboardList },
+    { id: 2, title: 'الأثاث والأجهزة', icon: Sofa },
+    { id: 3, title: 'الاعتماد والرفع', icon: FileSignature },
+  ];
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" dir="rtl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4" dir="rtl">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[95vh] overflow-hidden flex flex-col">
+      <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[95vh] overflow-hidden flex flex-col">
         <div className="bg-gradient-to-l from-[#4A1F66] to-[#6B3D87] px-5 py-4 flex items-center justify-between text-white">
-          <h2 className="font-bold">F-08 · كراسة تشخيص المبنى</h2>
+          <div className="flex items-center gap-3">
+            <FileSignature className="w-5 h-5" />
+            <h2 className="font-bold">F-08 · كراسة تشخيص المبنى</h2>
+          </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/15"><X className="w-5 h-5" /></button>
         </div>
-        <div className="overflow-y-auto p-5 space-y-3">
-          <Card title="المشروع" icon={Building2}>
-            <Select label="اختر المشروع المسند إليك"
-              options={projects.map((p: ProjectRecord) => ({ value: p.id, label: `${p.projectId} — ${p.beneficiaryName}` }))}
-              value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
-          </Card>
-          <Card title="بيانات الزيارة" icon={Calendar}>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <Input type="date" label="تاريخ الزيارة" value={data.visitDate} onChange={e => setData(d => ({ ...d, visitDate: e.target.value }))} />
-              <Input label="فريق التشخيص" value={data.team} onChange={e => setData(d => ({ ...d, team: e.target.value }))} />
-              <Input label="المساحة التقريبية (م²)" type="number" value={data.area} onChange={e => setData(d => ({ ...d, area: e.target.value }))} />
-              <Input label="العمر التقديري للبناء" value={data.age} onChange={e => setData(d => ({ ...d, age: e.target.value }))} />
-            </div>
-            <TextArea className="mt-3" label="ملخص تقييم المبنى" rows={3} value={data.summary} onChange={e => setData(d => ({ ...d, summary: e.target.value }))} />
-          </Card>
-          <Card title="ملاحظات حسب التخصص" icon={ClipboardList}>
-            <TextArea label="الأعمال المدنية" rows={2} value={data.civilNotes} onChange={e => setData(d => ({ ...d, civilNotes: e.target.value }))} />
-            <TextArea className="mt-2" label="الأعمال الكهربائية" rows={2} value={data.elecNotes} onChange={e => setData(d => ({ ...d, elecNotes: e.target.value }))} />
-            <TextArea className="mt-2" label="أعمال السباكة" rows={2} value={data.plumbingNotes} onChange={e => setData(d => ({ ...d, plumbingNotes: e.target.value }))} />
-          </Card>
-          <Card title="السلامة والتوصية" icon={AlertTriangle}>
-            <label className={`flex items-start gap-2 cursor-pointer p-3 rounded-lg border-2 transition ${data.safetyHazard ? 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-700' : 'border-gray-200 dark:border-slate-700'}`}>
-              <input type="checkbox" checked={data.safetyHazard} onChange={e => setData(d => ({ ...d, safetyHazard: e.target.checked }))} className="mt-1" />
-              <span className="text-sm">
-                <strong className="text-red-700 dark:text-red-300">المنزل غير صالح للسكن أثناء الترميم</strong>
-                <p className="text-xs text-gray-500 dark:text-slate-400 mt-1">عند التفعيل سيتم فتح F-18 (إخلاء) و F-22 (سكن بديل) تلقائياً.</p>
-              </span>
-            </label>
-            <TextArea className="mt-3" label="التوصية النهائية" rows={2} value={data.finalRecommendation} onChange={e => setData(d => ({ ...d, finalRecommendation: e.target.value }))} />
-          </Card>
+
+        {/* Stepper */}
+        <div className="px-5 py-3 border-b dark:border-slate-700 flex gap-2 overflow-x-auto hide-scrollbar">
+          {steps.map((s, i) => {
+            const Icon = s.icon;
+            return (
+              <button key={s.id} onClick={() => setStep(i)}
+                className={`flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full whitespace-nowrap transition
+                  ${i === step
+                    ? 'bg-[#4A1F66] text-white shadow-sm'
+                    : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-600'}`}>
+                <Icon className="w-3.5 h-3.5" />
+                {i + 1}. {s.title}
+              </button>
+            );
+          })}
         </div>
-        <div className="border-t dark:border-slate-700 p-3 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 text-sm font-bold bg-gray-100 dark:bg-slate-700 rounded-lg">إلغاء</button>
-          <button onClick={submit} disabled={busy || !projectRefId} className="px-5 py-2 text-sm font-bold bg-[#4A1F66] text-white rounded-lg hover:bg-[#3A1652] transition disabled:opacity-50 flex items-center gap-1.5">
-            <Send className="w-4 h-4" /> رفع لرئيس قسم التشخيص
+
+        <div className="overflow-y-auto p-5 flex-1 space-y-4">
+
+          {/* Step 0 — البيانات الأساسية */}
+          {step === 0 && (
+            <>
+              <Card title="المشروع المُسنَد" icon={Building2}>
+                {projects.length === 0 ? (
+                  <div className="text-xs text-gray-500 dark:text-slate-400 bg-gray-50 dark:bg-slate-800 p-3 rounded-lg">
+                    لا توجد مشاريع مُسنَدة إليك حالياً كمهندس تشخيص.
+                  </div>
+                ) : (
+                  <Select label="اختر المشروع المسند إليك" required
+                    options={projects.map((p: ProjectRecord) => ({ value: p.id, label: `${p.projectId} — ${p.beneficiaryName}` }))}
+                    value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
+                )}
+              </Card>
+
+              <Card title="بيانات الأسرة والمنزل (تُجلب من F-02)" icon={UsersIcon}>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <Input label="اسم الأسرة" value={data.general.familyName} onChange={e => updateNested('general', 'familyName', e.target.value)} />
+                  <Input label="رقم التواصل" value={data.general.contactNumber} onChange={e => updateNested('general', 'contactNumber', e.target.value)} />
+                  <Input label="رقم الحالة المرجعي" value={data.general.caseRef} onChange={e => updateNested('general', 'caseRef', e.target.value)} />
+                  <Input label="رقم المشروع" value={data.general.projectNumber} onChange={e => updateNested('general', 'projectNumber', e.target.value)} readOnly />
+                  <Input label="المدينة – الحي" value={data.general.cityNeighborhood} onChange={e => updateNested('general', 'cityNeighborhood', e.target.value)} />
+                  <Input label="الجهة الشريكة" value={data.general.partnerEntity} onChange={e => updateNested('general', 'partnerEntity', e.target.value)} />
+                  <Input label="ممثل الجهة الشريكة" value={data.general.partnerRep} onChange={e => updateNested('general', 'partnerRep', e.target.value)} />
+                  <Input label="رقم تواصل الممثل" value={data.general.repContact} onChange={e => updateNested('general', 'repContact', e.target.value)} />
+                </div>
+              </Card>
+
+              <Card title="زيارة التشخيص" icon={Calendar} accent="teal">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <Input type="date" label="تاريخ الزيارة" value={data.visitDate} onChange={e => setData((d: any) => ({ ...d, visitDate: e.target.value }))} />
+                  <Select label="نوع المبنى" options={['منزل', 'شقة', 'فيلا', 'شعبي']} value={data.visit.type} onChange={e => updateNested('visit', 'type', e.target.value)} />
+                  <Input label="المساحة التقريبية (م²)" type="number" value={data.area} onChange={e => setData((d: any) => ({ ...d, area: e.target.value }))} />
+                  <Input label="العمر التقديري للبناء" value={data.age} onChange={e => setData((d: any) => ({ ...d, age: e.target.value }))} />
+                  <Input className="md:col-span-2 lg:col-span-4" label="فريق التشخيص" value={data.team} onChange={e => setData((d: any) => ({ ...d, team: e.target.value }))} />
+                </div>
+
+                <div className="mt-4 bg-gray-50 dark:bg-slate-800 p-3 rounded-lg border border-gray-200 dark:border-slate-700">
+                  <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 mb-2">النتيجة المبدئية للزيارة</label>
+                  <div className="flex flex-wrap gap-2">
+                    {['المبنى قابل للترميم', 'المبنى لا يحتاج للترميم', 'المبنى آيل للسقوط', 'يحول صيانة'].map(opt => (
+                      <label key={opt} className={`flex items-center gap-1.5 cursor-pointer px-3 py-1.5 rounded-md border text-xs font-medium transition
+                        ${data.visit.diagnosis === opt
+                          ? 'bg-[#56B894]/10 border-[#56B894] text-[#3F9B7A] dark:bg-[#56B894]/20 dark:text-[#7AC8AD]'
+                          : 'bg-white dark:bg-slate-900 border-gray-200 dark:border-slate-600 text-gray-600 dark:text-slate-300 hover:border-[#56B894]'}`}>
+                        <input type="radio" value={opt} checked={data.visit.diagnosis === opt}
+                          onChange={() => updateNested('visit', 'diagnosis', opt)}
+                          className="text-[#56B894] focus:ring-[#56B894] w-3 h-3" />
+                        {opt}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Safety Hazard — يحرّك F-18 و F-22 */}
+                <div className={`mt-4 p-4 rounded-xl flex items-start gap-3 transition border-2
+                  ${data.safetyHazard
+                    ? 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-700'
+                    : 'bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-700'}`}>
+                  <input
+                    type="checkbox"
+                    id="safetyHazard"
+                    checked={data.safetyHazard}
+                    onChange={e => setData((d: any) => ({ ...d, safetyHazard: e.target.checked }))}
+                    className="mt-1 w-5 h-5 text-red-600 rounded focus:ring-red-500 cursor-pointer" />
+                  <label htmlFor="safetyHazard" className="cursor-pointer select-none">
+                    <div className="flex items-center gap-2 text-sm font-bold text-red-700 dark:text-red-300">
+                      <AlertTriangle className="w-4 h-4" />
+                      تنبيه سلامة: المنزل غير صالح للسكن أثناء الترميم
+                    </div>
+                    <p className="text-xs text-gray-600 dark:text-slate-400 mt-1">
+                      تحديد هذا الخيار سيقوم النظام تلقائياً بإنشاء (F-18 طلب إخلاء) و (F-22 إسكان بديل) وتحويلها في سلسلة الاعتمادات.
+                    </p>
+                  </label>
+                </div>
+
+                <TextArea className="mt-4" label="ملخص تقييم المبنى (أسباب قابلية أو عدم قابلية الترميم)" rows={3}
+                  value={data.summary} onChange={e => setData((d: any) => ({ ...d, summary: e.target.value }))} />
+              </Card>
+            </>
+          )}
+
+          {/* Step 1 — حصر الأعمال */}
+          {step === 1 && (
+            <Card title="حصر كميات الأعمال (البنود المبدئية)" icon={ClipboardList}>
+              <div className="space-y-4">
+                {data.works.length === 0 ? (
+                  <div className="bg-gray-50 dark:bg-slate-800 p-8 rounded-xl text-center border-2 border-dashed border-gray-200 dark:border-slate-700">
+                    <ClipboardList className="w-10 h-10 text-gray-400 dark:text-slate-500 mx-auto mb-3" />
+                    <h3 className="text-sm font-bold text-gray-600 dark:text-slate-300 mb-1">لا توجد مساحات مضافة</h3>
+                    <p className="text-xs text-gray-500 dark:text-slate-400 mb-3">أضف غرفة، صالة، مطبخ، أو أي مساحة لتفصيل الأعمال.</p>
+                    <button onClick={addWorkSpace} className="inline-flex items-center gap-2 bg-[#56B894] hover:bg-[#3F9B7A] text-white px-4 py-2 rounded-lg text-sm font-bold transition">
+                      <Plus className="w-4 h-4" /> إضافة مساحة
+                    </button>
+                  </div>
+                ) : (
+                  data.works.map((space: F08WorkSpace, index: number) => (
+                    <div key={space.id} className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-700 overflow-hidden">
+                      <div className="bg-gray-50 dark:bg-slate-900 border-b border-gray-100 dark:border-slate-700 p-2.5 flex items-center justify-between gap-3">
+                        <div className="flex-1 flex items-center gap-2 min-w-0">
+                          <button onClick={() => toggleExpand(space.id)} className="p-1.5 text-gray-500 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-md">
+                            {space.isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          </button>
+                          <span className="font-bold text-gray-500 dark:text-slate-300 text-sm shrink-0">{index + 1}.</span>
+                          <input
+                            type="text"
+                            placeholder="اسم المساحة (مثال: غرفة النوم 1)"
+                            value={space.name}
+                            onChange={e => updateWorkSpace(space.id, null, 'name', e.target.value)}
+                            className="w-full text-sm font-bold bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-600 text-gray-900 dark:text-slate-100 rounded px-2.5 py-1.5 focus:ring-1 focus:ring-[#4A1F66] outline-none" />
+                        </div>
+                        <button onClick={() => removeWorkSpace(space.id)} className="text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 p-1.5 rounded">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      {space.isExpanded && (
+                        <div className="p-4 space-y-5">
+                          {/* صور الموقع */}
+                          <div className="bg-purple-50/50 dark:bg-purple-900/20 p-3 rounded-lg border border-purple-100 dark:border-purple-800">
+                            <div className="flex justify-between items-center mb-2 gap-2">
+                              <label className="text-xs font-bold text-[#4A1F66] dark:text-purple-200 flex items-center gap-1.5">
+                                <ImageIcon className="w-4 h-4" /> صور الموقع / المساحة (لا محدودة)
+                              </label>
+                              <label className="cursor-pointer bg-white dark:bg-slate-800 border border-purple-200 dark:border-purple-700 text-[#4A1F66] dark:text-purple-200 hover:bg-purple-100 dark:hover:bg-purple-900/40 px-3 py-1.5 rounded-md text-xs font-bold transition flex items-center gap-1">
+                                <Plus className="w-3 h-3" /> إرفاق صور
+                                <input type="file" multiple accept="image/*" className="hidden"
+                                  onChange={e => { if (e.target.files) handleSpaceImageNames(space.id, e.target.files); e.target.value = ''; }} />
+                              </label>
+                            </div>
+                            {space.images.length > 0 ? (
+                              <div className="flex flex-wrap gap-2 mt-2">
+                                {space.images.map((img, i) => (
+                                  <div key={i} className="relative group">
+                                    <div className="w-20 h-12 px-2 flex items-center justify-center text-[10px] font-bold rounded border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-600 dark:text-slate-300 truncate">
+                                      <ImageIcon className="w-3 h-3 ml-1 shrink-0" />
+                                      <span className="truncate">{img.name}</span>
+                                    </div>
+                                    <button onClick={() => removeSpaceImage(space.id, i)}
+                                      className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition">
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-[11px] text-gray-500 dark:text-slate-400 mt-1">يمكنك إرفاق أي عدد من الصور للمساحة لتوثيق الحالة.</p>
+                            )}
+                          </div>
+
+                          {/* الأعمال المدنية */}
+                          <div>
+                            <h4 className="text-xs font-bold text-[#3F9B7A] dark:text-[#7AC8AD] mb-2 border-b border-gray-100 dark:border-slate-700 pb-1">الأعمال المدنية والتشطيبات</h4>
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5">
+                              <Input label="المعالجة الخرسانية" value={space.civil.concrete} onChange={e => updateWorkSpace(space.id, 'civil', 'concrete', e.target.value)} />
+                              <Input label="أعمال الأسقف" value={space.civil.roof} onChange={e => updateWorkSpace(space.id, 'civil', 'roof', e.target.value)} />
+                              <Input label="أعمال العزل" value={space.civil.insulation} onChange={e => updateWorkSpace(space.id, 'civil', 'insulation', e.target.value)} />
+                              <Input label="أعمال الشينكو" value={space.civil.shinko} onChange={e => updateWorkSpace(space.id, 'civil', 'shinko', e.target.value)} />
+                              <Input label="سيراميك (أرض/جدار)" value={space.civil.ceramic} onChange={e => updateWorkSpace(space.id, 'civil', 'ceramic', e.target.value)} />
+                              <Input label="دهانات (داخلي/خارجي)" value={space.civil.paint} onChange={e => updateWorkSpace(space.id, 'civil', 'paint', e.target.value)} />
+                              <Input label="أعمال المساح" value={space.civil.plaster} onChange={e => updateWorkSpace(space.id, 'civil', 'plaster', e.target.value)} />
+                              <Input label="نجارة (أبواب)" value={space.civil.wood} onChange={e => updateWorkSpace(space.id, 'civil', 'wood', e.target.value)} />
+                              <Input label="ألمنيوم (نوافذ)" value={space.civil.aluminum} onChange={e => updateWorkSpace(space.id, 'civil', 'aluminum', e.target.value)} />
+                              <Input label="أعمال الحدادة" value={space.civil.steel} onChange={e => updateWorkSpace(space.id, 'civil', 'steel', e.target.value)} />
+                            </div>
+                            <TextArea className="mt-2.5" label="ملاحظات" rows={1} value={space.civil.notes} onChange={e => updateWorkSpace(space.id, 'civil', 'notes', e.target.value)} />
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <h4 className="text-xs font-bold text-[#3F9B7A] dark:text-[#7AC8AD] mb-2 border-b border-gray-100 dark:border-slate-700 pb-1">أعمال الكهرباء</h4>
+                              <div className="grid grid-cols-2 gap-2">
+                                <NumberCounter label="لوح/بريكر" value={space.electrical.panel} onChange={v => updateWorkSpace(space.id, 'electrical', 'panel', v)} />
+                                <NumberCounter label="مصباح مستعار" value={space.electrical.ceilingLight} onChange={v => updateWorkSpace(space.id, 'electrical', 'ceilingLight', v)} />
+                                <NumberCounter label="مصباح خرساني" value={space.electrical.concreteLight} onChange={v => updateWorkSpace(space.id, 'electrical', 'concreteLight', v)} />
+                                <NumberCounter label="سبوت لايت" value={space.electrical.spotlight} onChange={v => updateWorkSpace(space.id, 'electrical', 'spotlight', v)} />
+                                <NumberCounter label="أفياش عادية" value={space.electrical.sockets} onChange={v => updateWorkSpace(space.id, 'electrical', 'sockets', v)} />
+                                <NumberCounter label="مفتاح مزدوج" value={space.electrical.doubleSwitch} onChange={v => updateWorkSpace(space.id, 'electrical', 'doubleSwitch', v)} />
+                                <NumberCounter label="مفتاح مكيف" value={space.electrical.acSwitch} onChange={v => updateWorkSpace(space.id, 'electrical', 'acSwitch', v)} />
+                                <NumberCounter label="فيش سخان" value={space.electrical.heaterSocket} onChange={v => updateWorkSpace(space.id, 'electrical', 'heaterSocket', v)} />
+                              </div>
+                            </div>
+
+                            <div>
+                              <h4 className="text-xs font-bold text-[#3F9B7A] dark:text-[#7AC8AD] mb-2 border-b border-gray-100 dark:border-slate-700 pb-1">أعمال السباكة</h4>
+                              <div className="grid grid-cols-2 gap-2">
+                                <NumberCounter label="كرسي إفرنجي" value={space.plumbing.toiletFr} onChange={v => updateWorkSpace(space.id, 'plumbing', 'toiletFr', v)} />
+                                <NumberCounter label="كرسي عربي" value={space.plumbing.toiletAr} onChange={v => updateWorkSpace(space.id, 'plumbing', 'toiletAr', v)} />
+                                <NumberCounter label="سخانة" value={space.plumbing.heater} onChange={v => updateWorkSpace(space.id, 'plumbing', 'heater', v)} />
+                                <NumberCounter label="شطاف" value={space.plumbing.bidet} onChange={v => updateWorkSpace(space.id, 'plumbing', 'bidet', v)} />
+                                <NumberCounter label="خلاط دش" value={space.plumbing.showerMixer} onChange={v => updateWorkSpace(space.id, 'plumbing', 'showerMixer', v)} />
+                                <NumberCounter label="مغاسل خزف" value={space.plumbing.sink} onChange={v => updateWorkSpace(space.id, 'plumbing', 'sink', v)} />
+                                <NumberCounter label="خلاط مغسلة" value={space.plumbing.sinkMixer} onChange={v => updateWorkSpace(space.id, 'plumbing', 'sinkMixer', v)} />
+                                <NumberCounter label="شفاط" value={space.plumbing.exhaust} onChange={v => updateWorkSpace(space.id, 'plumbing', 'exhaust', v)} />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+
+                {data.works.length > 0 && (
+                  <button onClick={addWorkSpace}
+                    className="w-full bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 dark:hover:bg-purple-900/40 text-[#4A1F66] dark:text-purple-200 border border-dashed border-purple-300 dark:border-purple-700 py-3 rounded-xl text-sm font-bold flex justify-center items-center gap-2 transition">
+                    <Plus className="w-4 h-4" /> مساحة إضافية
+                  </button>
+                )}
+              </div>
+            </Card>
+          )}
+
+          {/* Step 2 — الأثاث والأجهزة */}
+          {step === 2 && (
+            <Card title="جرد الأثاث والأجهزة (يغذي نظام التسويق لاحقاً)" icon={Sofa} accent="teal">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-gray-50 dark:bg-slate-800 p-3 rounded-lg mb-5 border border-gray-100 dark:border-slate-700">
+                <Select label="نوع السكن" options={['منزل', 'شقة']} value={data.furnitureInfo.type} onChange={e => updateNested('furnitureInfo', 'type', e.target.value)} />
+                <Select label="حالة المنزل" options={['ترميم', 'حريق']} value={data.furnitureInfo.condition} onChange={e => updateNested('furnitureInfo', 'condition', e.target.value)} />
+                <Input type="number" label="عدد الذكور" value={data.furnitureInfo.males} onChange={e => updateNested('furnitureInfo', 'males', Number(e.target.value || 0))} />
+                <Input type="number" label="عدد الإناث" value={data.furnitureInfo.females} onChange={e => updateNested('furnitureInfo', 'females', Number(e.target.value || 0))} />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <h4 className="text-xs font-bold text-[#3F9B7A] dark:text-[#7AC8AD] mb-3 pb-1 border-b border-gray-100 dark:border-slate-700">الأثاث المطلوب</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <NumberCounter label="سرير نفر ونص مع مرتبة" value={data.furnitureItems.bed15} onChange={v => updateNested('furnitureItems', 'bed15', v)} />
+                    <NumberCounter label="مرتبة نفر ونص فقط" value={data.furnitureItems.mattress15} onChange={v => updateNested('furnitureItems', 'mattress15', v)} />
+                    <NumberCounter label="سرير نفر مع مرتبة" value={data.furnitureItems.bed1} onChange={v => updateNested('furnitureItems', 'bed1', v)} />
+                    <NumberCounter label="مراتب نفر فقط" value={data.furnitureItems.mattress1} onChange={v => updateNested('furnitureItems', 'mattress1', v)} />
+                    <NumberCounter label="سرير مزدوج مع مراتب" value={data.furnitureItems.bedDouble} onChange={v => updateNested('furnitureItems', 'bedDouble', v)} />
+                    <NumberCounter label="مراتب نفرين فقط" value={data.furnitureItems.mattressDouble} onChange={v => updateNested('furnitureItems', 'mattressDouble', v)} />
+                    <NumberCounter label="سجاد" value={data.furnitureItems.carpet} onChange={v => updateNested('furnitureItems', 'carpet', v)} />
+                    <NumberCounter label="كنب (مقاعد)" value={data.furnitureItems.sofaSeats} onChange={v => updateNested('furnitureItems', 'sofaSeats', v)} />
+                    <NumberCounter label="كنب (بالمتر)" value={data.furnitureItems.sofaMeters} onChange={v => updateNested('furnitureItems', 'sofaMeters', v)} />
+                    <NumberCounter label="جلسة أرضية" value={data.furnitureItems.floorSeating} onChange={v => updateNested('furnitureItems', 'floorSeating', v)} />
+                    <NumberCounter label="كومدينة درجين" value={data.furnitureItems.nightstand} onChange={v => updateNested('furnitureItems', 'nightstand', v)} />
+                    <NumberCounter label="تسريحة" value={data.furnitureItems.dresser} onChange={v => updateNested('furnitureItems', 'dresser', v)} />
+                    <NumberCounter label="دولاب بابين" value={data.furnitureItems.wardrobe2} onChange={v => updateNested('furnitureItems', 'wardrobe2', v)} />
+                    <NumberCounter label="دولاب 3 أبواب" value={data.furnitureItems.wardrobe3} onChange={v => updateNested('furnitureItems', 'wardrobe3', v)} />
+                    <NumberCounter label="دولاب 4 أبواب" value={data.furnitureItems.wardrobe4} onChange={v => updateNested('furnitureItems', 'wardrobe4', v)} />
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-xs font-bold text-[#3F9B7A] dark:text-[#7AC8AD] mb-3 pb-1 border-b border-gray-100 dark:border-slate-700">الأجهزة الكهربائية</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <NumberCounter label="مكيف سبلت طن" value={data.appliances.acSplit1} onChange={v => updateNested('appliances', 'acSplit1', v)} />
+                    <NumberCounter label="مكيف سبلت 1.5" value={data.appliances.acSplit15} onChange={v => updateNested('appliances', 'acSplit15', v)} />
+                    <NumberCounter label="مكيف شباك 1.5" value={data.appliances.acWindow15} onChange={v => updateNested('appliances', 'acWindow15', v)} />
+                    <NumberCounter label="غسالة" value={data.appliances.washer} onChange={v => updateNested('appliances', 'washer', v)} />
+                    <NumberCounter label="ثلاجة" value={data.appliances.fridge} onChange={v => updateNested('appliances', 'fridge', v)} />
+                    <NumberCounter label="فرن غاز" value={data.appliances.stove} onChange={v => updateNested('appliances', 'stove', v)} />
+                    <NumberCounter label="مكنسة كهربائية" value={data.appliances.vacuum} onChange={v => updateNested('appliances', 'vacuum', v)} />
+                    <NumberCounter label="براد ماء" value={data.appliances.waterCooler} onChange={v => updateNested('appliances', 'waterCooler', v)} />
+                  </div>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {/* Step 3 — الاعتماد والرفع */}
+          {step === 3 && (
+            <>
+              <Card title="ملاحظات التشخيص الإضافية (اختياري)" icon={PenTool}>
+                <TextArea
+                  label="هل توجد أي ملاحظات أو توصيات استثنائية ظهرت أثناء الزيارة الميدانية؟"
+                  rows={3}
+                  placeholder="اكتب هنا أي ملاحظات غير مشمولة في بنود الحصر..."
+                  value={data.diagnosisNotes}
+                  onChange={e => setData((d: any) => ({ ...d, diagnosisNotes: e.target.value }))} />
+                <TextArea className="mt-3" label="التوصية النهائية" rows={2}
+                  value={data.finalRecommendation}
+                  onChange={e => setData((d: any) => ({ ...d, finalRecommendation: e.target.value }))} />
+              </Card>
+
+              <Card title="اعتماد كراسة التشخيص" icon={ShieldCheck} accent="gradient">
+                <p className="text-xs text-gray-600 dark:text-slate-300 mb-4 leading-relaxed">
+                  بموجب الاعتماد الرقمي من خلال النظام، سيتم تحويل هذه الكراسة لتُبنى عليها الخطط التنفيذية، وتغذي باقي النماذج
+                  <span className="font-bold text-[#4A1F66] dark:text-purple-300"> (F-20, F-21) </span>
+                  في النظام آلياً.
+                </p>
+
+                <label className="flex items-start gap-2 cursor-pointer bg-gray-50 dark:bg-slate-800 p-4 rounded-lg border border-gray-200 dark:border-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={data.pledge}
+                    onChange={e => setData((d: any) => ({ ...d, pledge: e.target.checked }))}
+                    className="mt-1 w-5 h-5 rounded text-[#56B894] focus:ring-[#56B894] cursor-pointer" />
+                  <span>
+                    <h4 className="text-sm font-bold text-gray-900 dark:text-slate-100 mb-1">أتعهد بأن المدخلات والحصر دقيق ومطابق للواقع الميداني</h4>
+                    <p className="text-xs text-gray-500 dark:text-slate-400">أقر بمراجعتي للبيانات والمساحات والصور المرفقة، وسيتم الاعتماد برقم حسابي المسجل بالنظام.</p>
+                  </span>
+                </label>
+              </Card>
+            </>
+          )}
+        </div>
+
+        <div className="border-t dark:border-slate-700 p-3 flex items-center justify-between gap-2">
+          <button onClick={() => setStep(s => Math.max(0, s - 1))} disabled={step === 0}
+            className="px-4 py-2 text-sm font-bold rounded-lg bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-200 disabled:opacity-40 transition">
+            السابق
           </button>
+          {step < steps.length - 1 ? (
+            <button onClick={() => setStep(s => s + 1)}
+              className="px-5 py-2 text-sm font-bold rounded-lg bg-[#4A1F66] text-white hover:bg-[#3A1652] transition">
+              التالي
+            </button>
+          ) : (
+            <button onClick={submit} disabled={busy || !projectRefId || !data.pledge}
+              className="px-5 py-2 text-sm font-bold rounded-lg bg-[#56B894] text-white hover:bg-[#3F9B7A] transition disabled:opacity-50 flex items-center gap-1.5">
+              <Send className="w-4 h-4" /> {busy ? 'جاري الرفع...' : 'رفع لرئيس قسم التشخيص'}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -505,29 +915,124 @@ export const F08Creator: FormCreator = ({ user, api, context, onClose }) => {
 
 export const F08Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
+  const works: F08WorkSpace[] = Array.isArray(d.works) ? d.works : [];
+  const fi = d.furnitureItems || {};
+  const ap = d.appliances || {};
+
+  const totalFurniture = Object.values(fi).reduce<number>((a, b) => a + Number(b || 0), 0);
+  const totalAppliances = Object.values(ap).reduce<number>((a, b) => a + Number(b || 0), 0);
+
   return (
     <FormShell rec={rec} user={user} api={api}>
-      <Card title="بيانات الزيارة" icon={Calendar}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      {d.general && (
+        <Card title="بيانات الأسرة والمنزل" icon={UsersIcon}>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            <ReadOnlyField label="اسم الأسرة" value={d.general.familyName} />
+            <ReadOnlyField label="رقم التواصل" value={d.general.contactNumber} />
+            <ReadOnlyField label="رقم الحالة" value={d.general.caseRef} />
+            <ReadOnlyField label="رقم المشروع" value={d.general.projectNumber} />
+            <ReadOnlyField label="المدينة – الحي" value={d.general.cityNeighborhood} />
+            <ReadOnlyField label="الجهة الشريكة" value={d.general.partnerEntity} />
+            <ReadOnlyField label="ممثل الجهة" value={d.general.partnerRep} />
+            <ReadOnlyField label="رقم تواصل الممثل" value={d.general.repContact} />
+          </div>
+        </Card>
+      )}
+
+      <Card title="بيانات الزيارة" icon={Calendar} accent="teal">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
           <ReadOnlyField label="تاريخ الزيارة" value={d.visitDate} />
-          <ReadOnlyField label="فريق التشخيص" value={d.team} />
-          <ReadOnlyField label="المساحة التقريبية" value={d.area} />
+          <ReadOnlyField label="نوع المبنى" value={d.visit?.type} />
+          <ReadOnlyField label="المساحة التقريبية (م²)" value={d.area} />
           <ReadOnlyField label="العمر التقديري" value={d.age} />
+          <ReadOnlyField className="md:col-span-2 lg:col-span-4" label="فريق التشخيص" value={d.team} />
+        </div>
+        <div className="mt-3">
+          <ReadOnlyField label="النتيجة المبدئية" value={d.visit?.diagnosis} />
         </div>
         <ReadOnlyField className="mt-3" label="ملخص التقييم" value={d.summary} />
       </Card>
-      <Card title="الملاحظات الفنية" icon={ClipboardList}>
-        <ReadOnlyField label="الأعمال المدنية" value={d.civilNotes} />
-        <ReadOnlyField className="mt-2" label="الأعمال الكهربائية" value={d.elecNotes} />
-        <ReadOnlyField className="mt-2" label="أعمال السباكة" value={d.plumbingNotes} />
-      </Card>
+
       <Card title="السلامة" icon={AlertTriangle}>
-        <div className={`p-3 rounded-lg ${d.safetyHazard ? 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-200' : 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-200'} text-sm font-bold flex items-center gap-2`}>
+        <div className={`p-3 rounded-lg text-sm font-bold flex items-center gap-2
+          ${d.safetyHazard
+            ? 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-200'
+            : 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-200'}`}>
           {d.safetyHazard ? <AlertTriangle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
-          {d.safetyHazard ? 'منزل غير صالح للسكن أثناء الترميم — سيُفتح F-18 و F-22.' : 'المنزل صالح لاستمرار السكن أثناء الترميم.'}
+          {d.safetyHazard
+            ? 'منزل غير صالح للسكن أثناء الترميم — سيُفتح F-18 و F-22.'
+            : 'المنزل صالح لاستمرار السكن أثناء الترميم.'}
         </div>
-        <ReadOnlyField className="mt-3" label="التوصية النهائية" value={d.finalRecommendation} />
       </Card>
+
+      {works.length > 0 && (
+        <Card title={`حصر الأعمال — ${works.length} مساحة`} icon={ClipboardList}>
+          <div className="space-y-3">
+            {works.map((w, i) => (
+              <div key={w.id ?? i} className="bg-gray-50 dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <h5 className="text-sm font-bold text-[#4A1F66] dark:text-purple-200">{i + 1}. {w.name || `مساحة ${i + 1}`}</h5>
+                  {w.images && w.images.length > 0 && (
+                    <Pill tone="purple"><ImageIcon className="w-3 h-3" /> {w.images.length} صور</Pill>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2 mt-2">
+                  {Object.entries(w.civil || {}).filter(([k, v]) => k !== 'notes' && v).map(([k, v]) => (
+                    <Pill key={k} tone="gray">{k}: {String(v)}</Pill>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">
+                  {Object.entries(w.electrical || {}).filter(([, v]) => Number(v) > 0).map(([k, v]) => (
+                    <Pill key={k} tone="amber">⚡ {k}: {String(v)}</Pill>
+                  ))}
+                  {Object.entries(w.plumbing || {}).filter(([, v]) => Number(v) > 0).map(([k, v]) => (
+                    <Pill key={k} tone="blue">🚰 {k}: {String(v)}</Pill>
+                  ))}
+                </div>
+                {w.civil?.notes && <ReadOnlyField className="mt-2" label="ملاحظات" value={w.civil.notes} />}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {(totalFurniture > 0 || totalAppliances > 0) && (
+        <Card title="جرد الأثاث والأجهزة" icon={Sofa} accent="teal">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
+            <ReadOnlyField label="نوع السكن" value={d.furnitureInfo?.type} />
+            <ReadOnlyField label="حالة المنزل" value={d.furnitureInfo?.condition} />
+            <ReadOnlyField label="عدد الذكور" value={d.furnitureInfo?.males} />
+            <ReadOnlyField label="عدد الإناث" value={d.furnitureInfo?.females} />
+          </div>
+          {totalFurniture > 0 && (
+            <>
+              <p className="text-xs font-bold text-[#4A1F66] dark:text-purple-200 mt-3 mb-1">الأثاث:</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {Object.entries(fi).filter(([, v]) => Number(v) > 0).map(([k, v]) => (
+                  <Pill key={k} tone="purple">{k}: {String(v)}</Pill>
+                ))}
+              </div>
+            </>
+          )}
+          {totalAppliances > 0 && (
+            <>
+              <p className="text-xs font-bold text-[#3F9B7A] dark:text-[#7AC8AD] mt-3 mb-1">الأجهزة:</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {Object.entries(ap).filter(([, v]) => Number(v) > 0).map(([k, v]) => (
+                  <Pill key={k} tone="teal">{k}: {String(v)}</Pill>
+                ))}
+              </div>
+            </>
+          )}
+        </Card>
+      )}
+
+      {(d.diagnosisNotes || d.finalRecommendation) && (
+        <Card title="الملاحظات والتوصية" icon={PenTool}>
+          {d.diagnosisNotes && <ReadOnlyField label="ملاحظات إضافية" value={d.diagnosisNotes} />}
+          {d.finalRecommendation && <ReadOnlyField className="mt-2" label="التوصية النهائية" value={d.finalRecommendation} />}
+        </Card>
+      )}
     </FormShell>
   );
 };

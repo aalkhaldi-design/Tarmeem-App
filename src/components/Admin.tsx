@@ -1,787 +1,378 @@
-import React, { useState, useMemo, useCallback } from 'react';
-import { Users, UserPlus, CheckCircle, XCircle, CreditCard as Edit, Shield, Search, Clock, Settings, Plus, Trash2, UserCheck, UserX, ChevronDown } from 'lucide-react';
-import { ROLES, REGION_LABELS, ALL_DEPTS, DEFAULT_LISTS, formatRelativeTime } from '../lib/data';
-import { Card, Input, AccessDeniedCard } from './ui';
-
-/* ------------------------------------------------------------------ */
-/*  Types                                                              */
-/* ------------------------------------------------------------------ */
-
-interface UserProfile {
-  id: string;
-  email: string;
-  fullName: string;
-  role: string;
-  region: string;
-  departments: string[];
-  isDepartmentHead: boolean;
-  status: 'active' | 'pending' | 'deactivated';
-  registeredAt: string;
-  lastSeenAt: string;
-  approvedBy: string | null;
-  approvedAt: string | null;
-  deactivatedAt: string | null;
-  deactivatedBy: string | null;
-  notificationPrefs: { inApp: boolean; email: boolean };
-  auditLog: any[];
-}
+import React, { useMemo, useState, useCallback } from 'react';
+import {
+  Users, UserPlus, CheckCircle, XCircle, CreditCard as Edit, Shield, Clock,
+  UserCheck, ChevronDown, RefreshCw,
+} from 'lucide-react';
+import {
+  ROLES_DEF, ROLE_BY_KEY, RoleKey, DEPARTMENTS, DEPT_BY_KEY,
+  REGION_LABELS, formatRelativeTime, isAdminEmail, roleName,
+} from '../lib/data';
+import { Card, AccessDeniedCard, Pill, EmptyState, SearchBar } from './ui';
+import type { UserProfile } from './Auth';
 
 interface AdminProps {
-  store: {
-    projects: any[];
-    users: UserProfile[];
-    assessments: any[];
-    documents: any[];
-    lists: any;
-    notifications: any[];
-  };
+  users: UserProfile[];
   approveUser: (userId: string, edits: any, approverId: string) => Promise<void>;
   updateUser: (userId: string, edits: any, actorId: string) => Promise<void>;
   deactivateUser: (userId: string, actorId: string, reassignedTo: string) => Promise<void>;
   reactivateUser: (userId: string, actorId: string) => Promise<void>;
   rejectUser: (userId: string, actorId: string, reason?: string) => Promise<void>;
-  addUser: (userData: any) => Promise<void>;
-  updateList: (key: string, values: string[]) => Promise<void>;
-  currentRole: string;
-  user: UserProfile;
-  // FIX: Added to support data from App.tsx without crashing
-  currentUser?: UserProfile;
-  users?: UserProfile[];
+  resetUserRole: (userId: string, actorId: string) => Promise<void>;
+  currentUser: UserProfile;
+  onOpenProfile: (userId: string) => void;
 }
 
-type StatusFilter = 'all' | 'pending' | 'active' | 'deactivated';
+type StatusFilter = 'all' | 'pending' | 'active' | 'deactivated' | 'reset';
 
-/* ------------------------------------------------------------------ */
-/*  Status badge helper                                                */
-/* ------------------------------------------------------------------ */
-
-const STATUS_MAP: Record<string, { label: string; bg: string; text: string; icon: React.ElementType }> = {
-  pending:     { label: 'بانتظار الموافقة', bg: 'bg-amber-50',  text: 'text-amber-700', icon: Clock },
-  active:      { label: 'فعّال',           bg: 'bg-green-50',  text: 'text-green-700', icon: CheckCircle },
-  deactivated: { label: 'معطّل',           bg: 'bg-red-50',     text: 'text-red-700',   icon: XCircle },
+const STATUS_MAP: Record<string, { label: string; tone: any; icon: React.ElementType }> = {
+  pending:     { label: 'بانتظار الموافقة', tone: 'amber', icon: Clock },
+  active:      { label: 'فعّال',           tone: 'green', icon: CheckCircle },
+  deactivated: { label: 'معطّل',           tone: 'red',   icon: XCircle },
 };
 
 function StatusBadge({ status }: { status: string }) {
   const s = STATUS_MAP[status] || STATUS_MAP.pending;
   const Icon = s.icon;
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${s.bg} ${s.text}`}>
-      <Icon className="w-3 h-3" />
-      {s.label}
-    </span>
-  );
+  return <Pill tone={s.tone}><Icon className="w-3 h-3" />{s.label}</Pill>;
 }
-
-/* ------------------------------------------------------------------ */
-/*  Reusable modal shell                                               */
-/* ------------------------------------------------------------------ */
 
 function Modal({ open, onClose, title, children, wide }: {
   open: boolean; onClose: () => void; title: string; children: React.ReactNode; wide?: boolean;
 }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      {/* backdrop */}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose} dir="rtl">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-      {/* panel */}
-      <div
-        className={`relative bg-white rounded-xl shadow-2xl w-full ${wide ? 'max-w-2xl' : 'max-w-lg'} max-h-[90vh] overflow-y-auto animate-in`}
-        onClick={e => e.stopPropagation()}
-      >
+      <div className={`relative bg-white dark:bg-slate-900 rounded-xl shadow-2xl w-full ${wide ? 'max-w-2xl' : 'max-w-lg'} max-h-[90vh] overflow-y-auto`}
+        onClick={e => e.stopPropagation()}>
         <div className="bg-gradient-to-r from-[#4A1F66] to-[#6B3D87] px-4 py-3 flex items-center justify-between rounded-t-xl">
           <h3 className="text-white font-bold text-base">{title}</h3>
-          <button onClick={onClose} className="text-white/70 hover:text-white transition"><XCircle className="w-5 h-5" /></button>
+          <button onClick={onClose} className="text-white/70 hover:text-white"><XCircle className="w-5 h-5" /></button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className="p-5 text-gray-800 dark:text-slate-100">{children}</div>
       </div>
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  AdminUserModal – Approve / Reject pending user                     */
-/* ------------------------------------------------------------------ */
+/* ──────────────────────────────────────────────────────────────────
+   UserAdminForm — لاعتماد طلبات وتعديل المستخدمين
+   ────────────────────────────────────────────────────────────────── */
 
-function AdminUserModal({ user, onApprove, onReject, onClose }: {
+function UserAdminForm({ user, mode, onSubmit, onSecondary, busy }: {
   user: UserProfile;
-  onApprove: (edits: any) => void;
-  onReject: (reason: string) => void;
-  onClose: () => void;
+  mode: 'approve' | 'edit';
+  onSubmit: (edits: { role: RoleKey; department: string; region: string; isManager: boolean }) => void;
+  onSecondary?: (reason: string) => void;
+  busy: boolean;
 }) {
-  const [role, setRole] = useState(user.role || ROLES[0]);
+  const startRole = (user.role && user.role !== 'PENDING' && user.role !== 'ADMIN' ? user.role as RoleKey : 'SOCIAL_RESEARCHER');
+  const [role, setRole] = useState<RoleKey>(startRole);
+  const [department, setDepartment] = useState(user.department || ROLE_BY_KEY[startRole]?.department || 'RESEARCH');
   const [region, setRegion] = useState(user.region || 'DAM');
-  const [departments, setDepartments] = useState<string[]>(user.departments || []);
-  const [isDepartmentHead, setIsDepartmentHead] = useState(user.isDepartmentHead || false);
-  const [rejectReason, setRejectReason] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [showReject, setShowReject] = useState(false);
+  const [isManager, setIsManager] = useState(user.isManager || ROLE_BY_KEY[startRole]?.isManager || false);
+  const [showSecondary, setShowSecondary] = useState(false);
+  const [reason, setReason] = useState('');
 
-  const toggleDept = (d: string) => {
-    setDepartments(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
+  const onRoleChange = (r: RoleKey) => {
+    setRole(r);
+    const def = ROLE_BY_KEY[r];
+    if (def) { setDepartment(def.department); setIsManager(!!def.isManager); }
   };
 
-  const handleApprove = async () => {
-    setBusy(true);
-    await onApprove({ role, region, departments, isDepartmentHead });
-    setBusy(false);
-  };
+  const rolesByDept = DEPARTMENTS.map(d => ({ dept: d, roles: ROLES_DEF.filter(r => r.department === d.key) }));
 
-  const handleReject = async () => {
-    if (!rejectReason.trim()) return;
-    setBusy(true);
-    await onReject(rejectReason);
-    setBusy(false);
-  };
+  if (showSecondary && mode === 'approve') {
+    return (
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 mb-1">سبب الرفض</label>
+          <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-y" />
+        </div>
+        <div className="flex gap-3 justify-end">
+          <button onClick={() => setShowSecondary(false)} className="px-4 py-2 rounded-lg text-sm font-bold bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300">رجوع</button>
+          <button onClick={() => onSecondary?.(reason)} disabled={busy || !reason.trim()}
+            className="px-4 py-2 rounded-lg text-sm font-bold bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-40 flex items-center gap-1">
+            <XCircle className="w-4 h-4" /> {busy ? 'جاري...' : 'رفض الطلب'}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-5" dir="rtl">
-      {/* User summary */}
-      <div className="bg-gray-50 rounded-lg p-4 space-y-2">
+    <div className="space-y-4">
+      <div className="bg-gray-50 dark:bg-slate-800 rounded-lg p-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-[#4A1F66] text-white flex items-center justify-center font-bold text-sm">
             {user.fullName?.charAt(0) || '?'}
           </div>
           <div>
-            <p className="font-bold text-gray-800">{user.fullName}</p>
-            <p className="text-xs text-gray-500" dir="ltr">{user.email}</p>
+            <p className="font-bold text-gray-800 dark:text-slate-100">{user.fullName}</p>
+            <p className="text-xs text-gray-500 dark:text-slate-400" dir="ltr">{user.email}</p>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-2 text-xs text-gray-600">
-          <span>تاريخ التسجيل: {formatRelativeTime(user.registeredAt)}</span>
-          <span>آخر ظهور: {formatRelativeTime(user.lastSeenAt)}</span>
-        </div>
-      </div>
-
-      {showReject ? (
-        <>
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">سبب الرفض</label>
-            <textarea
-              value={rejectReason}
-              onChange={e => setRejectReason(e.target.value)}
-              rows={3}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-y"
-              placeholder="اذكر سبب رفض الطلب..."
-            />
-          </div>
-          <div className="flex gap-3 justify-end">
-            <button onClick={() => setShowReject(false)} className="px-4 py-2 rounded-lg text-sm font-bold bg-gray-100 text-gray-600 hover:bg-gray-200 transition">رجوع</button>
-            <button onClick={handleReject} disabled={busy || !rejectReason.trim()}
-              className="px-4 py-2 rounded-lg text-sm font-bold bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-40 flex items-center gap-1">
-              <XCircle className="w-4 h-4" />
-              {busy ? 'جاري...' : 'رفض المستخدم'}
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          {/* Role */}
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">الدور الوظيفي</label>
-            <div className="relative">
-              <select value={role} onChange={e => setRole(e.target.value)}
-                className="w-full appearance-none px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] bg-white pl-8">
-                {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
-              <ChevronDown className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            </div>
-          </div>
-
-          {/* Region */}
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">المنطقة</label>
-            <div className="relative">
-              <select value={region} onChange={e => setRegion(e.target.value)}
-                className="w-full appearance-none px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] bg-white pl-8">
-                {Object.entries(REGION_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-              </select>
-              <ChevronDown className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            </div>
-          </div>
-
-          {/* Departments multi-select */}
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">الأقسام</label>
-            <div className="grid grid-cols-2 gap-2 border border-gray-200 rounded-lg p-3 bg-gray-50 max-h-40 overflow-y-auto">
-              {ALL_DEPTS.map(d => (
-                <label key={d} className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input type="checkbox" checked={departments.includes(d)} onChange={() => toggleDept(d)}
-                    className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66]" />
-                  <span className="text-gray-700">{d}</span>
-                </label>
-              ))}
-            </div>
-            {departments.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-2">
-                {departments.map(d => (
-                  <span key={d} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#4A1F66]/10 text-[#4A1F66] text-[11px] font-bold">
-                    {d}
-                    <button onClick={() => toggleDept(d)} className="hover:text-red-500 transition"><XCircle className="w-3 h-3" /></button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* isDepartmentHead */}
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={isDepartmentHead} onChange={e => setIsDepartmentHead(e.target.checked)}
-              className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66] w-4 h-4" />
-            <span className="text-sm text-gray-700 font-semibold">رئيس قسم</span>
-          </label>
-
-          {/* Actions */}
-          <div className="flex gap-3 justify-end border-t pt-4">
-            <button onClick={() => setShowReject(true)}
-              className="px-4 py-2 rounded-lg text-sm font-bold bg-red-50 text-red-600 hover:bg-red-100 transition flex items-center gap-1">
-              <XCircle className="w-4 h-4" />
-              رفض
-            </button>
-            <button onClick={handleApprove} disabled={busy}
-              className="px-4 py-2 rounded-lg text-sm font-bold bg-green-600 text-white hover:bg-green-700 transition disabled:opacity-40 flex items-center gap-1">
-              <CheckCircle className="w-4 h-4" />
-              {busy ? 'جاري...' : 'موافقة وتفعيل'}
-            </button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  AdminDeactivateModal – Deactivate with reassignment                */
-/* ------------------------------------------------------------------ */
-
-function AdminDeactivateModal({ user, activeUsers, onDeactivate, onClose }: {
-  user: UserProfile;
-  activeUsers: UserProfile[];
-  onDeactivate: (reassignedTo: string) => void;
-  onClose: () => void;
-}) {
-  const [reassignedTo, setReassignedTo] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const otherUsers = activeUsers.filter(u => u.id !== user.id);
-
-  const handleDeactivate = async () => {
-    setBusy(true);
-    await onDeactivate(reassignedTo);
-    setBusy(false);
-  };
-
-  return (
-    <div className="space-y-5" dir="rtl">
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-        <p className="text-sm font-bold text-red-800 mb-1">تأكيد تعطيل المستخدم</p>
-        <p className="text-sm text-red-700">
-          سيتم تعطيل حساب <strong>{user.fullName}</strong> ({user.email}). لن يتمكن من الدخول للنظام بعد الآن.
-        </p>
+        {user.registeredAt && <p className="text-[11px] text-gray-500 dark:text-slate-400 mt-2">تاريخ التسجيل: {formatRelativeTime(user.registeredAt)}</p>}
       </div>
 
       <div>
-        <label className="block text-xs font-semibold text-gray-700 mb-1">إعادة تعيين مشاريعه إلى</label>
+        <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 mb-1">الدور الوظيفي (مع العضوية)</label>
         <div className="relative">
-          <select value={reassignedTo} onChange={e => setReassignedTo(e.target.value)}
-            className="w-full appearance-none px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] bg-white pl-8">
-            <option value="">-- اختر مستخدم --</option>
-            {otherUsers.map(u => <option key={u.id} value={u.id}>{u.fullName} ({u.email})</option>)}
-          </select>
-          <ChevronDown className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-        </div>
-      </div>
-
-      <div className="flex gap-3 justify-end border-t pt-4">
-        <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-bold bg-gray-100 text-gray-600 hover:bg-gray-200 transition">إلغاء</button>
-        <button onClick={handleDeactivate} disabled={busy}
-          className="px-4 py-2 rounded-lg text-sm font-bold bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-40 flex items-center gap-1">
-          <UserX className="w-4 h-4" />
-          {busy ? 'جاري...' : 'تعطيل المستخدم'}
-        </button>
-      </div>
-    </div>
-  );
-}
-/* ------------------------------------------------------------------ */
-/*  EditUserModal – Edit role, region, depts, head flag                */
-/* ------------------------------------------------------------------ */
-
-function EditUserModal({ user, onSave, onClose }: {
-  user: UserProfile;
-  onSave: (edits: any) => void;
-  onClose: () => void;
-}) {
-  const [role, setRole] = useState(user.role);
-  const [region, setRegion] = useState(user.region);
-  const [departments, setDepartments] = useState<string[]>(user.departments || []);
-  const [isDepartmentHead, setIsDepartmentHead] = useState(user.isDepartmentHead || false);
-  const [busy, setBusy] = useState(false);
-
-  const toggleDept = (d: string) => {
-    setDepartments(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
-  };
-
-  const handleSave = async () => {
-    setBusy(true);
-    await onSave({ role, region, departments, isDepartmentHead });
-    setBusy(false);
-  };
-
-  return (
-    <div className="space-y-5" dir="rtl">
-      <div className="bg-gray-50 rounded-lg p-3 flex items-center gap-3">
-        <div className="w-9 h-9 rounded-full bg-[#4A1F66] text-white flex items-center justify-center font-bold text-sm">
-          {user.fullName?.charAt(0) || '?'}
-        </div>
-        <div>
-          <p className="font-bold text-gray-800 text-sm">{user.fullName}</p>
-          <p className="text-xs text-gray-500" dir="ltr">{user.email}</p>
-        </div>
-      </div>
-
-      <div>
-        <label className="block text-xs font-semibold text-gray-700 mb-1">الدور الوظيفي</label>
-        <div className="relative">
-          <select value={role} onChange={e => setRole(e.target.value)}
-            className="w-full appearance-none px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] bg-white pl-8">
-            {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+          <select value={role} onChange={e => onRoleChange(e.target.value as RoleKey)}
+            className="w-full appearance-none px-3 py-2 pl-8 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]">
+            {rolesByDept.map(g => (
+              <optgroup key={g.dept.key} label={g.dept.name}>
+                {g.roles.map(r => <option key={r.key} value={r.key}>{r.membershipTitle}</option>)}
+              </optgroup>
+            ))}
           </select>
           <ChevronDown className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
         </div>
       </div>
 
       <div>
-        <label className="block text-xs font-semibold text-gray-700 mb-1">المنطقة</label>
+        <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 mb-1">الإدارة</label>
+        <div className="relative">
+          <select value={department} onChange={e => setDepartment(e.target.value)}
+            className="w-full appearance-none px-3 py-2 pl-8 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]">
+            {DEPARTMENTS.map(d => <option key={d.key} value={d.key}>{d.name}</option>)}
+          </select>
+          <ChevronDown className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 mb-1">المنطقة</label>
         <div className="relative">
           <select value={region} onChange={e => setRegion(e.target.value)}
-            className="w-full appearance-none px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] bg-white pl-8">
-            {Object.entries(REGION_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            className="w-full appearance-none px-3 py-2 pl-8 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]">
+            {Object.entries(REGION_LABELS).filter(([k]) => k !== 'ALL').map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
           <ChevronDown className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-        </div>
-      </div>
-
-      <div>
-        <label className="block text-xs font-semibold text-gray-700 mb-1">الأقسام</label>
-        <div className="grid grid-cols-2 gap-2 border border-gray-200 rounded-lg p-3 bg-gray-50 max-h-40 overflow-y-auto">
-          {ALL_DEPTS.map(d => (
-            <label key={d} className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={departments.includes(d)} onChange={() => toggleDept(d)}
-                className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66]" />
-              <span className="text-gray-700">{d}</span>
-            </label>
-          ))}
         </div>
       </div>
 
       <label className="flex items-center gap-2 cursor-pointer">
-        <input type="checkbox" checked={isDepartmentHead} onChange={e => setIsDepartmentHead(e.target.checked)}
+        <input type="checkbox" checked={isManager} onChange={e => setIsManager(e.target.checked)}
           className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66] w-4 h-4" />
-        <span className="text-sm text-gray-700 font-semibold">رئيس قسم</span>
+        <span className="text-sm text-gray-700 dark:text-slate-300 font-semibold">يحقّ له اعتماد طلبات قسمه (مدير)</span>
       </label>
 
-      <div className="flex gap-3 justify-end border-t pt-4">
-        <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-bold bg-gray-100 text-gray-600 hover:bg-gray-200 transition">إلغاء</button>
-        <button onClick={handleSave} disabled={busy}
-          className="px-4 py-2 rounded-lg text-sm font-bold bg-[#4A1F66] text-white hover:bg-[#3A1652] transition disabled:opacity-40 flex items-center gap-1">
-          <Edit className="w-4 h-4" />
-          {busy ? 'جاري...' : 'حفظ التعديلات'}
+      <div className="flex gap-3 justify-end border-t dark:border-slate-700 pt-4">
+        {mode === 'approve' && (
+          <button onClick={() => setShowSecondary(true)}
+            className="px-4 py-2 rounded-lg text-sm font-bold bg-red-50 dark:bg-red-900/40 text-red-600 dark:text-red-200 hover:bg-red-100 transition flex items-center gap-1">
+            <XCircle className="w-4 h-4" /> رفض
+          </button>
+        )}
+        <button onClick={() => onSubmit({ role, department, region, isManager })} disabled={busy}
+          className={`px-4 py-2 rounded-lg text-sm font-bold transition disabled:opacity-40 flex items-center gap-1
+            ${mode === 'approve' ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-[#4A1F66] text-white hover:bg-[#3A1652]'}`}>
+          <CheckCircle className="w-4 h-4" />
+          {busy ? 'جاري...' : mode === 'approve' ? 'موافقة وتفعيل' : 'حفظ التعديلات'}
         </button>
       </div>
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  AddUserModal – Create a user directly                               */
-/* ------------------------------------------------------------------ */
+/* ──────────────────────────────────────────────────────────────────
+   AdminUsersPortal
+   ────────────────────────────────────────────────────────────────── */
 
-function AddUserModal({ onAdd, onClose, existingEmails }: {
-  onAdd: (data: any) => void;
-  onClose: () => void;
-  existingEmails: Set<string>;
-}) {
-  const [fullName, setFullName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [role, setRole] = useState(ROLES[0]);
-  const [region, setRegion] = useState('DAM');
-  const [departments, setDepartments] = useState<string[]>([]);
-  const [isDepartmentHead, setIsDepartmentHead] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  const toggleDept = (d: string) => {
-    setDepartments(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
-  };
-
-  const handleAdd = async () => {
-    setError('');
-    if (!fullName.trim()) { setError('الاسم الكامل مطلوب'); return; }
-    if (!email.trim()) { setError('البريد الإلكتروني مطلوب'); return; }
-    if (existingEmails.has(email.trim().toLowerCase())) { setError('البريد الإلكتروني مسجل مسبقاً'); return; }
-    if (!password || password.length < 6) { setError('كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
-
-    setBusy(true);
-    await onAdd({ fullName: fullName.trim(), email: email.trim(), password, role, region, departments, isDepartmentHead });
-    setBusy(false);
-  };
-
-  return (
-    <div className="space-y-4" dir="rtl">
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 text-xs font-bold p-3 rounded-lg">{error}</div>
-      )}
-
-      <div className="grid grid-cols-2 gap-4">
-        <Input label="الاسم الكامل" value={fullName} onChange={e => setFullName(e.target.value)} placeholder="محمد أحمد" />
-        <Input label="البريد الإلكتروني" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="user@example.com" />
-      </div>
-
-      <Input label="كلمة المرور" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="6 أحرف على الأقل" />
-
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-xs font-semibold text-gray-700 mb-1">الدور الوظيفي</label>
-          <div className="relative">
-            <select value={role} onChange={e => setRole(e.target.value)}
-              className="w-full appearance-none px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] bg-white pl-8">
-              {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-            <ChevronDown className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-xs font-semibold text-gray-700 mb-1">المنطقة</label>
-          <div className="relative">
-            <select value={region} onChange={e => setRegion(e.target.value)}
-              className="w-full appearance-none px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] bg-white pl-8">
-              {Object.entries(REGION_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
-            <ChevronDown className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2 border border-gray-200 rounded-lg p-3 bg-gray-50 max-h-40 overflow-y-auto">
-        {ALL_DEPTS.map(d => (
-          <label key={d} className="flex items-center gap-2 text-sm cursor-pointer">
-            <input type="checkbox" checked={departments.includes(d)} onChange={() => toggleDept(d)}
-              className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66]" />
-            <span className="text-gray-700">{d}</span>
-          </label>
-        ))}
-      </div>
-
-      <div className="flex gap-3 justify-end border-t pt-4">
-        <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-bold bg-gray-100 text-gray-600 hover:bg-gray-200 transition">إلغاء</button>
-        <button onClick={handleAdd} disabled={busy}
-          className="px-4 py-2 rounded-lg text-sm font-bold bg-[#56B894] text-white hover:bg-[#3F9B7A] transition disabled:opacity-40 flex items-center gap-1">
-          <UserPlus className="w-4 h-4" />
-          {busy ? 'جاري...' : 'إضافة المستخدم'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  AdminUsersPortal                                                   */
-/* ------------------------------------------------------------------ */
-
-export function AdminUsersPortal(props: AdminProps) {
-  // FIX: Destructure explicitly provided props from App.tsx
-  const { 
-    store, approveUser, updateUser, deactivateUser, 
-    reactivateUser, rejectUser, addUser, 
-    currentRole, user, currentUser, users: propUsers 
-  } = props;
-
+export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUser, reactivateUser, rejectUser, resetUserRole, currentUser, onOpenProfile }: AdminProps) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [search, setSearch] = useState('');
-  const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
-  const [modalMode, setModalMode] = useState<'approve' | 'deactivate' | 'edit' | 'add' | null>(null);
+  const [selected, setSelected] = useState<UserProfile | null>(null);
+  const [mode, setMode] = useState<'approve' | 'edit' | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  /* ---- Access control ---- */
-  // FIX: Universal check for 'admin' that handles casing and accidental spaces
-  const activeRole = currentRole || user?.role || currentUser?.role || "";
-  const isAuthorized = activeRole.toLowerCase().trim() === 'admin';
+  const isAdmin = currentUser.role === 'ADMIN' || isAdminEmail(currentUser.email);
 
-  if (!isAuthorized) return <AccessDeniedCard />;
-
-  /* ---- Derived data ---- */
-  // FIX: Use prop-based users list if available, otherwise fallback to store
-  const displayUsers = propUsers || store.users || [];
-  const activeUsers = useMemo(() => displayUsers.filter(u => u.status === 'active'), [displayUsers]);
-
-  const filteredUsers = useMemo(() => {
-    let list = displayUsers;
-    if (statusFilter !== 'all') list = list.filter(u => u.status === statusFilter);
+  const filtered = useMemo(() => {
+    let list = users;
+    if (statusFilter === 'reset') {
+      list = list.filter(u => u.needsRoleReset);
+    } else if (statusFilter !== 'all') {
+      list = list.filter(u => u.status === statusFilter);
+    }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      list = list.filter(u => u.fullName.toLowerCase().includes(q) || u.email.toLowerCase().includes(q));
+      list = list.filter(u => (u.fullName || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q));
     }
     return list;
-  }, [displayUsers, statusFilter, search]);
+  }, [users, statusFilter, search]);
 
-  /* ---- Modal callbacks ---- */
+  const counts = useMemo(() => ({
+    all: users.length,
+    pending: users.filter(u => u.status === 'pending').length,
+    active: users.filter(u => u.status === 'active').length,
+    deactivated: users.filter(u => u.status === 'deactivated').length,
+    reset: users.filter(u => u.needsRoleReset).length,
+  }), [users]);
+
   const handleApprove = useCallback(async (edits: any) => {
-    if (!selectedUser) return;
-    const actorId = user?.id || currentUser?.id || "";
-    await approveUser(selectedUser.id, edits, actorId);
-    setSelectedUser(null);
-    setModalMode(null);
-  }, [selectedUser, approveUser, user, currentUser]);
+    if (!selected) return;
+    setBusy(true);
+    try { await approveUser(selected.id, edits, currentUser.id); setSelected(null); setMode(null); }
+    finally { setBusy(false); }
+  }, [selected, approveUser, currentUser.id]);
 
   const handleReject = useCallback(async (reason: string) => {
-    if (!selectedUser) return;
-    const actorId = user?.id || currentUser?.id || "";
-    await rejectUser(selectedUser.id, actorId, reason);
-    setSelectedUser(null);
-    setModalMode(null);
-  }, [selectedUser, rejectUser, user, currentUser]);
-
-  const handleDeactivate = useCallback(async (reassignedTo: string) => {
-    if (!selectedUser) return;
-    const actorId = user?.id || currentUser?.id || "";
-    await deactivateUser(selectedUser.id, actorId, reassignedTo);
-    setSelectedUser(null);
-    setModalMode(null);
-  }, [selectedUser, deactivateUser, user, currentUser]);
+    if (!selected) return;
+    setBusy(true);
+    try { await rejectUser(selected.id, currentUser.id, reason); setSelected(null); setMode(null); }
+    finally { setBusy(false); }
+  }, [selected, rejectUser, currentUser.id]);
 
   const handleEdit = useCallback(async (edits: any) => {
-    if (!selectedUser) return;
-    const actorId = user?.id || currentUser?.id || "";
-    await updateUser(selectedUser.id, edits, actorId);
-    setSelectedUser(null);
-    setModalMode(null);
-  }, [selectedUser, updateUser, user, currentUser]);
+    if (!selected) return;
+    setBusy(true);
+    try { await updateUser(selected.id, edits, currentUser.id); setSelected(null); setMode(null); }
+    finally { setBusy(false); }
+  }, [selected, updateUser, currentUser.id]);
 
-  const handleAdd = useCallback(async (userData: any) => {
-    await addUser(userData);
-    setModalMode(null);
-  }, [addUser]);
+  const handleDeactivate = useCallback(async (u: UserProfile) => {
+    if (!confirm(`سيتم تعطيل حساب ${u.fullName}. متابعة؟`)) return;
+    await deactivateUser(u.id, currentUser.id, '');
+  }, [deactivateUser, currentUser.id]);
 
   const handleReactivate = useCallback(async (u: UserProfile) => {
-    const actorId = user?.id || currentUser?.id || "";
-    await reactivateUser(u.id, actorId);
-  }, [reactivateUser, user, currentUser]);
+    await reactivateUser(u.id, currentUser.id);
+  }, [reactivateUser, currentUser.id]);
 
-  const closeModal = () => { setSelectedUser(null); setModalMode(null); };
+  const handleResetRoles = useCallback(async () => {
+    if (!confirm('سيتم إعادة تعيين الدور والإدارة لجميع المستخدمين القدامى عدا الأدمنز. متابعة؟')) return;
+    setBusy(true);
+    try {
+      for (const u of users) {
+        if (isAdminEmail(u.email)) continue;
+        if (u.role === 'ADMIN') continue;
+        await resetUserRole(u.id, currentUser.id);
+      }
+    } finally { setBusy(false); }
+  }, [users, resetUserRole, currentUser.id]);
 
-  /* ---- Status counts ---- */
-  const counts = useMemo(() => ({
-    all: displayUsers.length,
-    pending: displayUsers.filter(u => u.status === 'pending').length,
-    active: displayUsers.filter(u => u.status === 'active').length,
-    deactivated: displayUsers.filter(u => u.status === 'deactivated').length,
-  }), [displayUsers]);
+  if (!isAdmin) return <AccessDeniedCard />;
 
-  const existingEmails = useMemo(() => new Set(displayUsers.map(u => u.email.toLowerCase())), [displayUsers]);
-
-  /* ---- Render ---- */
   return (
     <div dir="rtl" className="space-y-4">
-      {/* Header bar */}
-      <Card title="بوابة إدارة المستخدمين" icon={Shield}>
+      <Card title="بوابة إدارة المستخدمين والصلاحيات" icon={Shield} accent="gradient">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          {/* Search */}
-          <div className="relative flex-1 max-w-sm">
-            <Search className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="بحث بالاسم أو البريد..."
-              className="w-full pr-9 pl-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]"
-            />
-            </div>
-          <button
-            onClick={() => setModalMode('add')}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-[#56B894] text-white hover:bg-[#3F9B7A] transition shadow-sm"
-          >
-            <UserPlus className="w-4 h-4" />
-            إضافة مستخدم
-          </button>
+          <div className="flex-1 max-w-sm"><SearchBar value={search} onChange={setSearch} placeholder="بحث بالاسم أو البريد..." /></div>
+          <div className="flex gap-2">
+            <button onClick={handleResetRoles} disabled={busy}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-amber-50 dark:bg-amber-900/40 text-amber-700 dark:text-amber-200 hover:bg-amber-100 transition border border-amber-200 dark:border-amber-800">
+              <RefreshCw className="w-4 h-4" /> إعادة ضبط الأدوار للقدامى
+            </button>
+          </div>
         </div>
+        <p className="text-[11px] text-gray-500 dark:text-slate-400 mt-3">
+          الأدمنز الافتراضيون يُمنحون الصلاحيات تلقائياً عند تسجيل الدخول: <code className="bg-gray-100 dark:bg-slate-700 px-1 rounded">a.alkhaldi@tarmeem.org</code>،{' '}
+          <code className="bg-gray-100 dark:bg-slate-700 px-1 rounded">s.aldossari@tarmeem.org</code>.
+        </p>
       </Card>
 
-      {/* Filter tabs */}
       <div className="flex flex-wrap gap-2">
-        {(['all', 'pending', 'active', 'deactivated'] as StatusFilter[]).map(s => {
+        {(['all', 'pending', 'active', 'deactivated', 'reset'] as StatusFilter[]).map(s => {
           const isActive = statusFilter === s;
-          const label = s === 'all' ? 'الكل' : s === 'pending' ? 'بانتظار الموافقة' : s === 'active' ? 'فعّال' : 'معطّل';
-          const count = (counts as any)[s];
+          const label = s === 'all' ? 'الكل' : s === 'pending' ? 'بانتظار الموافقة' : s === 'active' ? 'فعّال' : s === 'deactivated' ? 'معطّل' : 'يحتاج إعادة ضبط';
           return (
-            <button
-              key={s}
-              onClick={() => setStatusFilter(s)}
+            <button key={s} onClick={() => setStatusFilter(s)}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition ${
-                isActive ? 'bg-[#4A1F66] text-white shadow' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
-              }`}
-            >
-              {s === 'pending' && <Clock className="w-3 h-3" />}
-              {s === 'active' && <CheckCircle className="w-3 h-3" />}
-              {s === 'deactivated' && <XCircle className="w-3 h-3" />}
-              {s === 'all' && <Users className="w-3 h-3" />}
+                isActive ? 'bg-[#4A1F66] text-white shadow' : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 border border-gray-200 dark:border-slate-700'
+              }`}>
               {label}
-              <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${isActive ? 'bg-white/20' : 'bg-gray-100'}`}>{count}</span>
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${isActive ? 'bg-white/20' : 'bg-gray-100 dark:bg-slate-700'}`}>{(counts as any)[s]}</span>
             </button>
           );
         })}
       </div>
 
-      {/* Users table */}
-      <Card title={`المستخدمون (${filteredUsers.length})`} icon={Users}>
-        {filteredUsers.length === 0 ? (
-          <div className="text-center py-10 text-gray-400">
-            <Users className="w-10 h-10 mx-auto mb-2 opacity-30" />
-            <p className="text-sm">لا يوجد مستخدمون مطابقون</p>
-          </div>
+      <Card title={`المستخدمون (${filtered.length})`} icon={Users}>
+        {filtered.length === 0 ? (
+          <EmptyState icon={Users} title="لا يوجد مستخدمون مطابقون" />
         ) : (
           <div className="overflow-x-auto -mx-4 md:-mx-5">
             <table className="w-full text-sm">
               <thead>
-                <tr className="bg-gray-50 text-gray-600 text-xs">
+                <tr className="bg-gray-50 dark:bg-slate-800 text-gray-600 dark:text-slate-300 text-xs">
                   <th className="px-3 py-2 text-right font-bold">الاسم</th>
                   <th className="px-3 py-2 text-right font-bold">البريد</th>
-                  <th className="px-3 py-2 text-right font-bold">الدور</th>
+                  <th className="px-3 py-2 text-right font-bold">العضوية</th>
+                  <th className="px-3 py-2 text-right font-bold">الإدارة</th>
                   <th className="px-3 py-2 text-right font-bold">الحالة</th>
                   <th className="px-3 py-2 text-right font-bold">إجراءات</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredUsers.map(u => (
-                  <tr key={u.id} className="border-t border-gray-100 hover:bg-gray-50/50 transition">
-                    <td className="px-3 py-2.5">
-                      <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-full bg-[#4A1F66] text-white flex items-center justify-center font-bold text-[10px] shrink-0">
-                          {u.fullName?.charAt(0) || '?'}
+                {filtered.map(u => {
+                  const def = ROLE_BY_KEY[u.role as RoleKey];
+                  const dept = DEPT_BY_KEY[u.department as any];
+                  return (
+                    <tr key={u.id} className="border-t border-gray-100 dark:border-slate-700 hover:bg-gray-50/50 dark:hover:bg-slate-800/50 transition">
+                      <td className="px-3 py-2.5">
+                        <div className="flex items-center gap-2 cursor-pointer" onClick={() => onOpenProfile(u.id)}>
+                          <div className="w-7 h-7 rounded-full bg-[#4A1F66] text-white flex items-center justify-center font-bold text-[10px] shrink-0">
+                            {u.fullName?.charAt(0) || '?'}
+                          </div>
+                          <span className="font-semibold text-gray-800 dark:text-slate-100 truncate max-w-[140px] hover:underline">{u.fullName}</span>
+                          {u.isManager && <Pill tone="purple">مدير</Pill>}
+                          {u.role === 'ADMIN' && <Pill tone="red">أدمن</Pill>}
+                          {u.needsRoleReset && <Pill tone="amber">إعادة ضبط</Pill>}
                         </div>
-                        <span className="font-semibold text-gray-800 truncate max-w-[120px]">{u.fullName}</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2.5 text-gray-500 text-xs" dir="ltr">{u.email}</td>
-                    <td className="px-3 py-2.5 text-xs">{u.role}</td>
-                    <td className="px-3 py-2.5"><StatusBadge status={u.status} /></td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex items-center gap-1">
-                        {u.status === 'pending' && (
-                          <button
-                            onClick={() => { setSelectedUser(u); setModalMode('approve'); }}
-                            className="p-1.5 rounded-lg bg-green-50 text-green-600 hover:bg-green-100 transition"
-                          >
-                            <UserCheck className="w-4 h-4" />
-                          </button>
-                        )}
-                        {u.status === 'active' && (
-                          <button
-                            onClick={() => { setSelectedUser(u); setModalMode('edit'); }}
-                            className="p-1.5 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 transition"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-500 dark:text-slate-400 text-xs" dir="ltr">{u.email}</td>
+                      <td className="px-3 py-2.5 text-xs">{def?.membershipTitle || roleName(u.role) || '—'}</td>
+                      <td className="px-3 py-2.5 text-xs">{dept?.name || '—'}</td>
+                      <td className="px-3 py-2.5"><StatusBadge status={u.status} /></td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex items-center gap-1">
+                          {(u.status === 'pending' || u.needsRoleReset) && (
+                            <button onClick={() => { setSelected(u); setMode('approve'); }}
+                              className="p-1.5 rounded-lg bg-green-50 dark:bg-green-900/40 text-green-600 dark:text-green-200 hover:bg-green-100" title="مراجعة وإسناد">
+                              <UserCheck className="w-4 h-4" />
+                            </button>
+                          )}
+                          {u.status === 'active' && (
+                            <>
+                              <button onClick={() => { setSelected(u); setMode('edit'); }}
+                                className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-200 hover:bg-blue-100" title="تعديل">
+                                <Edit className="w-4 h-4" />
+                              </button>
+                              {u.id !== currentUser.id && u.role !== 'ADMIN' && (
+                                <button onClick={() => handleDeactivate(u)}
+                                  className="p-1.5 rounded-lg bg-red-50 dark:bg-red-900/40 text-red-600 dark:text-red-200 hover:bg-red-100" title="تعطيل">
+                                  <XCircle className="w-4 h-4" />
+                                </button>
+                              )}
+                            </>
+                          )}
+                          {u.status === 'deactivated' && (
+                            <button onClick={() => handleReactivate(u)}
+                              className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-200 hover:bg-blue-100" title="إعادة تفعيل">
+                              <UserPlus className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </Card>
 
-      <Modal open={modalMode === 'approve'} onClose={closeModal} title="مراجعة طلب التسجيل">
-        {selectedUser && <AdminUserModal user={selectedUser} onApprove={handleApprove} onReject={handleReject} onClose={closeModal} />}
+      <Modal open={mode === 'approve'} onClose={() => { setSelected(null); setMode(null); }} title="مراجعة الطلب وإسناد العضوية">
+        {selected && <UserAdminForm user={selected} mode="approve" onSubmit={handleApprove} onSecondary={handleReject} busy={busy} />}
       </Modal>
-      <Modal open={modalMode === 'deactivate'} onClose={closeModal} title="تعطيل مستخدم">
-        {selectedUser && <AdminDeactivateModal user={selectedUser} activeUsers={activeUsers} onDeactivate={handleDeactivate} onClose={closeModal} />}
-      </Modal>
-      <Modal open={modalMode === 'edit'} onClose={closeModal} title="تعديل بيانات المستخدم">
-        {selectedUser && <EditUserModal user={selectedUser} onSave={handleEdit} onClose={closeModal} />}
-      </Modal>
-      <Modal open={modalMode === 'add'} onClose={closeModal} title="إضافة مستخدم جديد">
-        <AddUserModal onAdd={handleAdd} onClose={closeModal} existingEmails={existingEmails} />
+      <Modal open={mode === 'edit'} onClose={() => { setSelected(null); setMode(null); }} title="تعديل بيانات المستخدم">
+        {selected && <UserAdminForm user={selected} mode="edit" onSubmit={handleEdit} busy={busy} />}
       </Modal>
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  PortalSettings                                                     */
-/* ------------------------------------------------------------------ */
-
-const LIST_KEYS = ['projectType', 'referralChannel', 'evacuation', 'supplyMethod'] as const;
-const LIST_LABELS: Record<string, string> = {
-  projectType: 'نوع المشروع',
-  referralChannel: 'قناة الإحالة',
-  evacuation: 'الإخلاء',
-  supplyMethod: 'طريقة التوريد',
-};
-
-export function PortalSettings(props: AdminProps) {
-  const { store, updateList, currentRole, user, currentUser } = props;
-  const [editingKey, setEditingKey] = useState<string | null>(null);
-  const [draftValues, setDraftValues] = useState<string[]>([]);
-  const [newValue, setNewValue] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  // FIX: Applied the same case-insensitive role gate
-  const activeRole = currentRole || user?.role || currentUser?.role || "";
-  if (activeRole.toLowerCase().trim() !== 'admin') return <AccessDeniedCard />;
-
-  const getCurrentValues = (key: string): string[] => {
-    return store?.lists?.[key] || (DEFAULT_LISTS as any)[key] || [];
-  };
-
-  const save = async () => {
-    if (!editingKey) return;
-    setBusy(true);
-    await updateList(editingKey, draftValues);
-    setBusy(false);
-    setEditingKey(null);
-  };
-
-  return (
-    <div dir="rtl">
-      <Card title="إعدادات القوائم المنسدلة" icon={Settings}>
-        <div className="space-y-4">
-          {LIST_KEYS.map(key => {
-            const isEditing = editingKey === key;
-            const values = isEditing ? draftValues : getCurrentValues(key);
-            return (
-              <div key={key} className="border border-gray-200 rounded-lg overflow-hidden">
-                <div className="bg-gray-50 px-4 py-3 flex items-center justify-between">
-                  <span className="font-bold text-sm text-gray-700">{LIST_LABELS[key]}</span>
-                  {!isEditing ? (
-                    <button
-                      onClick={() => { setEditingKey(key); setDraftValues([...getCurrentValues(key)]); }}
-                      className="px-3 py-1 bg-white border text-xs font-bold rounded-lg"
-                    >
-                      تعديل
-                    </button>
-                  ) : (
-                    <div className="flex gap-2">
-                      <button onClick={() => setEditingKey(null)} className="text-xs">إلغاء</button>
-                      <button onClick={save} className="px-3 py-1 bg-[#4A1F66] text-white rounded-lg text-xs">
-                        {busy ? 'جاري...' : 'حفظ'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <div className="px-4 py-3">
-                  <div className="flex flex-wrap gap-2">
-                    {values.map(v => <span key={v} className="px-2.5 py-1 bg-gray-100 rounded-full text-xs font-bold">{v}</span>)}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </Card>
-    </div>
-  );
-}

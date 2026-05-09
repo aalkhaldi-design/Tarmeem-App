@@ -1,71 +1,18 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import {
-  Home, Plus, AlertTriangle, Briefcase, MapPin, DollarSign, Activity,
-  ClipboardList, CheckCircle2, Clock, ArrowLeft, Target, TrendingUp, Building2,
-  Wrench, X
+  Home as HomeIcon, Activity, Inbox, FileText, ArrowLeft, CheckCircle, Building2,
+  Target, TrendingUp, AlertTriangle, MapPin,
 } from 'lucide-react';
 import {
-  STAGES_CONFIG, REGION_LABELS, regionLabel, computeSlaStatus, formatCurrency,
-  DEFAULT_LISTS
+  DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, regionLabel, FORM_STATUS_LABELS,
+  FORM_STATUS_COLORS, roleName,
 } from '../lib/data';
-import { Card, DonutChart, BarChart, Sparkline, MandatoryGauge, TarmeemLogo } from './ui';
+import { Card, TarmeemLogo, ProgressBar, Pill, DonutChart, BarChart, Sparkline, EmptyState } from './ui';
+import { FormsApi, formAwaitsUser } from './Forms';
+import type { ProjectRecord } from './forms/FormRenderers';
+import type { UserProfile } from './Auth';
 
-/* ─── Types ─── */
-
-interface UserProfile {
-  id: string;
-  fullName: string;
-  role: string;
-  region: string;
-  departments: string[];
-  isDepartmentHead: boolean;
-  status: 'active' | 'pending' | 'deactivated';
-}
-
-interface Project {
-  id: string;
-  name: string;
-  type: string;
-  city: string;
-  region: string;
-  currentStageId: string;
-  currentStageOwner: string;
-  stageEnteredAt: string;
-  mandatoryFieldsTotal: number;
-  mandatoryFieldsFilled: number;
-  assessmentId: string | null;
-  assessmentStatus: string;
-  diagnosisVerdict: string | null;
-  assignedFieldEngineer: string | null;
-  data: Record<string, any>;
-  budgetSAR: number;
-  disbursedSAR: number;
-  hasPendingAdditionalWorks: boolean;
-  deliveryDate: string | null;
-}
-
-interface HomeProps {
-  user: UserProfile;
-  projects: Project[];
-  goToProject: (id: string) => void;
-  goToFieldTask: (id: string) => void;
-  goToAllProjects: () => void;
-  openNewProject: () => void;
-  openEmergency: () => void;
-}
-
-interface NewProjectModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onSubmit: (project: Record<string, any>) => void;
-}
-
-/* ─── Helpers ─── */
-
-const ARABIC_MONTHS = [
-  'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
-  'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
-];
+const ARABIC_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
 const ARABIC_DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
 const formatArabicDate = () => {
@@ -73,726 +20,257 @@ const formatArabicDate = () => {
   return `${ARABIC_DAYS[now.getDay()]} ${now.getDate()} ${ARABIC_MONTHS[now.getMonth()]} ${now.getFullYear()}`;
 };
 
-const stageName = (id: string) => STAGES_CONFIG.find(s => s.id === id)?.name || id;
-const stageDuration = (id: string) => STAGES_CONFIG.find(s => s.id === id)?.duration || '';
+interface HomeProps {
+  user: UserProfile;
+  api: FormsApi;
+  projects: ProjectRecord[];
+  goToPortal: (dept: DepartmentKey) => void;
+  goToProjects: () => void;
+  goToProject: (projectRefId: string) => void;
+  allowedDepts: DepartmentKey[];
+}
 
-const FIELD_STAGE_IDS = ['5', '6', '7', '8', '14', '17', '19', '20', '22', '27'];
-
-/* ─── Sub-Components ─── */
-
-const WelcomeBanner = ({ user }: { user: UserProfile }) => {
+export const DashboardHome: React.FC<HomeProps> = ({ user, api, projects, goToPortal, goToProjects, goToProject, allowedDepts }) => {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'صباح الخير' : hour < 18 ? 'مساء الخير' : 'مساء النور';
+  const inbox = useMemo(() => api.forms.filter(f => formAwaitsUser(f, user)), [api.forms, user]);
+  const myCreated = useMemo(() => api.forms.filter(f => f.createdBy === user.id), [api.forms, user.id]);
 
-  return (
-    <div className="relative overflow-hidden rounded-2xl bg-gradient-to-l from-[#4A1F66] via-[#6B3D87] to-[#56B894] p-6 md:p-8 text-white shadow-lg">
-      <div className="absolute top-0 left-0 w-64 h-64 bg-white/5 rounded-full -translate-x-1/2 -translate-y-1/2" />
-      <div className="absolute bottom-0 right-0 w-48 h-48 bg-white/5 rounded-full translate-x-1/4 translate-y-1/4" />
-      <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-xl bg-white/15 flex items-center justify-center backdrop-blur-sm">
-            <Home className="w-7 h-7 text-white" />
-          </div>
-          <div>
-            <h1 className="text-2xl md:text-3xl font-bold">
-              {greeting}، {user.fullName}
-            </h1>
-            <p className="text-white/80 text-sm mt-1">
-              {user.role} &bull; {regionLabel(user.region)}
-            </p>
-          </div>
-        </div>
-        <div className="text-sm text-white/70 whitespace-nowrap">
-          {formatArabicDate()}
-        </div>
-      </div>
-    </div>
-  );
-};
+  const dept = DEPT_BY_KEY[user.department as DepartmentKey];
 
-const Tarmeem500GoalCard = ({ completedCount }: { completedCount: number }) => {
-  const goal = 500;
-  const pct = Math.min(Math.round((completedCount / goal) * 100), 100);
+  const stats = useMemo(() => {
+    const completed = projects.filter(p => p.phase === 'CLOSED').length;
+    const active = projects.filter(p => p.phase !== 'CLOSED').length;
+    return { total: projects.length, completed, active };
+  }, [projects]);
 
-  return (
-    <Card title="هدف ترميم 500" icon={Target}>
-      <div className="flex flex-col md:flex-row items-center gap-6">
-        <div className="relative w-36 h-36 flex items-center justify-center">
-          <svg width={144} height={144} viewBox="0 0 144 144">
-            <circle cx={72} cy={72} r={60} fill="none" stroke="#F3F4F6" strokeWidth="12" />
-            <circle
-              cx={72} cy={72} r={60} fill="none" stroke="#4A1F66" strokeWidth="12"
-              strokeDasharray={`${(pct / 100) * 2 * Math.PI * 60} ${2 * Math.PI * 60 * 2}`}
-              strokeDashoffset={0}
-              transform="rotate(-90 72 72)"
-              strokeLinecap="round"
-              className="transition-all duration-1000 ease-out"
-            />
-          </svg>
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-3xl font-bold text-[#4A1F66]">{completedCount}</span>
-            <span className="text-xs text-gray-500">من {goal}</span>
-          </div>
-        </div>
-        <div className="flex-1 text-center md:text-right">
-          <p className="text-lg font-bold text-gray-800">
-            اكتمل {pct}% من الهدف
-          </p>
-          <p className="text-sm text-gray-500 mt-1">
-            متبقي <span className="font-bold text-[#4A1F66]">{Math.max(goal - completedCount, 0)}</span> منزل لتحقيق هدف ترميم 500 منزل
-          </p>
-          <div className="mt-3 w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-gradient-to-l from-[#4A1F66] to-[#56B894] transition-all duration-1000 ease-out"
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-        </div>
-      </div>
-    </Card>
-  );
-};
+  const target500Pct = Math.min(Math.round((stats.completed / 500) * 100) || 0, 100);
 
-const QuickActionsToolbar = ({
-  openNewProject,
-  openEmergency,
-  goToAllProjects,
-  goToFieldTask,
-  user,
-  projects,
-}: {
-  openNewProject: () => void;
-  openEmergency: () => void;
-  goToAllProjects: () => void;
-  goToFieldTask: (id: string) => void;
-  user: UserProfile;
-  projects: Project[];
-}) => {
-  const hasFieldVisits = projects.some(
-    p => FIELD_STAGE_IDS.includes(p.currentStageId) && p.assignedFieldEngineer === user.id
-  );
+  const phaseSegments = useMemo(() => {
+    const counts: Record<string, number> = {};
+    projects.forEach(p => { counts[p.phase] = (counts[p.phase] || 0) + 1; });
+    const colors: Record<string, string> = {
+      RESEARCH: '#0EA5E9', DIAGNOSIS: '#7C3AED', EVACUATION: '#F59E0B',
+      TENDERING: '#EAB308', EXECUTION: '#56B894', HANDOVER: '#16A34A', CLOSED: '#6B7280',
+    };
+    const labels: Record<string, string> = {
+      RESEARCH: 'البحث', DIAGNOSIS: 'التشخيص', EVACUATION: 'الإخلاء',
+      TENDERING: 'الترسية', EXECUTION: 'التنفيذ', HANDOVER: 'التسليم', CLOSED: 'مغلق',
+    };
+    return Object.entries(counts).map(([k, v]) => ({ label: labels[k] || k, value: v, color: colors[k] || '#888' }));
+  }, [projects]);
 
-  const actions = [
-    {
-      label: 'مشروع جديد',
-      icon: Plus,
-      onClick: openNewProject,
-      color: 'from-[#4A1F66] to-[#6B3D87]',
-      hoverColor: 'hover:shadow-purple-300',
-    },
-    {
-      label: 'تشخيص طارئ',
-      icon: AlertTriangle,
-      onClick: openEmergency,
-      color: 'from-red-500 to-red-600',
-      hoverColor: 'hover:shadow-red-300',
-    },
-    {
-      label: 'جميع المشاريع',
-      icon: Briefcase,
-      onClick: goToAllProjects,
-      color: 'from-[#56B894] to-[#3F9B7A]',
-      hoverColor: 'hover:shadow-teal-300',
-    },
-    {
-      label: 'الزيارات الميدانية',
-      icon: MapPin,
-      onClick: () => {
-        const fieldProject = projects.find(
-          p => FIELD_STAGE_IDS.includes(p.currentStageId) && p.assignedFieldEngineer === user.id
-        );
-        if (fieldProject) goToFieldTask(fieldProject.id);
-      },
-      color: 'from-amber-500 to-amber-600',
-      hoverColor: 'hover:shadow-amber-300',
-      disabled: !hasFieldVisits,
-    },
-  ];
+  const regionCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    projects.forEach(p => { const r = regionLabel(p.region || 'DAM'); counts[r] = (counts[r] || 0) + 1; });
+    return counts;
+  }, [projects]);
 
-  return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-      {actions.map((action) => (
-        <button
-          key={action.label}
-          onClick={action.onClick}
-          disabled={action.disabled}
-          className={`group relative overflow-hidden rounded-xl p-4 text-white font-bold text-sm
-            bg-gradient-to-l ${action.color}
-            shadow-md ${action.hoverColor} hover:shadow-lg
-            transition-all duration-300 transform hover:-translate-y-0.5 active:translate-y-0
-            disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none`}
-        >
-          <div className="absolute inset-0 bg-white/0 group-hover:bg-white/10 transition-colors duration-300" />
-          <div className="relative z-10 flex flex-col items-center gap-2">
-            <action.icon className="w-6 h-6" />
-            <span>{action.label}</span>
-          </div>
-        </button>
-      ))}
-    </div>
-  );
-};
-
-const GeneralStatsSection = ({ projects }: { projects: Project[] }) => {
-  const total = projects.length;
-  const completed = projects.filter(p => p.currentStageId === '33').length;
-  const active = projects.filter(p => p.currentStageId !== '33').length;
-  const pendingAssessment = projects.filter(p => p.assessmentStatus === 'pending').length;
-
-  const segments = [
-    { label: 'نشطة', value: active, color: '#4A1F66' },
-    { label: 'مكتملة', value: completed, color: '#56B894' },
-    { label: 'بانتظار التقييم', value: pendingAssessment, color: '#F59E0B' },
-  ];
-
-  const statsCards = [
-    { label: 'إجمالي المشاريع', value: total, icon: Briefcase, color: 'text-[#4A1F66]', bg: 'bg-purple-50' },
-    { label: 'مشاريع نشطة', value: active, icon: Activity, color: 'text-[#56B894]', bg: 'bg-teal-50' },
-    { label: 'مشاريع مكتملة', value: completed, icon: CheckCircle2, color: 'text-green-600', bg: 'bg-green-50' },
-    { label: 'بانتظار التقييم', value: pendingAssessment, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
-  ];
-
-  return (
-    <Card title="الإحصائيات العامة" icon={TrendingUp}>
-      <div className="flex flex-col lg:flex-row items-center gap-6">
-        <div className="shrink-0">
-          <DonutChart segments={segments} size={180} label="توزيع المشاريع" />
-        </div>
-        <div className="flex-1 grid grid-cols-2 gap-3 w-full">
-          {statsCards.map(card => (
-            <div
-              key={card.label}
-              className={`${card.bg} rounded-xl p-4 flex items-center gap-3 transition-all duration-300 hover:shadow-md hover:-translate-y-0.5`}
-            >
-              <div className={`w-10 h-10 rounded-lg ${card.bg} flex items-center justify-center`}>
-                <card.icon className={`w-5 h-5 ${card.color}`} />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-gray-800">{card.value}</p>
-                <p className="text-xs text-gray-500 font-semibold">{card.label}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </Card>
-  );
-};
-
-const BudgetBurnCard = ({ projects }: { projects: Project[] }) => {
-  const totalBudget = projects.reduce((sum, p) => sum + (p.budgetSAR || 0), 0);
-  const totalDisbursed = projects.reduce((sum, p) => sum + (p.disbursedSAR || 0), 0);
-  const pct = totalBudget > 0 ? Math.round((totalDisbursed / totalBudget) * 100) : 0;
-  const remaining = totalBudget - totalDisbursed;
-
-  const monthlySpend = useMemo(() => {
-    const months: number[] = [];
+  // 6-month sparkline of new projects
+  const monthlyTrend = useMemo(() => {
+    const arr: number[] = [];
     for (let i = 5; i >= 0; i--) {
-      const d = new Date();
-      d.setMonth(d.getMonth() - i);
-      const m = d.getMonth();
-      const y = d.getFullYear();
-      let spent = 0;
-      projects.forEach(p => {
-        if (p.deliveryDate) {
-          const dd = new Date(p.deliveryDate);
-          if (dd.getMonth() === m && dd.getFullYear() === y) {
-            spent += p.disbursedSAR || 0;
-          }
-        }
-      });
-      months.push(spent);
+      const d = new Date(); d.setMonth(d.getMonth() - i);
+      const m = d.getMonth(), y = d.getFullYear();
+      arr.push(projects.filter(p => {
+        const c = new Date(p.createdAt);
+        return c.getMonth() === m && c.getFullYear() === y;
+      }).length);
     }
-    return months;
+    return arr;
   }, [projects]);
 
   return (
-    <Card title="الميزانية والصرف" icon={DollarSign}>
-      <div className="flex flex-col md:flex-row items-start md:items-center gap-6">
-        <div className="flex-1 w-full">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-bold text-gray-700">الميزانية الإجمالية</span>
-            <span className="text-sm font-bold text-[#4A1F66]">{formatCurrency(totalBudget)}</span>
+    <div dir="rtl" className="space-y-6">
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-l from-[#4A1F66] via-[#6B3D87] to-[#56B894] p-6 md:p-8 text-white shadow-lg">
+        <div className="absolute top-0 left-0 w-64 h-64 bg-white/5 rounded-full -translate-x-1/2 -translate-y-1/2" />
+        <div className="absolute bottom-0 right-0 w-48 h-48 bg-white/5 rounded-full translate-x-1/4 translate-y-1/4" />
+        <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-xl bg-white/15 flex items-center justify-center backdrop-blur-sm">
+              <HomeIcon className="w-7 h-7 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl md:text-3xl font-bold">{greeting}، {user.fullName}</h1>
+              <p className="text-white/80 text-sm mt-1">
+                {roleName(user.role)} {dept && <>· {dept.name}</>} · {regionLabel(user.region)}
+              </p>
+            </div>
           </div>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-bold text-gray-700">المصروف</span>
-            <span className="text-sm font-bold text-red-600">{formatCurrency(totalDisbursed)}</span>
-          </div>
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-bold text-gray-700">المتبقي</span>
-            <span className="text-sm font-bold text-[#56B894]">{formatCurrency(remaining)}</span>
-          </div>
-          <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-gradient-to-l from-red-500 to-[#4A1F66] transition-all duration-700 ease-out"
-              style={{ width: `${Math.min(pct, 100)}%` }}
-            />
-          </div>
-          <p className="text-xs text-gray-500 mt-2 text-center">
-            تم صرف {pct}% من إجمالي الميزانية
-          </p>
-        </div>
-        <div className="shrink-0 flex flex-col items-center">
-          <span className="text-xs text-gray-500 mb-1 font-semibold">آخر 6 أشهر</span>
-          <Sparkline values={monthlySpend} color="#4A1F66" />
+          <div className="text-sm text-white/70 whitespace-nowrap">{formatArabicDate()}</div>
         </div>
       </div>
-    </Card>
-  );
-};
 
-const RegionDeptPanel = ({ projects }: { projects: Project[] }) => {
-  const regionCounts: Record<string, number> = {};
-  projects.forEach(p => {
-    const r = regionLabel(p.region);
-    regionCounts[r] = (regionCounts[r] || 0) + 1;
-  });
-
-  const deptCounts: Record<string, number> = {};
-  projects.forEach(p => {
-    const dept = p.currentStageOwner;
-    if (dept) {
-      deptCounts[dept] = (deptCounts[dept] || 0) + 1;
-    }
-  });
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <Card title="حسب المنطقة" icon={MapPin}>
-        <BarChart data={regionCounts} />
+      {/* Tarmeem 500 hero card */}
+      <Card title="هدف ترميم 500 منزل" icon={Target} accent="gradient">
+        <div className="flex flex-col md:flex-row items-center gap-6">
+          <div className="relative w-36 h-36 flex items-center justify-center shrink-0">
+            <svg width={144} height={144} viewBox="0 0 144 144">
+              <circle cx={72} cy={72} r={60} fill="none" stroke="#F3F4F6" strokeWidth="12" />
+              <circle cx={72} cy={72} r={60} fill="none" stroke="#4A1F66" strokeWidth="12"
+                strokeDasharray={`${(target500Pct / 100) * 2 * Math.PI * 60} ${2 * Math.PI * 60 * 2}`}
+                transform="rotate(-90 72 72)" strokeLinecap="round" className="transition-all duration-1000" />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-3xl font-bold text-[#4A1F66] dark:text-purple-300">{stats.completed}</span>
+              <span className="text-xs text-gray-500 dark:text-slate-400">من 500</span>
+            </div>
+          </div>
+          <div className="flex-1">
+            <p className="text-lg font-bold text-gray-800 dark:text-slate-100">اكتمل {target500Pct}% من الهدف</p>
+            <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">
+              متبقّي <span className="font-bold text-[#4A1F66] dark:text-purple-300">{Math.max(500 - stats.completed, 0)}</span> منزل لتحقيق الهدف.
+            </p>
+            <div className="mt-3"><ProgressBar value={target500Pct} /></div>
+          </div>
+          <div className="text-center">
+            <Sparkline values={monthlyTrend} color="#4A1F66" />
+            <p className="text-[10px] text-gray-400 mt-1">آخر 6 أشهر</p>
+          </div>
+        </div>
       </Card>
-      <Card title="حسب القسم الحالي" icon={Building2}>
-        <BarChart data={deptCounts} />
-      </Card>
-    </div>
-  );
-};
 
-const TasksPanel = ({ user, projects, goToProject }: {
-  user: UserProfile;
-  projects: Project[];
-  goToProject: (id: string) => void;
-}) => {
-  const myTasks = projects.filter(p =>
-    user.departments.some(d => d === p.currentStageOwner)
-  );
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatPill icon={Building2} label="إجمالي المشاريع" value={stats.total} tone="bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200" />
+        <StatPill icon={Activity} label="مشاريع نشطة" value={stats.active} tone="bg-teal-50 text-teal-700 dark:bg-teal-900/30 dark:text-teal-200" />
+        <StatPill icon={CheckCircle} label="منازل مسلّمة" value={stats.completed} tone="bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-200" />
+        <StatPill icon={Inbox} label="بانتظار اعتمادي" value={inbox.length} tone="bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200" />
+      </div>
 
-  return (
-    <Card title={`مهامي (${myTasks.length})`} icon={ClipboardList}>
-      {myTasks.length === 0 ? (
-        <div className="flex flex-col items-center py-8 text-gray-400">
-          <CheckCircle2 className="w-10 h-10 mb-2" />
-          <p className="text-sm font-semibold">لا توجد مهام حالية</p>
-        </div>
-      ) : (
-        <div className="space-y-2 max-h-80 overflow-y-auto">
-          {myTasks.map(p => {
-            const sla = computeSlaStatus(stageDuration(p.currentStageId), p.stageEnteredAt);
-            return (
-              <button
-                key={p.id}
-                onClick={() => goToProject(p.id)}
-                className="w-full flex items-center gap-3 p-3 rounded-lg border border-gray-200
-                  hover:bg-gray-50 hover:shadow-sm transition-all duration-200 text-right"
-              >
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-gray-800 truncate">{p.name}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    المرحلة: {stageName(p.currentStageId)}
-                  </p>
-                </div>
-                <div className="shrink-0 flex flex-col items-end gap-1">
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ring-1 ${sla.ring}
-                    ${sla.color === 'red' ? 'bg-red-50 text-red-700' :
-                      sla.color === 'orange' ? 'bg-orange-50 text-orange-700' :
-                      sla.color === 'green' ? 'bg-green-50 text-green-700' :
-                      'bg-blue-50 text-blue-700'}`}
-                  >
-                    {sla.text}
-                  </span>
-                  <MandatoryGauge filled={p.mandatoryFieldsFilled} total={p.mandatoryFieldsTotal} />
-                </div>
-                <ArrowLeft className="w-4 h-4 text-gray-400 shrink-0" />
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </Card>
-  );
-};
-
-const ActivityFeed = ({ projects }: { projects: Project[] }) => {
-  const activities = useMemo(() => {
-    const items: {
-      projectId: string;
-      projectName: string;
-      stageName: string;
-      stageDept: string;
-      enteredAt: string;
-    }[] = [];
-
-    projects.forEach(p => {
-      items.push({
-        projectId: p.id,
-        projectName: p.name,
-        stageName: stageName(p.currentStageId),
-        stageDept: p.currentStageOwner,
-        enteredAt: p.stageEnteredAt,
-      });
-    });
-
-    items.sort((a, b) => new Date(b.enteredAt).getTime() - new Date(a.enteredAt).getTime());
-    return items.slice(0, 10);
-  }, [projects]);
-
-  const formatTimeAgo = (dateStr: string) => {
-    if (!dateStr) return '';
-    const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
-    if (diff < 60) return 'الآن';
-    if (diff < 3600) return `قبل ${Math.floor(diff / 60)} دقيقة`;
-    if (diff < 86400) return `قبل ${Math.floor(diff / 3600)} ساعة`;
-    return `قبل ${Math.floor(diff / 86400)} يوم`;
-  };
-
-  return (
-    <Card title="آخر الأنشطة" icon={Activity}>
-      {activities.length === 0 ? (
-        <div className="flex flex-col items-center py-8 text-gray-400">
-          <Activity className="w-10 h-10 mb-2" />
-          <p className="text-sm font-semibold">لا توجد أنشطة حديثة</p>
-        </div>
-      ) : (
-        <div className="space-y-1 max-h-72 overflow-y-auto">
-          {activities.map((a, i) => (
-            <div
-              key={`${a.projectId}-${i}`}
-              className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 transition-colors duration-150"
-            >
-              <div className="w-2 h-2 rounded-full bg-[#56B894] shrink-0 mt-1" />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-gray-700 truncate">
-                  <span className="font-bold">{a.projectName}</span>
-                  {' — '}
-                  انتقل إلى <span className="font-semibold text-[#4A1F66]">{a.stageName}</span>
-                </p>
-                <p className="text-[10px] text-gray-400 mt-0.5">
-                  القسم: {a.stageDept} &bull; {formatTimeAgo(a.enteredAt)}
-                </p>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card title="توزيع المشاريع حسب المرحلة" icon={TrendingUp} className="lg:col-span-2">
+          {phaseSegments.length === 0 ? <EmptyState icon={Building2} title="لا توجد مشاريع بعد" /> : (
+            <div className="flex flex-col md:flex-row gap-6 items-center">
+              <DonutChart segments={phaseSegments} size={200} />
+              <div className="flex-1 w-full">
+                <BarChart data={regionCounts} label="حسب المنطقة" />
               </div>
             </div>
-          ))}
-        </div>
-      )}
-    </Card>
-  );
-};
+          )}
+        </Card>
+        <Card title={`صندوق الوارد (${inbox.length})`} icon={Inbox} accent="teal">
+          {inbox.length === 0 ? (
+            <EmptyState icon={CheckCircle} title="لا توجد طلبات معلّقة" />
+          ) : (
+            <div className="space-y-2 max-h-72 overflow-y-auto">
+              {inbox.slice(0, 6).map(f => (
+                <button key={f.id} onClick={() => f.projectRefId ? goToProject(f.projectRefId) : goToPortal(f.ownerDept)}
+                  className="w-full text-right p-2 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 transition flex items-start gap-2">
+                  <Pill tone="purple">{f.code}</Pill>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-bold text-gray-800 dark:text-slate-100 truncate">{f.title}</p>
+                    <p className="text-[10px] text-gray-500 dark:text-slate-400">{f.beneficiaryName || f.projectId || '—'}</p>
+                  </div>
+                  <ArrowLeft className="w-4 h-4 text-gray-400" />
+                </button>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
 
-const FieldVisitsTodayCard = ({ user, projects, goToFieldTask }: {
-  user: UserProfile;
-  projects: Project[];
-  goToFieldTask: (id: string) => void;
-}) => {
-  const fieldVisits = projects.filter(
-    p => FIELD_STAGE_IDS.includes(p.currentStageId) && p.assignedFieldEngineer === user.id
-  );
-
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const todayVisits = fieldVisits.filter(p => {
-    if (!p.stageEnteredAt) return false;
-    return p.stageEnteredAt.slice(0, 10) === todayStr;
-  });
-
-  const visitsToShow = todayVisits.length > 0 ? todayVisits : fieldVisits;
-
-  return (
-    <Card title={`الزيارات الميدانية (${visitsToShow.length})`} icon={Wrench}>
-      {visitsToShow.length === 0 ? (
-        <div className="flex flex-col items-center py-8 text-gray-400">
-          <MapPin className="w-10 h-10 mb-2" />
-          <p className="text-sm font-semibold">لا توجد زيارات ميدانية حالية</p>
-        </div>
-      ) : (
-        <div className="space-y-2 max-h-64 overflow-y-auto">
-          {visitsToShow.map(p => {
-            const sla = computeSlaStatus(stageDuration(p.currentStageId), p.stageEnteredAt);
+      <Card title="بوابات المؤسسة" icon={Building2}>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          {DEPARTMENTS.filter(d => allowedDepts.includes(d.key)).map(d => {
+            const count = api.forms.filter(f => f.ownerDept === d.key || (f.bridgesTo || []).includes(d.key)).length;
             return (
-              <button
-                key={p.id}
-                onClick={() => goToFieldTask(p.id)}
-                className="w-full flex items-center gap-3 p-3 rounded-lg border border-gray-200
-                  hover:bg-amber-50 hover:border-amber-200 transition-all duration-200 text-right"
-              >
-                <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
-                  <Wrench className="w-4 h-4 text-amber-600" />
+              <button key={d.key} onClick={() => goToPortal(d.key)}
+                className="text-right p-4 rounded-xl border border-gray-200 dark:border-slate-700 hover:shadow-lg hover:-translate-y-0.5 transition-all bg-white dark:bg-slate-800 group">
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center mb-2" style={{ background: d.color + '25' }}>
+                  <Building2 className="w-5 h-5" style={{ color: d.color }} />
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-gray-800 truncate">{p.name}</p>
-                  <p className="text-xs text-gray-500">
-                    {stageName(p.currentStageId)} — {p.city}
-                  </p>
-                </div>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ring-1 ${sla.ring}
-                  ${sla.color === 'red' ? 'bg-red-50 text-red-700' :
-                    sla.color === 'orange' ? 'bg-orange-50 text-orange-700' :
-                    sla.color === 'green' ? 'bg-green-50 text-green-700' :
-                    'bg-blue-50 text-blue-700'}`}
-                >
-                  {sla.text}
-                </span>
+                <p className="text-sm font-bold text-gray-800 dark:text-slate-100 leading-tight">{d.name}</p>
+                <p className="text-[11px] text-gray-500 dark:text-slate-400 mt-1">{count} نموذج</p>
               </button>
             );
           })}
         </div>
-      )}
-    </Card>
+      </Card>
+
+      <Card title={`أحدث المشاريع (${projects.length})`} icon={Building2} accent="purple">
+        {projects.length === 0 ? (
+          <EmptyState icon={Building2} title="لا توجد مشاريع بعد" hint="ينشأ المشروع تلقائياً عند اعتماد F-03 وتحويله للمشاريع." />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {projects.slice(0, 6).map(p => (
+              <button key={p.id} onClick={() => goToProject(p.id)}
+                className="text-right p-3 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:shadow transition">
+                <div className="flex items-center justify-between mb-1">
+                  <Pill tone="purple">{p.projectId}</Pill>
+                  <Pill tone="teal">{p.phase}</Pill>
+                </div>
+                <p className="text-sm font-bold text-gray-800 dark:text-slate-100 truncate">{p.beneficiaryName}</p>
+                <p className="text-[10px] text-gray-500 dark:text-slate-400 flex items-center gap-1 mt-1"><MapPin className="w-3 h-3" />{p.city}</p>
+                <ProgressBar value={p.progressPct} />
+              </button>
+            ))}
+          </div>
+        )}
+        <button onClick={goToProjects} className="mt-3 text-xs font-bold text-[#4A1F66] dark:text-purple-300 hover:underline">عرض كل المشاريع ←</button>
+      </Card>
+
+      <Card title={`نماذجي الأخيرة (${myCreated.length})`} icon={FileText}>
+        {myCreated.length === 0 ? (
+          <EmptyState icon={FileText} title="لم تُنشِئ أي نموذج بعد" />
+        ) : (
+          <div className="space-y-2">
+            {myCreated.slice(0, 6).map(f => (
+              <div key={f.id} className="flex items-center gap-3 p-2 rounded-lg border border-gray-200 dark:border-slate-700">
+                <Pill tone="purple">{f.code}</Pill>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-gray-800 dark:text-slate-100 truncate">{f.title}</p>
+                  <p className="text-[10px] text-gray-500 dark:text-slate-400">{new Date(f.createdAt).toLocaleString('ar-SA')}</p>
+                </div>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${FORM_STATUS_COLORS[f.status]}`}>{FORM_STATUS_LABELS[f.status]}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <div className="flex items-center justify-between px-4 py-3 mt-4 border-t border-gray-200 dark:border-slate-700">
+        <div className="flex items-center gap-2">
+          <TarmeemLogo variant="icon" size={18} />
+          <span className="text-xs text-gray-400 dark:text-slate-500 font-semibold">جمعية ترميم</span>
+        </div>
+        <span className="text-xs text-gray-400 dark:text-slate-500">v3.0</span>
+      </div>
+    </div>
   );
 };
 
-const DashboardFooter = () => (
-  <div className="flex items-center justify-between px-4 py-3 mt-4 border-t border-gray-200">
-    <div className="flex items-center gap-2">
-      <TarmeemLogo variant="icon" size={18} />
-      <span className="text-xs text-gray-400 font-semibold">بيئة الإنتاج</span>
+const StatPill: React.FC<{ icon: React.ElementType; label: string; value: any; tone: string }> = ({ icon: Icon, label, value, tone }) => (
+  <div className={`rounded-xl p-4 flex items-center gap-3 ${tone}`}>
+    <div className="w-10 h-10 rounded-lg bg-white/40 dark:bg-white/5 flex items-center justify-center">
+      <Icon className="w-5 h-5" />
     </div>
-    <span className="text-xs text-gray-400">v1.0</span>
+    <div>
+      <p className="text-2xl font-bold leading-none">{value}</p>
+      <p className="text-xs font-semibold opacity-80 mt-0.5">{label}</p>
+    </div>
   </div>
 );
 
-/* ─── NewProjectModal ─── */
-
-export const NewProjectModal = ({ isOpen, onClose, onSubmit }: NewProjectModalProps) => {
-  const [name, setName] = useState('');
-  const [type, setType] = useState('');
-  const [city, setCity] = useState('');
-  const [region, setRegion] = useState('');
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
-
-  if (!isOpen) return null;
-
-  const validate = () => {
-    const errs: Record<string, string> = {};
-    if (!name.trim()) errs.name = 'اسم المشروع مطلوب';
-    if (!type) errs.type = 'نوع المشروع مطلوب';
-    if (!city.trim()) errs.city = 'المدينة مطلوبة';
-    if (!region) errs.region = 'المنطقة مطلوبة';
-    setErrors(errs);
-    return Object.keys(errs).length === 0;
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!validate()) return;
-    setSubmitting(true);
-    const project = {
-      name: name.trim(),
-      type,
-      city: city.trim(),
-      region,
-      currentStageId: '1',
-      currentStageOwner: 'الشراكات',
-      stageEnteredAt: new Date().toISOString(),
-      mandatoryFieldsTotal: 0,
-      mandatoryFieldsFilled: 0,
-      assessmentId: null,
-      assessmentStatus: 'pending',
-      diagnosisVerdict: null,
-      assignedFieldEngineer: null,
-      data: {},
-      budgetSAR: 0,
-      disbursedSAR: 0,
-      projectAuditLog: [],
-      hasPendingAdditionalWorks: false,
-    };
-    onSubmit(project);
-    setSubmitting(false);
-    setName('');
-    setType('');
-    setCity('');
-    setRegion('');
-    setErrors({});
-    onClose();
-  };
-
-  const handleClose = () => {
-    if (!submitting) {
-      setName('');
-      setType('');
-      setCity('');
-      setRegion('');
-      setErrors({});
-      onClose();
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-300"
-        onClick={handleClose}
-      />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg animate-in fade-in zoom-in-95 duration-200"
-        dir="rtl">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-[#4A1F66] flex items-center justify-center">
-              <Plus className="w-5 h-5 text-white" />
-            </div>
-            <h2 className="text-lg font-bold text-gray-800">مشروع جديد</h2>
-          </div>
-          <button
-            onClick={handleClose}
-            disabled={submitting}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400
-              hover:bg-gray-100 hover:text-gray-600 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div>
-            <label className="block text-sm font-bold text-gray-700 mb-1">اسم المشروع</label>
-            <input
-              type="text"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] transition-shadow
-                ${errors.name ? 'border-red-400 bg-red-50' : 'border-gray-300 bg-white'}`}
-              placeholder="أدخل اسم المشروع"
-            />
-            {errors.name && <p className="text-xs text-red-500 mt-1 font-semibold">{errors.name}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm font-bold text-gray-700 mb-1">نوع المشروع</label>
-            <select
-              value={type}
-              onChange={e => setType(e.target.value)}
-              className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] transition-shadow
-                ${errors.type ? 'border-red-400 bg-red-50' : 'border-gray-300 bg-white'}`}
-            >
-              <option value="">اختر النوع...</option>
-              {DEFAULT_LISTS.projectType.map(t => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
-            {errors.type && <p className="text-xs text-red-500 mt-1 font-semibold">{errors.type}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm font-bold text-gray-700 mb-1">المدينة</label>
-            <input
-              type="text"
-              value={city}
-              onChange={e => setCity(e.target.value)}
-              className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] transition-shadow
-                ${errors.city ? 'border-red-400 bg-red-50' : 'border-gray-300 bg-white'}`}
-              placeholder="أدخل اسم المدينة"
-            />
-            {errors.city && <p className="text-xs text-red-500 mt-1 font-semibold">{errors.city}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm font-bold text-gray-700 mb-1">المنطقة</label>
-            <select
-              value={region}
-              onChange={e => setRegion(e.target.value)}
-              className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] transition-shadow
-                ${errors.region ? 'border-red-400 bg-red-50' : 'border-gray-300 bg-white'}`}
-            >
-              <option value="">اختر المنطقة...</option>
-              {Object.entries(REGION_LABELS)
-                .filter(([k]) => k !== 'ALL')
-                .map(([k, v]) => (
-                  <option key={k} value={k}>{v}</option>
-                ))}
-            </select>
-            {errors.region && <p className="text-xs text-red-500 mt-1 font-semibold">{errors.region}</p>}
-          </div>
-
-          <div className="flex items-center gap-3 pt-3 border-t border-gray-100">
-            <button
-              type="submit"
-              disabled={submitting}
-              className="flex-1 bg-[#4A1F66] text-white py-2.5 rounded-lg font-bold text-sm
-                hover:bg-[#3A1652] transition-colors disabled:opacity-50 disabled:cursor-not-allowed
-                shadow-md hover:shadow-lg"
-            >
-              {submitting ? 'جاري الإنشاء...' : 'إنشاء المشروع'}
-            </button>
-            <button
-              type="button"
-              onClick={handleClose}
-              disabled={submitting}
-              className="px-6 py-2.5 border border-gray-300 text-gray-600 rounded-lg font-bold text-sm
-                hover:bg-gray-50 transition-colors disabled:opacity-50"
-            >
-              إلغاء
-            </button>
-          </div>
-        </form>
-      </div>
+export const PendingAccountScreen: React.FC<{ email: string; onSignOut: () => void }> = ({ email, onSignOut }) => (
+  <div className="min-h-screen bg-gray-50 dark:bg-slate-950 flex items-center justify-center p-4" dir="rtl">
+    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-8 max-w-md text-center">
+      <TarmeemLogo variant="stacked" size={50} color="auto" animated={false} />
+      <h2 className="text-xl font-bold text-[#4A1F66] dark:text-purple-300 mt-6 mb-2">حسابك بانتظار الموافقة</h2>
+      <p className="text-sm text-gray-500 dark:text-slate-400 mb-6">سيراجع مدير النظام طلبك ويعيّن الإدارة والدور المناسبين قبل التفعيل.</p>
+      <p className="text-xs text-gray-400 dark:text-slate-500 mb-4" dir="ltr">{email}</p>
+      <button onClick={onSignOut} className="bg-gray-200 dark:bg-slate-700 text-gray-700 dark:text-slate-200 px-6 py-2 rounded-lg font-bold hover:bg-gray-300">تسجيل الخروج</button>
     </div>
-  );
-};
+  </div>
+);
 
-/* ─── Main Dashboard ─── */
-
-export const DashboardHome = ({
-  user,
-  projects,
-  goToProject,
-  goToFieldTask,
-  goToAllProjects,
-  openNewProject,
-  openEmergency,
-}: HomeProps) => {
-  return (
-    <div dir="rtl" className="min-h-screen bg-gray-100 pb-6">
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        {/* Welcome banner */}
-        <WelcomeBanner user={user} />
-
-        {/* Tarmeem 500 goal */}
-        <Tarmeem500GoalCard completedCount={projects.length} />
-
-        {/* Quick actions */}
-        <QuickActionsToolbar
-          openNewProject={openNewProject}
-          openEmergency={openEmergency}
-          goToAllProjects={goToAllProjects}
-          goToFieldTask={goToFieldTask}
-          user={user}
-          projects={projects}
-        />
-
-        {/* General stats */}
-        <GeneralStatsSection projects={projects} />
-
-        {/* Budget */}
-        <BudgetBurnCard projects={projects} />
-
-        {/* Region & Department breakdown */}
-        <RegionDeptPanel projects={projects} />
-
-        {/* Tasks & Activity in two columns */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <TasksPanel user={user} projects={projects} goToProject={goToProject} />
-          <ActivityFeed projects={projects} />
-        </div>
-
-        {/* Field visits today */}
-        <FieldVisitsTodayCard
-          user={user}
-          projects={projects}
-          goToFieldTask={goToFieldTask}
-        />
-
-        {/* Footer */}
-        <DashboardFooter />
-      </div>
+export const DeactivatedAccountScreen: React.FC<{ onSignOut: () => void }> = ({ onSignOut }) => (
+  <div className="min-h-screen bg-gray-50 dark:bg-slate-950 flex items-center justify-center p-4" dir="rtl">
+    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-8 max-w-md text-center">
+      <AlertTriangle className="w-16 h-16 text-red-300 mx-auto mb-4" />
+      <h2 className="text-xl font-bold text-gray-700 dark:text-slate-200 mb-2">الحساب معطّل</h2>
+      <p className="text-sm text-gray-500 dark:text-slate-400 mb-6">تم تعطيل حسابك من قبل مدير النظام. تواصل مع الإدارة للمزيد من المعلومات.</p>
+      <button onClick={onSignOut} className="bg-gray-200 dark:bg-slate-700 text-gray-700 dark:text-slate-200 px-6 py-2 rounded-lg font-bold hover:bg-gray-300">تسجيل الخروج</button>
     </div>
-  );
-};
+  </div>
+);
+

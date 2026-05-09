@@ -4,24 +4,31 @@ import {
 } from 'lucide-react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
-  collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc,
+  collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc, runTransaction,
 } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
 import { getUserProfile, AuthScreen, type UserProfile } from './components/Auth';
-import { TarmeemLogo, TarmeemSplash } from './components/ui';
+import { TarmeemLogo, TarmeemSplash, ThemeProvider, ThemeToggle } from './components/ui';
 import {
   DashboardHome, PendingAccountScreen, DeactivatedAccountScreen,
 } from './components/Home';
 import {
-  DEPT_PORTALS, ExecutiveHubPanel, PortalSidebar, PortalMobileNav,
-  type ActivePortal,
+  DEPT_PORTALS, PortalSidebar, PortalMobileNav, type ActivePortal,
 } from './components/Departments';
 import { AdminUsersPortal } from './components/Admin';
+import { MasterProjectList, ProjectDetail } from './components/Projects';
+import { EmployeeProfile } from './components/EmployeeProfile';
 import {
   DEPARTMENTS, DepartmentKey, RoleKey, FORM_BY_CODE, FormCode,
-  portalAccessForRole, roleName,
+  portalAccessForRole, roleName, isAdminEmail, formatProjectId,
 } from './lib/data';
 import type { FormRecord, FormsApi } from './components/Forms';
+import { FormDetailModal, NewFormModal } from './components/Forms';
+import { RENDERERS, CREATORS, ProjectRecord, FormsContext } from './components/forms/FormRenderers';
+
+/* ──────────────────────────────────────────────────────────────────
+   Notifications
+   ────────────────────────────────────────────────────────────────── */
 
 interface AppNotification {
   id: string;
@@ -42,18 +49,21 @@ function App() {
 
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [forms, setForms] = useState<FormRecord[]>([]);
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [active, setActive] = useState<ActivePortal>('HOME');
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
   const [bellOpen, setBellOpen] = useState(false);
   const bellRef = useRef<HTMLDivElement>(null);
+  const [openFormId, setOpenFormId] = useState<string | null>(null);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newFormPreselect, setNewFormPreselect] = useState<FormCode | undefined>(undefined);
 
   const [splashVisible, setSplashVisible] = useState(() => !sessionStorage.getItem('tarmeem_splash_seen'));
-
-  useEffect(() => {
-    if (!splashVisible) sessionStorage.setItem('tarmeem_splash_seen', 'true');
-  }, [splashVisible]);
+  useEffect(() => { if (!splashVisible) sessionStorage.setItem('tarmeem_splash_seen', 'true'); }, [splashVisible]);
 
   /* ────────── Auth ────────── */
   useEffect(() => {
@@ -62,6 +72,18 @@ function App() {
       if (user) {
         const profile = await getUserProfile(user.uid);
         setRawUserProfile(profile);
+        // Auto-promote configured admin emails on first sign-in if profile exists but isn't admin
+        if (profile && isAdminEmail(user.email) && profile.role !== 'ADMIN') {
+          await updateDoc(doc(db, 'users', user.uid), {
+            role: 'ADMIN',
+            status: 'active',
+            isManager: true,
+            department: profile.department || 'EXEC',
+            auditLog: [...(profile.auditLog || []), {
+              at: new Date().toISOString(), actor: 'system', action: 'auto-promoted-admin', from: { role: profile.role }, to: { role: 'ADMIN' },
+            }],
+          });
+        }
       } else {
         setRawUserProfile(null);
       }
@@ -85,14 +107,18 @@ function App() {
       setForms(snap.docs.map(d => ({ id: d.id, ...d.data() } as FormRecord)));
     }, (err) => console.error('Forms listener error:', err));
 
+    const unsubProjects = onSnapshot(collection(db, 'projects'), (snap) => {
+      setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() } as ProjectRecord)));
+    }, (err) => console.error('Projects listener error:', err));
+
     const unsubNotifs = onSnapshot(collection(db, 'notifications'), (snap) => {
       setNotifications(snap.docs.map(d => ({ id: d.id, ...d.data() } as AppNotification)));
     }, (err) => console.error('Notifications listener error:', err));
 
-    return () => { unsubUsers(); unsubForms(); unsubNotifs(); };
+    return () => { unsubUsers(); unsubForms(); unsubProjects(); unsubNotifs(); };
   }, [firebaseUser]);
 
-  /* ────────── Online/Offline ────────── */
+  /* ────────── Online / Bell ────────── */
   useEffect(() => {
     const onOnline = () => setIsOffline(false);
     const onOffline = () => setIsOffline(true);
@@ -100,8 +126,6 @@ function App() {
     window.addEventListener('offline', onOffline);
     return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
   }, []);
-
-  /* ────────── Bell click-out ────────── */
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (bellRef.current && !bellRef.current.contains(e.target as Node)) setBellOpen(false);
@@ -110,19 +134,19 @@ function App() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  /* ────────── Profile guard (Admin uppercase) ────────── */
+  /* ────────── Profile guard (Admin uppercase + email-based admin) ────────── */
   const userProfile: UserProfile | null = useMemo(() => {
     if (!rawUserProfile) return null;
     const r = rawUserProfile.role as string;
-    if (typeof r === 'string' && r.toLowerCase() === 'admin') {
-      return { ...rawUserProfile, role: 'ADMIN' } as UserProfile;
+    if (isAdminEmail(rawUserProfile.email) || (typeof r === 'string' && r.toLowerCase() === 'admin')) {
+      return { ...rawUserProfile, role: 'ADMIN', status: 'active' } as UserProfile;
     }
     return rawUserProfile;
   }, [rawUserProfile]);
 
   const isAdmin = userProfile?.role === 'ADMIN';
 
-  /* ────────── Notifications dispatch ────────── */
+  /* ────────── Notifications ────────── */
   const dispatchNotification = useCallback(async (n: {
     text: string; subject?: string; type: string; link?: string; recipients?: string[]; meta?: any;
   }) => {
@@ -153,75 +177,139 @@ function App() {
     try {
       const unread = notifications.filter(n => (n.recipients || []).includes(userId) && !(n.readBy || []).includes(userId));
       for (const n of unread) {
-        await updateDoc(doc(db, 'notifications', n.id as string), { readBy: [...(n.readBy || []), userId] });
+        await updateDoc(doc(db, 'notifications', n.id), { readBy: [...(n.readBy || []), userId] });
       }
     } catch (e) { console.error('Error marking all read:', e); }
   }, [notifications]);
 
-  /* ────────── Forms API ────────── */
+  /* ────────── Workflow Engine ────────── */
 
   const usersByRole = useCallback((role: RoleKey): string[] =>
     users.filter(u => u.status === 'active' && u.role === role).map(u => u.id),
   [users]);
 
-  const createForm = useCallback(async (input: {
-    code: FormCode; user: UserProfile; projectId?: string | null; notes?: string; data?: Record<string, any>; triggeredBy?: string;
-  }): Promise<string | null> => {
+  const usersByDeptManager = useCallback((dept: DepartmentKey): string[] =>
+    users.filter(u => u.status === 'active' && u.department === dept && u.isManager).map(u => u.id),
+  [users]);
+
+  /** مولِّد رقم المشروع TRM-YYYY-NNN — يستخدم Firestore transaction على counter */
+  const generateProjectId = useCallback(async (): Promise<{ projectId: string; serial: number }> => {
+    const year = new Date().getFullYear();
+    const counterRef = doc(db, 'counters', `projects-${year}`);
+    const serial = await runTransaction(db, async (trx) => {
+      const snap = await trx.get(counterRef);
+      const current = snap.exists() ? (snap.data().value || 0) : 0;
+      const next = current + 1;
+      trx.set(counterRef, { value: next, year }, { merge: true });
+      return next;
+    });
+    return { projectId: formatProjectId(year, serial), serial };
+  }, []);
+
+  /** ينشئ سجل مشروع في مجموعة projects ويعيد المعرّف */
+  const createProject = useCallback(async (data: Partial<ProjectRecord>): Promise<string | null> => {
+    try {
+      const now = new Date().toISOString();
+      const ref = await addDoc(collection(db, 'projects'), {
+        ...data,
+        createdAt: now, updatedAt: now,
+        progressPct: data.progressPct || 0,
+        phase: data.phase || 'RESEARCH',
+      });
+      await updateDoc(ref, { id: ref.id });
+      await dispatchNotification({
+        text: `تم إنشاء مشروع جديد ${data.projectId} للمستفيد ${data.beneficiaryName}`,
+        subject: `${data.projectId} — مشروع جديد`,
+        type: 'project_created',
+        recipients: usersByDeptManager('PROJECTS'),
+        link: ref.id,
+        meta: { projectId: data.projectId, projectRefId: ref.id },
+      });
+      return ref.id;
+    } catch (e) { console.error('createProject:', e); return null; }
+  }, [dispatchNotification, usersByDeptManager]);
+
+  const updateProject = useCallback(async (projectRefId: string, patch: Partial<ProjectRecord>) => {
+    try { await updateDoc(doc(db, 'projects', projectRefId), { ...patch, updatedAt: new Date().toISOString() }); }
+    catch (e) { console.error('updateProject:', e); }
+  }, []);
+
+  /** يحدّد المرحلة حسب اعتمادات النموذج المكتمل */
+  const phaseTransition = useCallback((code: FormCode): { phase: ProjectRecord['phase']; progress: number } | null => {
+    switch (code) {
+      case 'F-08': return { phase: 'DIAGNOSIS', progress: 25 };
+      case 'F-18': return { phase: 'EVACUATION', progress: 35 };
+      case 'F-85': return { phase: 'TENDERING', progress: 50 };
+      case 'F-14': return { phase: 'EXECUTION', progress: 65 };
+      case 'F-07': return { phase: 'CLOSED', progress: 100 };
+      default: return null;
+    }
+  }, []);
+
+  const createForm: FormsApi['createForm'] = useCallback(async (input) => {
     try {
       const def = FORM_BY_CODE[input.code];
       if (!def) return null;
       const role = input.user.role as RoleKey;
-      // المُنشِئ هو الخطوة الأولى، ويُحتسب اعتماده تلقائياً
       const startIdx = def.approvalChain[0] === role ? 1 : 0;
       const initialApprovals = startIdx === 1 ? [{
-        role,
-        actorId: input.user.id,
-        at: new Date().toISOString(),
-        decision: 'approved' as const,
-        note: 'إنشاء',
+        role, actorId: input.user.id, actorName: input.user.fullName,
+        at: new Date().toISOString(), decision: 'approved' as const, note: 'إنشاء',
       }] : [];
+
+      // إذا كان F-08 — أسنده لمهندس التشخيص الخاص بالمشروع تلقائياً
+      let assigneeId = input.assigneeId || null;
+      if (def.code === 'F-08' && input.projectRefId) {
+        const project = projects.find(p => p.id === input.projectRefId);
+        if (project?.diagnosisEngineerId) assigneeId = project.diagnosisEngineerId;
+      }
 
       const rec: Omit<FormRecord, 'id'> = {
         code: def.code,
         title: def.title,
         projectId: input.projectId || null,
+        projectRefId: input.projectRefId || null,
+        beneficiaryName: input.beneficiaryName || '',
         status: startIdx >= def.approvalChain.length ? 'approved' : 'pending',
         approvalIndex: startIdx,
         approvalChain: def.approvalChain,
         approvals: initialApprovals,
         createdBy: input.user.id,
+        createdByName: input.user.fullName,
         createdByRole: role,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         ownerDept: def.ownerDept,
         bridgesTo: def.bridgesTo || [],
-        refKey: def.refKey,
         notes: input.notes || '',
         data: input.data || {},
-        triggeredBy: input.triggeredBy,
+        triggeredBy: input.triggeredBy || null,
+        assigneeId,
+        files: input.files || [],
+        stepStartedAt: new Date().toISOString(),
       };
       const ref = await addDoc(collection(db, 'forms'), rec);
       await updateDoc(ref, { id: ref.id });
 
-      // إشعار الدور التالي إن وُجد، أو الإدارات الجسرية إن لم يكن هناك سلسلة
+      // إشعار التالي
       const nextRole = def.approvalChain[startIdx];
       if (nextRole) {
-        const recipients = usersByRole(nextRole);
+        const recipients = assigneeId ? [assigneeId] : usersByRole(nextRole);
         await dispatchNotification({
-          text: `طلب جديد بانتظار اعتمادك: ${def.code} ${def.title}`,
+          text: `طلب جديد بانتظار اعتمادك: ${def.code} ${def.title}${input.beneficiaryName ? ' — ' + input.beneficiaryName : ''}`,
           subject: `${def.code} — ${def.title}`,
           type: 'form_pending',
           recipients,
           link: ref.id,
-          meta: { formId: ref.id, code: def.code },
+          meta: { formId: ref.id, code: def.code, projectId: input.projectId },
         });
       }
-      // إشعار الإدارات الجسرية
+      // إشعار جسور
       for (const bridge of (def.bridgesTo || [])) {
-        const bridgeRecipients = users.filter(u => u.status === 'active' && u.department === bridge && u.isManager).map(u => u.id);
+        const bridgeRecipients = usersByDeptManager(bridge);
         if (bridgeRecipients.length > 0) {
           await dispatchNotification({
-            text: `إخطار بنموذج جديد جسر إلى إدارتك: ${def.code} ${def.title}`,
+            text: `إخطار جسري إلى إدارتك: ${def.code} ${def.title}`,
             subject: `${def.code} — جسر`,
             type: 'form_bridge',
             recipients: bridgeRecipients,
@@ -231,25 +319,23 @@ function App() {
         }
       }
       return ref.id;
-    } catch (e) {
-      console.error('Error creating form:', e);
-      return null;
-    }
-  }, [dispatchNotification, usersByRole, users]);
+    } catch (e) { console.error('createForm:', e); return null; }
+  }, [dispatchNotification, usersByRole, usersByDeptManager, projects]);
 
+  /** إجراءات الاعتماد المركزية */
   const advanceForm = useCallback(async (
-    formId: string,
-    user: UserProfile,
-    decision: 'approved' | 'rejected' | 'deferred',
-    note?: string,
+    formId: string, user: UserProfile, decision: 'approved' | 'rejected' | 'deferred', note?: string,
+    dataPatch?: Record<string, any>,
   ) => {
     const rec = forms.find(f => f.id === formId);
     if (!rec) return;
     const myRole = user.role as RoleKey;
     const expected = rec.approvalChain[rec.approvalIndex];
     if (expected !== myRole && user.role !== 'ADMIN') return;
+    if (rec.assigneeId && rec.assigneeId !== user.id && user.role !== 'ADMIN') return;
 
-    const newApproval = { role: expected, actorId: user.id, at: new Date().toISOString(), decision, note };
+    const now = new Date().toISOString();
+    const newApproval = { role: expected, actorId: user.id, actorName: user.fullName, at: now, decision, note };
     let nextStatus: FormRecord['status'] = rec.status;
     let nextIndex = rec.approvalIndex;
 
@@ -262,63 +348,158 @@ function App() {
       nextStatus = 'deferred';
     }
 
+    const patch: any = {
+      approvals: [...rec.approvals, newApproval],
+      approvalIndex: nextIndex,
+      status: nextStatus,
+      updatedAt: now,
+      stepStartedAt: now,
+    };
+    if (dataPatch) {
+      patch.data = { ...(rec.data || {}), ...(dataPatch as any) };
+      // استخراج projectId/projectRefId من dataPatch
+      if (dataPatch.projectId) patch.projectId = dataPatch.projectId;
+      if (dataPatch.projectRefId) patch.projectRefId = dataPatch.projectRefId;
+    }
+
     try {
-      await updateDoc(doc(db, 'forms', formId), {
-        approvals: [...rec.approvals, newApproval],
-        approvalIndex: nextIndex,
-        status: nextStatus,
-        updatedAt: new Date().toISOString(),
+      await updateDoc(doc(db, 'forms', formId), patch);
+    } catch (e) { console.error('advanceForm:', e); return; }
+
+    // إشعار المنشئ
+    if (decision !== 'approved' || nextStatus === 'approved') {
+      await dispatchNotification({
+        text: `${decision === 'approved' ? 'تم اعتماد' : decision === 'rejected' ? 'تم رفض' : 'تم تأجيل'} نموذجك ${rec.code} ${rec.title}`,
+        subject: `${rec.code} — ${decision}`,
+        type: `form_${decision}`,
+        recipients: [rec.createdBy],
+        link: formId,
+        meta: { formId, code: rec.code, decision },
       });
+    }
 
-      // إشعار المنشئ بالنتيجة
-      if (decision !== 'approved' || nextStatus === 'approved') {
-        await dispatchNotification({
-          text: `${decision === 'approved' ? 'تم اعتماد' : decision === 'rejected' ? 'تم رفض' : 'تم تأجيل'} نموذجك ${rec.code} ${rec.title}`,
-          subject: `${rec.code} — ${decision === 'approved' ? 'اعتماد' : decision === 'rejected' ? 'رفض' : 'تأجيل'}`,
-          type: `form_${decision}`,
-          recipients: [rec.createdBy],
-          link: formId,
-          meta: { formId, code: rec.code, decision },
-        });
-      }
+    // إشعار التالي
+    if (nextStatus === 'pending' && nextIndex < rec.approvalChain.length) {
+      const nextRole = rec.approvalChain[nextIndex];
+      const recipients = (rec.code === 'F-08' && rec.assigneeId) ? [rec.assigneeId] : usersByRole(nextRole);
+      await dispatchNotification({
+        text: `طلب بانتظار اعتمادك: ${rec.code} ${rec.title}`,
+        subject: `${rec.code} — ${rec.title}`,
+        type: 'form_pending',
+        recipients,
+        link: formId,
+        meta: { formId, code: rec.code },
+      });
+    }
 
-      // إشعار الدور التالي
-      if (nextStatus === 'pending' && nextIndex < rec.approvalChain.length) {
-        const nextRole = rec.approvalChain[nextIndex];
-        await dispatchNotification({
-          text: `طلب بانتظار اعتمادك: ${rec.code} ${rec.title}`,
-          subject: `${rec.code} — ${rec.title}`,
-          type: 'form_pending',
-          recipients: usersByRole(nextRole),
-          link: formId,
-          meta: { formId, code: rec.code },
-        });
-      }
-
-      // إطلاق النماذج التابعة عند الاعتماد النهائي
-      if (nextStatus === 'approved') {
-        const def = FORM_BY_CODE[rec.code];
-        for (const trig of (def?.triggers || [])) {
-          // إنشاء بشكل تلقائي تحت اسم النظام (المنشئ الأصلي)
+    // عند الاعتماد النهائي
+    if (nextStatus === 'approved') {
+      // تحديث المرحلة ونسبة المشروع (إن وجد)
+      if (rec.projectRefId) {
+        const t = phaseTransition(rec.code);
+        if (t) await updateProject(rec.projectRefId, { phase: t.phase, progressPct: t.progress });
+        // F-08: إذا safetyHazard=true ⇒ يفتح F-18 و F-22
+        if (rec.code === 'F-08' && rec.data?.safetyHazard) {
           await createForm({
-            code: trig,
-            user: user,
-            projectId: rec.projectId,
-            notes: `أُطلق تلقائياً من ${rec.code}`,
-            triggeredBy: formId,
+            code: 'F-18', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
+            beneficiaryName: rec.beneficiaryName, notes: 'أُطلق تلقائياً من F-08 (سلامة).',
+            triggeredBy: rec.id,
+          });
+        }
+        // F-14: عند milestone تطلق F-15
+        if (rec.code === 'F-14' && rec.data?.milestone) {
+          await createForm({
+            code: 'F-15', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
+            beneficiaryName: rec.beneficiaryName,
+            data: { milestone: rec.data.milestone, amount: 0 },
+            notes: `أُطلق تلقائياً عند بلوغ المحطة ${rec.data.milestone}`,
+            triggeredBy: rec.id,
+          });
+        }
+        if (rec.code === 'F-14' && rec.data?.scopeChange) {
+          await createForm({
+            code: 'F-23', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
+            beneficiaryName: rec.beneficiaryName,
+            data: { items: [], reason: 'تغيير نطاق ميداني' },
+            notes: 'أُطلق تلقائياً من F-14 (تغيير نطاق).',
+            triggeredBy: rec.id,
+          });
+        }
+        // F-85: تحدّث contractor & price على المشروع
+        if (rec.code === 'F-85') {
+          await updateProject(rec.projectRefId, {
+            contractorName: rec.data?.winnerContractor,
+            awardedPrice: rec.data?.winnerPrice,
+          });
+        }
+        // F-07: media trigger
+        if (rec.code === 'F-07' && rec.data?.mediaRequested) {
+          await createForm({
+            code: 'F-52', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
+            beneficiaryName: rec.beneficiaryName,
+            data: { type: 'قبل/بعد', details: 'تم طلب التوثيق من شهادة التسليم.' },
+            notes: 'أُطلق تلقائياً من F-07.',
+            triggeredBy: rec.id,
           });
         }
       }
-    } catch (e) { console.error('Error advancing form:', e); }
-  }, [forms, dispatchNotification, usersByRole, createForm]);
+
+      // F-18: ينشئ F-22 آلياً
+      if (rec.code === 'F-18') {
+        await createForm({
+          code: 'F-22', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
+          beneficiaryName: rec.beneficiaryName,
+          data: { evacDate: rec.data?.evacDate, returnDate: rec.data?.returnDate, city: '' },
+          notes: 'أُطلق تلقائياً مع F-18.',
+          triggeredBy: rec.id,
+        });
+      }
+
+      // التحريك التلقائي حسب triggers الموجودة في FORMS
+      const def = FORM_BY_CODE[rec.code];
+      for (const trig of (def?.triggers || [])) {
+        // F-03 → F-08 يُعالَج خصيصاً (يحتاج إسناد المهندس عبر F-03 transfer)
+        if (rec.code === 'F-03' && trig === 'F-08') {
+          // F-08 سيُنشأ يدوياً عبر F03Renderer.transferToProjects عبر createProject + createForm
+          continue;
+        }
+        // عام: ينشئ النموذج كمسودة لاحقة (نظري — في هذا المسار نُترك يدوياً)
+      }
+    }
+  }, [forms, dispatchNotification, usersByRole, phaseTransition, updateProject, createForm]);
+
+  const updateFormData: FormsApi['updateFormData'] = useCallback(async (formId, dataPatch) => {
+    const rec = forms.find(f => f.id === formId);
+    if (!rec) return;
+    await updateDoc(doc(db, 'forms', formId), { data: { ...(rec.data || {}), ...dataPatch }, updatedAt: new Date().toISOString() });
+  }, [forms]);
+
+  const attachFiles: FormsApi['attachFiles'] = useCallback(async (formId, files) => {
+    const rec = forms.find(f => f.id === formId);
+    if (!rec) return;
+    await updateDoc(doc(db, 'forms', formId), { files: [...(rec.files || []), ...(files || [])], updatedAt: new Date().toISOString() });
+  }, [forms]);
 
   const formsApi: FormsApi = useMemo(() => ({
     forms,
     createForm,
-    approveForm: (id, user, note) => advanceForm(id, user, 'approved', note),
+    approveForm: (id, user, note, patch) => advanceForm(id, user, 'approved', note, patch),
     rejectForm: (id, user, note) => advanceForm(id, user, 'rejected', note),
     deferForm: (id, user, note) => advanceForm(id, user, 'deferred', note),
-  }), [forms, createForm, advanceForm]);
+    updateFormData,
+    attachFiles,
+  }), [forms, createForm, advanceForm, updateFormData, attachFiles]);
+
+  /* ────────── Forms context for renderers ────────── */
+  const formsContext: FormsContext = useMemo(() => ({
+    projects,
+    generateProjectId,
+    createProject,
+    updateProject,
+    findProjectForm: (projectRefId, code) =>
+      formsApi.forms.find(f => f.projectRefId === projectRefId && f.code === code) || null,
+    userById: (id) => users.find(u => u.id === id),
+  }), [projects, generateProjectId, createProject, updateProject, formsApi.forms, users]);
 
   /* ────────── Users API ────────── */
   const approveUser = useCallback(async (userId: string, edits: any, approverId: string) => {
@@ -327,18 +508,27 @@ function App() {
       const auditEntry = { at: new Date().toISOString(), actor: approverId, action: 'approved', from: { status: 'pending' }, to: { ...edits, status: 'active' } };
       await updateDoc(doc(db, 'users', userId), {
         ...edits, status: 'active', approvedBy: approverId, approvedAt: new Date().toISOString(),
+        needsRoleReset: false,
         auditLog: [...(existing?.auditLog || []), auditEntry],
       });
-    } catch (e) { console.error('Error approving user:', e); }
-  }, [users]);
+      // notify the user
+      await dispatchNotification({
+        text: `تم تفعيل حسابك بدور ${roleName(edits.role)}.`,
+        subject: 'تفعيل الحساب',
+        type: 'account_approved',
+        recipients: [userId],
+        meta: { role: edits.role },
+      });
+    } catch (e) { console.error('approveUser:', e); }
+  }, [users, dispatchNotification]);
 
   const updateUser = useCallback(async (userId: string, edits: any, actorId: string) => {
     try {
       const existing = users.find(u => u.id === userId);
       if (!existing) return;
-      const auditEntry = { at: new Date().toISOString(), actor: actorId, action: 'updated', from: existing, to: edits };
+      const auditEntry = { at: new Date().toISOString(), actor: actorId, action: 'updated', from: { role: existing.role, department: existing.department }, to: edits };
       await updateDoc(doc(db, 'users', userId), { ...edits, auditLog: [...(existing.auditLog || []), auditEntry] });
-    } catch (e) { console.error('Error updating user:', e); }
+    } catch (e) { console.error('updateUser:', e); }
   }, [users]);
 
   const deactivateUser = useCallback(async (userId: string, actorId: string, reassignedTo: string) => {
@@ -350,7 +540,7 @@ function App() {
         status: 'deactivated', deactivatedAt: new Date().toISOString(), deactivatedBy: actorId,
         auditLog: [...(existing.auditLog || []), auditEntry],
       });
-    } catch (e) { console.error('Error deactivating user:', e); }
+    } catch (e) { console.error('deactivateUser:', e); }
   }, [users]);
 
   const reactivateUser = useCallback(async (userId: string, actorId: string) => {
@@ -362,23 +552,43 @@ function App() {
         status: 'active', deactivatedAt: null, deactivatedBy: null,
         auditLog: [...(existing.auditLog || []), auditEntry],
       });
-    } catch (e) { console.error('Error reactivating user:', e); }
+    } catch (e) { console.error('reactivateUser:', e); }
   }, [users]);
 
   const rejectUser = useCallback(async (userId: string, _actorId: string, _reason?: string) => {
     try { await deleteDoc(doc(db, 'users', userId)); }
-    catch (e) { console.error('Error rejecting user:', e); }
+    catch (e) { console.error('rejectUser:', e); }
   }, []);
 
-  /* ────────── Allowed portals for current user ────────── */
+  /** يعيد ضبط مستخدم قديم: يضع status=pending ويفرغ role/department */
+  const resetUserRole = useCallback(async (userId: string, actorId: string) => {
+    try {
+      const existing = users.find(u => u.id === userId);
+      if (!existing) return;
+      const auditEntry = { at: new Date().toISOString(), actor: actorId, action: 'role-reset', from: { role: existing.role, department: existing.department }, to: { role: 'PENDING' } };
+      await updateDoc(doc(db, 'users', userId), {
+        role: 'PENDING', department: '', isManager: false,
+        status: 'pending', needsRoleReset: true,
+        auditLog: [...(existing.auditLog || []), auditEntry],
+      });
+    } catch (e) { console.error('resetUserRole:', e); }
+  }, [users]);
+
+  const saveProfile = useCallback(async (userId: string, patch: Partial<UserProfile>) => {
+    try { await updateDoc(doc(db, 'users', userId), patch); }
+    catch (e) { console.error('saveProfile:', e); }
+  }, []);
+
+  /* ────────── Allowed portals ────────── */
   const allowedDepts: DepartmentKey[] = useMemo(() => {
     if (!userProfile) return [];
     if (isAdmin) return DEPARTMENTS.map(d => d.key);
+    if (userProfile.role === 'PENDING') return [];
     return portalAccessForRole(userProfile.role as RoleKey);
   }, [userProfile, isAdmin]);
 
   const myNotifications = useMemo(() =>
-    notifications.filter(n => (n.recipients || []).includes(userProfile?.id || '') || (n.recipients || []).length === 0),
+    notifications.filter(n => (n.recipients || []).includes(userProfile?.id || '')),
     [notifications, userProfile?.id],
   );
   const unreadCount = myNotifications.filter(n => !(n.readBy || []).includes(userProfile?.id || '')).length;
@@ -386,26 +596,31 @@ function App() {
   /* ────────── Render gates ────────── */
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center" dir="rtl">
+      <div className="min-h-screen bg-white dark:bg-slate-950 flex items-center justify-center" dir="rtl">
         <TarmeemLogo variant="stacked" size={60} animated={true} />
       </div>
     );
   }
+  if (!firebaseUser) return <AuthScreen onAuth={() => {}} />;
+  if (userProfile && userProfile.status === 'pending') return <PendingAccountScreen email={firebaseUser.email} onSignOut={() => signOut(auth)} />;
+  if (userProfile && userProfile.status === 'deactivated') return <DeactivatedAccountScreen onSignOut={() => signOut(auth)} />;
 
-  if (!firebaseUser) {
-    return <AuthScreen onAuth={() => {}} />;
-  }
+  /* ────────── Render ────────── */
+  const goToPortal = (p: ActivePortal) => {
+    setActive(p);
+    if (p !== 'PROJECTS_LIST') setActiveProjectId(null);
+    if (p !== 'PROFILE') setActiveProfileId(null);
+  };
+  const openForm = (id: string) => setOpenFormId(id);
+  const openProject = (id: string) => { setActiveProjectId(id); setActive('PROJECTS_LIST'); };
+  const openProfile = (id: string) => { setActiveProfileId(id); setActive('PROFILE'); };
+  const openCreator = (preselect?: FormCode) => { setNewFormPreselect(preselect); setShowNewForm(true); };
 
-  if (userProfile && userProfile.status === 'pending') {
-    return <PendingAccountScreen email={firebaseUser.email} onSignOut={() => signOut(auth)} />;
-  }
-
-  if (userProfile && userProfile.status === 'deactivated') {
-    return <DeactivatedAccountScreen onSignOut={() => signOut(auth)} />;
-  }
-
-  /* ────────── Render layout ────────── */
-  const goToPortal = (p: ActivePortal) => setActive(p);
+  const openRec = openFormId ? formsApi.forms.find(f => f.id === openFormId) || null : null;
+  const activeProject = activeProjectId ? projects.find(p => p.id === activeProjectId) || null : null;
+  const profileTarget = activeProfileId
+    ? users.find(u => u.id === activeProfileId) || null
+    : userProfile;
 
   const renderActive = () => {
     if (!userProfile) return null;
@@ -414,34 +629,49 @@ function App() {
         <DashboardHome
           user={userProfile}
           api={formsApi}
+          projects={projects}
           goToPortal={(d) => setActive(d as ActivePortal)}
+          goToProjects={() => setActive('PROJECTS_LIST')}
+          goToProject={openProject}
           allowedDepts={allowedDepts}
         />
       );
     }
-    if (active === 'EXEC_HUB') {
-      return <ExecutiveHubPanel user={userProfile} users={users} api={formsApi} />;
+    if (active === 'PROJECTS_LIST') {
+      return activeProject ? (
+        <ProjectDetail project={activeProject} user={userProfile} users={users} api={formsApi}
+          onBack={() => setActiveProjectId(null)} onOpenForm={openForm} />
+      ) : (
+        <MasterProjectList user={userProfile} api={formsApi} projects={projects} users={users} onOpenProject={openProject} />
+      );
+    }
+    if (active === 'PROFILE' && profileTarget) {
+      return (
+        <EmployeeProfile profile={profileTarget} currentUser={userProfile} api={formsApi} users={users}
+          onBack={() => { setActiveProfileId(null); if (profileTarget.id !== userProfile.id) setActive('ADMIN'); else setActive('HOME'); }}
+          onOpenForm={openForm} saveProfile={saveProfile} />
+      );
     }
     if (active === 'ADMIN') {
       return (
         <AdminUsersPortal
           users={users}
-          approveUser={approveUser}
-          updateUser={updateUser}
-          deactivateUser={deactivateUser}
-          reactivateUser={reactivateUser}
-          rejectUser={rejectUser}
+          approveUser={approveUser} updateUser={updateUser}
+          deactivateUser={deactivateUser} reactivateUser={reactivateUser}
+          rejectUser={rejectUser} resetUserRole={resetUserRole}
           currentUser={userProfile}
+          onOpenProfile={openProfile}
         />
       );
     }
     const Portal = DEPT_PORTALS[active as DepartmentKey];
-    if (Portal) return <Portal user={userProfile} users={users} api={formsApi} />;
+    if (Portal) return <Portal user={userProfile} users={users} api={formsApi}
+      onOpenForm={openForm} onCreateForm={(c) => openCreator(c)} />;
     return null;
   };
 
   return (
-    <div className="min-h-screen font-sans bg-[#F8F9FA]" dir="rtl">
+    <div className="min-h-screen font-sans bg-[#F8F9FA] dark:bg-slate-950 transition-colors text-gray-900 dark:text-slate-100" dir="rtl">
       <style dangerouslySetInnerHTML={{ __html: `
         @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&display=swap');
         body, .font-sans { font-family: 'Tajawal', system-ui, -apple-system, sans-serif !important; }
@@ -489,14 +719,13 @@ function App() {
         </div>
       )}
 
-      {/* رأس الصفحة */}
       <header className="shadow-md bg-[#4A1F66]">
         <div className="max-w-[1600px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 text-white">
-            <div className="hidden md:block logo-breathe-on-hover cursor-pointer" onClick={() => setActive('HOME')}>
+            <div className="hidden md:block logo-breathe-on-hover cursor-pointer" onClick={() => goToPortal('HOME')}>
               <TarmeemLogo variant="horizontal" size={28} color="white" animated={false} />
             </div>
-            <div className="md:hidden logo-breathe-on-hover cursor-pointer" onClick={() => setActive('HOME')}>
+            <div className="md:hidden logo-breathe-on-hover cursor-pointer" onClick={() => goToPortal('HOME')}>
               <TarmeemLogo variant="icon" size={28} color="white" animated={false} />
             </div>
             <div className="hidden md:block border-r border-white/20 pr-3 mr-3">
@@ -505,8 +734,8 @@ function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            {/* جرس الإشعارات */}
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
             <div className="relative" ref={bellRef}>
               <button onClick={() => setBellOpen(v => !v)} className="relative p-1.5 hover:bg-white/10 rounded-lg transition">
                 <Bell className="w-5 h-5 text-white" />
@@ -517,26 +746,27 @@ function App() {
                 )}
               </button>
               {bellOpen && (
-                <div className="absolute top-full left-0 mt-2 w-80 bg-white shadow-2xl rounded-xl z-50 border border-gray-200 overflow-hidden">
-                  <div className="px-4 py-3 border-b bg-gray-50 flex justify-between items-center">
-                    <span className="font-bold text-gray-700 text-sm">الإشعارات ({myNotifications.length})</span>
+                <div className="absolute top-full left-0 mt-2 w-80 bg-white dark:bg-slate-800 shadow-2xl rounded-xl z-50 border border-gray-200 dark:border-slate-700 overflow-hidden">
+                  <div className="px-4 py-3 border-b dark:border-slate-700 bg-gray-50 dark:bg-slate-900 flex justify-between items-center">
+                    <span className="font-bold text-gray-700 dark:text-slate-200 text-sm">الإشعارات ({myNotifications.length})</span>
                     {unreadCount > 0 && userProfile && (
                       <button onClick={() => markAllNotificationsRead(userProfile.id)}
-                        className="text-[10px] text-[#4A1F66] hover:underline font-bold">تعليم الكل كمقروء</button>
+                        className="text-[10px] text-[#4A1F66] dark:text-purple-300 hover:underline font-bold">تعليم الكل كمقروء</button>
                     )}
                   </div>
                   <div className="max-h-96 overflow-y-auto">
                     {myNotifications.length === 0 ? (
-                      <div className="text-center py-8 text-gray-400 text-xs">لا توجد إشعارات</div>
+                      <div className="text-center py-8 text-gray-400 dark:text-slate-500 text-xs">لا توجد إشعارات</div>
                     ) : (
                       myNotifications.map(n => {
                         const isRead = (n.readBy || []).includes(userProfile?.id || '');
                         return (
                           <div key={n.id} onClick={() => {
-                            if (!isRead && userProfile) markNotificationRead(n.id as string, userProfile.id);
+                            if (!isRead && userProfile) markNotificationRead(n.id, userProfile.id);
+                            if (n.link) setOpenFormId(n.link);
                             setBellOpen(false);
                           }}
-                            className={`px-4 py-3 border-b last:border-0 cursor-pointer hover:bg-gray-50 transition flex gap-2 ${!isRead ? 'bg-blue-50/50' : ''}`}>
+                            className={`px-4 py-3 border-b last:border-0 dark:border-slate-700 cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-900 transition flex gap-2 ${!isRead ? 'bg-blue-50/50 dark:bg-blue-900/20' : ''}`}>
                             <div className="shrink-0 mt-0.5">
                               {n.type === 'form_rejected' || n.type === 'form_late' ? <AlertTriangle className="w-4 h-4 text-orange-500" /> :
                                 n.type === 'form_pending' ? <ClipboardList className="w-4 h-4 text-blue-500" /> :
@@ -544,9 +774,9 @@ function App() {
                                     <Bell className="w-4 h-4 text-gray-500" />}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className={`text-xs leading-relaxed ${!isRead ? 'font-bold text-gray-800' : 'text-gray-600'}`}>{n.text}</div>
+                              <div className={`text-xs leading-relaxed ${!isRead ? 'font-bold text-gray-800 dark:text-slate-100' : 'text-gray-600 dark:text-slate-400'}`}>{n.text}</div>
                               <div className="flex justify-between items-center mt-1">
-                                <span className="text-[10px] text-gray-400">{new Date(n.createdAt).toLocaleDateString('ar-SA')}</span>
+                                <span className="text-[10px] text-gray-400 dark:text-slate-500">{new Date(n.createdAt).toLocaleDateString('ar-SA')}</span>
                               </div>
                             </div>
                             {!isRead && <span className="w-2 h-2 bg-blue-500 rounded-full mt-2 shrink-0" />}
@@ -559,27 +789,22 @@ function App() {
               )}
             </div>
 
-            {/* المستخدم */}
-            <div className="flex items-center gap-2 bg-white/10 border border-white/20 rounded-lg p-1.5">
+            <button onClick={() => goToPortal('PROFILE')} className="flex items-center gap-2 bg-white/10 border border-white/20 rounded-lg p-1.5 hover:bg-white/20 transition">
               <UserIcon className="w-4 h-4 text-white" />
               <span className="text-white font-bold text-xs">{userProfile?.fullName}</span>
               <span className="hidden md:inline text-white/60 text-[10px]">— {roleName(userProfile?.role || '')}</span>
-            </div>
+            </button>
             <button onClick={() => signOut(auth)} className="text-white/60 hover:text-white text-[10px] font-bold hover:underline transition">خروج</button>
           </div>
         </div>
       </header>
 
-      {/* جسم الصفحة: شريط جانبي + المحتوى */}
       <div className="max-w-[1600px] mx-auto flex">
         {userProfile && (
           <PortalSidebar
-            active={active}
-            onChange={goToPortal}
-            user={userProfile}
-            api={formsApi}
-            isAdmin={isAdmin}
-            allowedDepts={allowedDepts}
+            active={active} onChange={goToPortal}
+            user={userProfile} api={formsApi}
+            isAdmin={isAdmin} allowedDepts={allowedDepts}
           />
         )}
         <main className="flex-1 px-4 py-6 pb-24 md:pb-8 min-w-0">
@@ -588,10 +813,23 @@ function App() {
       </div>
 
       {userProfile && (
-        <PortalMobileNav active={active} onChange={goToPortal} user={userProfile} isAdmin={isAdmin} allowedDepts={allowedDepts} />
+        <PortalMobileNav active={active} onChange={goToPortal} isAdmin={isAdmin} allowedDepts={allowedDepts} />
+      )}
+
+      {openRec && userProfile && (
+        <FormDetailModal rec={openRec} user={userProfile} api={formsApi} users={users}
+          registry={RENDERERS} context={formsContext}
+          onClose={() => setOpenFormId(null)} />
+      )}
+      {showNewForm && userProfile && (
+        <NewFormModal user={userProfile} api={formsApi} users={users}
+          context={formsContext} creators={CREATORS} preselect={newFormPreselect}
+          onClose={() => { setShowNewForm(false); setNewFormPreselect(undefined); }} />
       )}
     </div>
   );
 }
 
-export default App;
+export default function AppWithTheme() {
+  return <ThemeProvider><App /></ThemeProvider>;
+}

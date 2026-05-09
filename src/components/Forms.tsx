@@ -1,42 +1,55 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Send, CheckCircle, XCircle, Clock, ArrowLeft,
-  AlertTriangle, Inbox, Plus, GitBranch, ListChecks, X
+  Send, CheckCircle, XCircle, Clock, ArrowLeft, AlertTriangle, Inbox, Plus,
+  GitBranch, ListChecks, X, Activity,
 } from 'lucide-react';
 import {
-  FORMS, FORM_BY_CODE, FORM_STATUS_LABELS, FORM_STATUS_COLORS,
+  FORMS, FORM_BY_CODE, FORM_STATUS_LABELS,
   FormCode, FormDef, FormStatus, RoleKey, roleName,
-  DepartmentKey, departmentName,
+  DepartmentKey, departmentName, slaStatus,
 } from '../lib/data';
-import { Card } from './ui';
+import { Card, Pill, EmptyState } from './ui';
 import type { UserProfile } from './Auth';
 
 /* ──────────────────────────────────────────────────────────────────
-   Types
+   Data Types
    ────────────────────────────────────────────────────────────────── */
+
+export interface FormApproval {
+  role: RoleKey;
+  actorId: string;
+  actorName?: string;
+  at: string;
+  decision: 'approved' | 'rejected' | 'deferred';
+  note?: string;
+}
 
 export interface FormRecord {
   id: string;
   code: FormCode;
   title: string;
-  projectId?: string | null;
+  projectId?: string | null;          // مرجع المشروع (TRM-YYYY-NNN) إن وجد
+  projectRefId?: string | null;       // معرّف وثيقة المشروع داخلياً
+  beneficiaryName?: string;
   status: FormStatus;
-  /** الترتيب الحالي ضمن سلسلة الاعتماد: المؤشر يدل على الدور المنتظَر */
   approvalIndex: number;
   approvalChain: RoleKey[];
-  /** قائمة الاعتمادات السابقة */
-  approvals: { role: RoleKey; actorId: string; at: string; decision: 'approved' | 'rejected' | 'deferred'; note?: string }[];
+  approvals: FormApproval[];
   createdBy: string;
+  createdByName?: string;
   createdByRole: RoleKey;
   createdAt: string;
   updatedAt: string;
   ownerDept: DepartmentKey;
   bridgesTo: DepartmentKey[];
-  refKey?: string;
   notes?: string;
-  /** بيانات النموذج (سيتم لاحقاً تخصيصها لكل نموذج) */
   data?: Record<string, any>;
-  triggeredBy?: string; // مرجع نموذج آخر أطلق هذا
+  triggeredBy?: string | null;
+  /** أحياناً نُسند النموذج لمستخدم محدد (مثل F-08 عند إسناد المهندس) */
+  assigneeId?: string | null;
+  files?: { name: string; url?: string; size?: number; uploadedAt?: string }[];
+  /** آخر وقت حدث فيه تغيير الدور المنتظر — لحساب SLA */
+  stepStartedAt?: string;
 }
 
 export interface FormsApi {
@@ -45,13 +58,19 @@ export interface FormsApi {
     code: FormCode;
     user: UserProfile;
     projectId?: string | null;
+    projectRefId?: string | null;
+    beneficiaryName?: string;
     notes?: string;
     data?: Record<string, any>;
-    triggeredBy?: string;
+    triggeredBy?: string | null;
+    assigneeId?: string | null;
+    files?: FormRecord['files'];
   }) => Promise<string | null>;
-  approveForm: (formId: string, user: UserProfile, note?: string) => Promise<void>;
+  approveForm: (formId: string, user: UserProfile, note?: string, dataPatch?: Record<string, any>) => Promise<void>;
   rejectForm: (formId: string, user: UserProfile, note?: string) => Promise<void>;
   deferForm: (formId: string, user: UserProfile, note?: string) => Promise<void>;
+  updateFormData: (formId: string, dataPatch: Record<string, any>) => Promise<void>;
+  attachFiles: (formId: string, files: FormRecord['files']) => Promise<void>;
 }
 
 /* ──────────────────────────────────────────────────────────────────
@@ -59,8 +78,7 @@ export interface FormsApi {
    ────────────────────────────────────────────────────────────────── */
 
 export function formCanBeOriginatedBy(form: FormDef, role: RoleKey): boolean {
-  const origins = Array.isArray(form.originRole) ? form.originRole : [form.originRole];
-  return origins.includes(role);
+  return form.originRoles.includes(role);
 }
 
 export function formAwaitsRole(record: FormRecord, role: RoleKey): boolean {
@@ -69,33 +87,53 @@ export function formAwaitsRole(record: FormRecord, role: RoleKey): boolean {
   return next === role;
 }
 
+export function formAwaitsUser(record: FormRecord, user: UserProfile): boolean {
+  if (record.status !== 'pending') return false;
+  const nextRole = record.approvalChain[record.approvalIndex];
+  if (nextRole !== user.role) return false;
+  // إذا كان مُسنَداً لمستخدم محدد، فقط هو يستطيع الاعتماد
+  if (record.assigneeId && record.assigneeId !== user.id) return false;
+  return true;
+}
+
 /* ──────────────────────────────────────────────────────────────────
-   FormCard — مختصر سطري للنموذج
+   Compact summary card
    ────────────────────────────────────────────────────────────────── */
 
-export const FormCard: React.FC<{ rec: FormRecord; onOpen: () => void; highlight?: boolean }> = ({ rec, onOpen, highlight }) => {
+export const FormCard: React.FC<{
+  rec: FormRecord; onOpen: () => void; highlight?: boolean;
+}> = ({ rec, onOpen, highlight }) => {
   const def = FORM_BY_CODE[rec.code];
   const nextRole = rec.approvalChain[rec.approvalIndex];
+  const sla = slaStatus(rec.stepStartedAt || rec.updatedAt, def?.slaDays);
   return (
     <button onClick={onOpen}
       className={`w-full text-right rounded-lg border p-3 hover:shadow-md transition flex items-start gap-3
-        ${highlight ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-white hover:border-[#4A1F66]/30'}`}>
-      <div className="w-9 h-9 rounded-lg bg-[#4A1F66]/10 text-[#4A1F66] flex items-center justify-center font-bold text-[11px] shrink-0">
+        ${highlight
+          ? 'border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700'
+          : 'border-gray-200 bg-white hover:border-[#4A1F66]/30 dark:bg-slate-800 dark:border-slate-700'}`}>
+      <div className="w-10 h-10 rounded-lg bg-[#4A1F66]/10 dark:bg-purple-900/40 text-[#4A1F66] dark:text-purple-300 flex items-center justify-center font-bold text-[11px] shrink-0">
         {rec.code}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-bold text-gray-800 truncate">{rec.title || def?.title}</span>
-          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${FORM_STATUS_COLORS[rec.status]}`}>
-            {FORM_STATUS_LABELS[rec.status]}
-          </span>
+          <span className="text-sm font-bold text-gray-800 dark:text-slate-100 truncate">{rec.title || def?.title}</span>
+          <Pill tone={
+            rec.status === 'approved' ? 'green' :
+            rec.status === 'rejected' ? 'red' :
+            rec.status === 'pending'  ? 'amber' :
+            rec.status === 'deferred' ? 'blue' : 'gray'
+          }>{FORM_STATUS_LABELS[rec.status]}</Pill>
+          {rec.projectId && <Pill tone="purple">{rec.projectId}</Pill>}
         </div>
-        <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-500">
-          <span>إدارة: {departmentName(rec.ownerDept)}</span>
+        <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-500 dark:text-slate-400 flex-wrap">
+          {rec.beneficiaryName && <span>المستفيد: {rec.beneficiaryName}</span>}
           {rec.status === 'pending' && nextRole && (
-            <span className="text-amber-700 font-bold">بانتظار: {roleName(nextRole)}</span>
+            <span className="text-amber-700 dark:text-amber-300 font-bold">بانتظار: {roleName(nextRole)}</span>
           )}
-          {rec.refKey && <span className="text-gray-400">{rec.refKey}</span>}
+          {rec.status === 'pending' && def?.slaDays && (
+            <span className={`font-bold ${sla.tone === 'late' ? 'text-red-600' : sla.tone === 'warn' ? 'text-orange-600' : 'text-gray-500'}`}>{sla.text}</span>
+          )}
         </div>
       </div>
       <ArrowLeft className="w-4 h-4 text-gray-400 mt-1 shrink-0" />
@@ -104,18 +142,129 @@ export const FormCard: React.FC<{ rec: FormRecord; onOpen: () => void; highlight
 };
 
 /* ──────────────────────────────────────────────────────────────────
-   FormDetailModal — عرض النموذج وعملياته
+   Approval chain visual
    ────────────────────────────────────────────────────────────────── */
 
+export const ApprovalChainView: React.FC<{ rec: FormRecord }> = ({ rec }) => (
+  <ol className="space-y-2">
+    {rec.approvalChain.map((r, idx) => {
+      const passed = idx < rec.approvalIndex;
+      const current = idx === rec.approvalIndex && rec.status === 'pending';
+      const approval = rec.approvals.find(a => a.role === r);
+      return (
+        <li key={r + '-' + idx}
+          className={`flex items-center gap-3 p-2 rounded-lg border
+            ${current ? 'border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700'
+              : passed ? 'border-green-200 bg-green-50 dark:bg-green-900/20 dark:border-green-800'
+                : 'border-gray-200 dark:border-slate-700'}`}>
+          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold
+            ${current ? 'bg-amber-500 text-white' :
+              passed ? 'bg-green-500 text-white' :
+                'bg-gray-200 text-gray-500 dark:bg-slate-700 dark:text-slate-400'}`}>
+            {idx + 1}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-gray-800 dark:text-slate-200">{roleName(r)}</p>
+            {approval && (
+              <p className="text-[10px] text-gray-500 dark:text-slate-400">
+                {approval.decision === 'approved' ? 'اعتمد' : approval.decision === 'rejected' ? 'رفض' : 'أجَّل'}{' '}
+                {new Date(approval.at).toLocaleString('ar-SA')}{approval.actorName ? ` — ${approval.actorName}` : ''}
+                {approval.note ? ` — ${approval.note}` : ''}
+              </p>
+            )}
+          </div>
+          {passed && <CheckCircle className="w-4 h-4 text-green-500" />}
+          {current && <Clock className="w-4 h-4 text-amber-500" />}
+        </li>
+      );
+    })}
+  </ol>
+);
+
+/* ──────────────────────────────────────────────────────────────────
+   Inbox panel (forms awaiting current user)
+   ────────────────────────────────────────────────────────────────── */
+
+export const InboxPanel: React.FC<{
+  user: UserProfile; api: FormsApi; onOpen: (id: string) => void;
+}> = ({ user, api, onOpen }) => {
+  const inbox = useMemo(() => api.forms.filter(f => formAwaitsUser(f, user)), [api.forms, user]);
+  return (
+    <Card title={`صندوق الوارد (${inbox.length})`} icon={Inbox}>
+      {inbox.length === 0 ? (
+        <EmptyState icon={CheckCircle} title="لا توجد طلبات معلّقة على دورك حالياً" />
+      ) : (
+        <div className="space-y-2">
+          {inbox.map(f => <FormCard key={f.id} rec={f} highlight onOpen={() => onOpen(f.id)} />)}
+        </div>
+      )}
+    </Card>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   Generic "open form" detail wrapper — renders specialized form when
+   a renderer is registered, else generic actions panel.
+   ────────────────────────────────────────────────────────────────── */
+
+export type FormRenderer = React.FC<{
+  rec: FormRecord;
+  user: UserProfile;
+  api: FormsApi;
+  users: UserProfile[];
+  context: any;
+  onClose: () => void;
+}>;
+
+export interface FormRendererRegistry {
+  [code: string]: FormRenderer | undefined;
+}
+
 export const FormDetailModal: React.FC<{
-  rec: FormRecord; user: UserProfile; api: FormsApi; users: UserProfile[]; onClose: () => void;
-}> = ({ rec, user, api, users, onClose }) => {
+  rec: FormRecord;
+  user: UserProfile;
+  api: FormsApi;
+  users: UserProfile[];
+  registry: FormRendererRegistry;
+  context: any;
+  onClose: () => void;
+}> = ({ rec, user, api, users, registry, context, onClose }) => {
+  const def = FORM_BY_CODE[rec.code];
+  const Renderer = registry[rec.code];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4" dir="rtl">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[95vh] overflow-hidden flex flex-col">
+        <div className="bg-gradient-to-l from-[#4A1F66] to-[#6B3D87] px-5 py-4 flex items-center justify-between text-white">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-white/15 flex items-center justify-center font-bold text-xs">{rec.code}</div>
+            <div>
+              <h2 className="font-bold text-lg">{rec.title || def?.title}</h2>
+              <p className="text-[11px] text-white/70">{def?.titleEn} {rec.projectId && `· ${rec.projectId}`}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/15 transition"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="overflow-y-auto p-5 flex-1">
+          {Renderer ? (
+            <Renderer rec={rec} user={user} api={api} users={users} context={context} onClose={onClose} />
+          ) : (
+            <DefaultFormView rec={rec} user={user} api={api} onClose={onClose} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const DefaultFormView: React.FC<{
+  rec: FormRecord; user: UserProfile; api: FormsApi; onClose: () => void;
+}> = ({ rec, user, api, onClose }) => {
   const def = FORM_BY_CODE[rec.code];
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
-  const isAdmin = user.role === 'ADMIN';
-  const awaitsMe = !isAdmin && (formAwaitsRole(rec, user.role as RoleKey) || (user.isManager && rec.approvalChain[rec.approvalIndex] === user.role));
-
+  const awaits = formAwaitsUser(rec, user);
   const act = async (kind: 'approve' | 'reject' | 'defer') => {
     setBusy(true);
     try {
@@ -125,226 +274,182 @@ export const FormDetailModal: React.FC<{
       onClose();
     } finally { setBusy(false); }
   };
-
-  const userById = (id: string) => users.find(u => u.id === id);
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" dir="rtl">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
-        <div className="bg-gradient-to-l from-[#4A1F66] to-[#6B3D87] px-5 py-4 flex items-center justify-between text-white">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-white/15 flex items-center justify-center font-bold text-xs">
-              {rec.code}
-            </div>
-            <div>
-              <h2 className="font-bold text-lg">{rec.title || def?.title}</h2>
-              <p className="text-[11px] text-white/70">{def?.titleEn}</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/15 transition"><X className="w-5 h-5" /></button>
+    <div className="space-y-5">
+      {def?.description && (
+        <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 text-xs text-blue-900 dark:text-blue-200 leading-relaxed">
+          {def.description}
         </div>
-
-        <div className="overflow-y-auto p-5 space-y-5">
-          {/* Meta */}
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
-            <div className="bg-gray-50 rounded-lg p-3">
-              <p className="text-gray-500 mb-1">الحالة</p>
-              <span className={`inline-block px-2 py-0.5 rounded-full font-bold ${FORM_STATUS_COLORS[rec.status]}`}>{FORM_STATUS_LABELS[rec.status]}</span>
-            </div>
-            <div className="bg-gray-50 rounded-lg p-3">
-              <p className="text-gray-500 mb-1">الإدارة المالكة</p>
-              <p className="font-bold text-gray-800">{departmentName(rec.ownerDept)}</p>
-            </div>
-            <div className="bg-gray-50 rounded-lg p-3">
-              <p className="text-gray-500 mb-1">المرجع</p>
-              <p className="font-bold text-gray-800">{rec.refKey || '—'}</p>
-            </div>
-            <div className="bg-gray-50 rounded-lg p-3 col-span-2 md:col-span-3">
-              <p className="text-gray-500 mb-1">المُنشِئ</p>
-              <p className="font-bold text-gray-800">
-                {userById(rec.createdBy)?.fullName || rec.createdBy} <span className="text-gray-400 text-[10px]">— {roleName(rec.createdByRole)}</span>
-              </p>
-            </div>
-          </div>
-
-          {/* Description */}
-          {def?.description && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 leading-relaxed">
-              {def.description}
-            </div>
-          )}
-
-          {/* Bridges */}
-          {(rec.bridgesTo || []).length > 0 && (
-            <div>
-              <p className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1.5">
-                <GitBranch className="w-4 h-4" /> الجسور (إدارات أخرى تتلقى نسخة)
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {rec.bridgesTo.map(b => (
-                  <span key={b} className="px-2.5 py-1 rounded-full bg-pink-50 text-pink-700 text-[11px] font-bold border border-pink-200">
-                    {departmentName(b)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Approval chain */}
-          <div>
-            <p className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1.5">
-              <ListChecks className="w-4 h-4" /> سلسلة الاعتماد
-            </p>
-            <ol className="space-y-2">
-              {rec.approvalChain.map((r, idx) => {
-                const passed = idx < rec.approvalIndex;
-                const current = idx === rec.approvalIndex && rec.status === 'pending';
-                const approval = rec.approvals.find(a => a.role === r);
-                return (
-                  <li key={r + idx} className={`flex items-center gap-3 p-2 rounded-lg border
-                    ${current ? 'border-amber-300 bg-amber-50' : passed ? 'border-green-200 bg-green-50' : 'border-gray-200'}`}>
-                    <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold
-                      ${current ? 'bg-amber-500 text-white' : passed ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
-                      {idx + 1}
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-sm font-bold text-gray-800">{roleName(r)}</p>
-                      {approval && (
-                        <p className="text-[10px] text-gray-500">
-                          {approval.decision === 'approved' ? 'اعتمد' : approval.decision === 'rejected' ? 'رفض' : 'أجَّل'}{' '}
-                          {new Date(approval.at).toLocaleString('ar-SA')}{approval.note ? ` — ${approval.note}` : ''}
-                        </p>
-                      )}
-                    </div>
-                    {passed && <CheckCircle className="w-4 h-4 text-green-500" />}
-                    {current && <Clock className="w-4 h-4 text-amber-500" />}
-                  </li>
-                );
-              })}
-            </ol>
-          </div>
-
-          {/* Notes */}
-          {rec.notes && (
-            <div>
-              <p className="text-xs font-bold text-gray-600 mb-1">ملاحظات المُنشِئ</p>
-              <p className="text-sm bg-gray-50 rounded-lg p-3 text-gray-700">{rec.notes}</p>
-            </div>
-          )}
-
-          {/* Approver actions */}
-          {awaitsMe && (
-            <div className="border-t pt-4 space-y-3">
-              <div>
-                <label className="text-xs font-bold text-gray-700">ملاحظتك على القرار</label>
-                <textarea value={note} onChange={e => setNote(e.target.value)} rows={3}
-                  placeholder="اختياري..."
-                  className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] resize-y" />
-              </div>
-              <div className="flex gap-2">
-                <button onClick={() => act('approve')} disabled={busy}
-                  className="flex-1 py-2 bg-green-600 text-white rounded-lg font-bold text-sm hover:bg-green-700 transition disabled:opacity-50 flex items-center justify-center gap-1.5">
-                  <CheckCircle className="w-4 h-4" /> اعتماد
-                </button>
-                <button onClick={() => act('defer')} disabled={busy}
-                  className="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg font-bold text-sm hover:bg-blue-200 transition disabled:opacity-50 flex items-center gap-1.5">
-                  <Clock className="w-4 h-4" /> تأجيل
-                </button>
-                <button onClick={() => act('reject')} disabled={busy}
-                  className="flex-1 py-2 bg-red-600 text-white rounded-lg font-bold text-sm hover:bg-red-700 transition disabled:opacity-50 flex items-center justify-center gap-1.5">
-                  <XCircle className="w-4 h-4" /> رفض
-                </button>
-              </div>
-            </div>
-          )}
+      )}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+        <div className="bg-gray-50 dark:bg-slate-800 rounded-lg p-3">
+          <p className="text-gray-500 mb-1">الحالة</p>
+          <Pill tone={
+            rec.status === 'approved' ? 'green' : rec.status === 'rejected' ? 'red' :
+            rec.status === 'pending'  ? 'amber' : rec.status === 'deferred' ? 'blue' : 'gray'
+          }>{FORM_STATUS_LABELS[rec.status]}</Pill>
+        </div>
+        <div className="bg-gray-50 dark:bg-slate-800 rounded-lg p-3">
+          <p className="text-gray-500 mb-1">المُنشِئ</p>
+          <p className="font-bold text-gray-800 dark:text-slate-200">{rec.createdByName || '—'}</p>
+          <p className="text-[10px] text-gray-400">{roleName(rec.createdByRole)}</p>
+        </div>
+        <div className="bg-gray-50 dark:bg-slate-800 rounded-lg p-3">
+          <p className="text-gray-500 mb-1">المرجع</p>
+          <p className="font-bold text-gray-800 dark:text-slate-200">{rec.projectId || '—'}</p>
         </div>
       </div>
+
+      {(rec.bridgesTo || []).length > 0 && (
+        <div>
+          <p className="text-xs font-bold text-gray-600 dark:text-slate-300 mb-2 flex items-center gap-1.5"><GitBranch className="w-4 h-4" /> الجسور</p>
+          <div className="flex flex-wrap gap-2">
+            {rec.bridgesTo.map(b => <Pill key={b} tone="purple">{departmentName(b)}</Pill>)}
+          </div>
+        </div>
+      )}
+
+      <div>
+        <p className="text-xs font-bold text-gray-600 dark:text-slate-300 mb-2 flex items-center gap-1.5"><ListChecks className="w-4 h-4" /> سلسلة الاعتماد</p>
+        <ApprovalChainView rec={rec} />
+      </div>
+
+      {rec.notes && (
+        <div>
+          <p className="text-xs font-bold text-gray-600 dark:text-slate-300 mb-1">ملاحظات</p>
+          <p className="text-sm bg-gray-50 dark:bg-slate-800 rounded-lg p-3 text-gray-700 dark:text-slate-200">{rec.notes}</p>
+        </div>
+      )}
+
+      {awaits && (
+        <div className="border-t pt-4 space-y-3 dark:border-slate-700">
+          <textarea value={note} onChange={e => setNote(e.target.value)} rows={3} placeholder="ملاحظتك على القرار (اختياري)"
+            className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-[#56B894]" />
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={() => act('approve')} disabled={busy} className="flex-1 min-w-[120px] py-2 bg-green-600 text-white rounded-lg font-bold text-sm hover:bg-green-700 transition flex items-center justify-center gap-1.5"><CheckCircle className="w-4 h-4" /> اعتماد</button>
+            <button onClick={() => act('defer')} disabled={busy} className="px-4 py-2 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-200 rounded-lg font-bold text-sm transition flex items-center gap-1.5"><Clock className="w-4 h-4" /> تأجيل</button>
+            <button onClick={() => act('reject')} disabled={busy} className="flex-1 min-w-[120px] py-2 bg-red-600 text-white rounded-lg font-bold text-sm hover:bg-red-700 transition flex items-center justify-center gap-1.5"><XCircle className="w-4 h-4" /> رفض</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
 /* ──────────────────────────────────────────────────────────────────
-   NewFormModal — إنشاء نموذج جديد
+   New Form Picker — opens specialized creator if registered
    ────────────────────────────────────────────────────────────────── */
 
+export type FormCreator = React.FC<{
+  user: UserProfile;
+  api: FormsApi;
+  users: UserProfile[];
+  context: any;
+  onClose: () => void;
+  preselect?: FormCode;
+}>;
+
+export interface FormCreatorRegistry { [code: string]: FormCreator | undefined; }
+
 export const NewFormModal: React.FC<{
-  user: UserProfile; api: FormsApi; preselect?: FormCode; onClose: () => void;
-}> = ({ user, api, preselect, onClose }) => {
-  const myRole = user.role as RoleKey;
+  user: UserProfile;
+  api: FormsApi;
+  users: UserProfile[];
+  context: any;
+  creators: FormCreatorRegistry;
+  preselect?: FormCode;
+  onClose: () => void;
+}> = ({ user, api, users, context, creators, preselect, onClose }) => {
   const allowed = useMemo(
-    () => FORMS.filter(f => formCanBeOriginatedBy(f, myRole) || user.role === 'ADMIN'),
-    [myRole, user.role],
+    () => FORMS.filter(f => formCanBeOriginatedBy(f, user.role as RoleKey) || user.role === 'ADMIN'),
+    [user.role],
   );
-  const [code, setCode] = useState<FormCode>(preselect || (allowed[0]?.code as FormCode));
-  const [notes, setNotes] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [code, setCode] = useState<FormCode | null>(preselect && allowed.some(f => f.code === preselect) ? preselect : null);
 
   if (allowed.length === 0) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4" dir="rtl">
         <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-        <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 text-center">
+        <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md p-6 text-center">
           <AlertTriangle className="w-10 h-10 text-amber-500 mx-auto mb-2" />
-          <p className="text-sm font-bold text-gray-700 mb-3">لا تملك صلاحية إنشاء نماذج بدورك الحالي.</p>
-          <button onClick={onClose} className="px-5 py-2 bg-gray-200 rounded-lg text-sm font-bold">إغلاق</button>
+          <p className="text-sm font-bold text-gray-700 dark:text-slate-200 mb-3">لا تملك صلاحية إنشاء نماذج بدورك الحالي.</p>
+          <button onClick={onClose} className="px-5 py-2 bg-gray-200 dark:bg-slate-700 rounded-lg text-sm font-bold">إغلاق</button>
         </div>
       </div>
     );
   }
 
+  if (!code) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" dir="rtl">
+        <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+        <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+          <div className="bg-gradient-to-l from-[#4A1F66] to-[#6B3D87] px-5 py-4 flex items-center justify-between text-white">
+            <div className="flex items-center gap-3">
+              <Plus className="w-5 h-5" />
+              <h2 className="font-bold text-lg">نموذج جديد</h2>
+            </div>
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/15 transition"><X className="w-5 h-5" /></button>
+          </div>
+          <div className="overflow-y-auto p-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {allowed.map(f => (
+                <button key={f.code} onClick={() => setCode(f.code)}
+                  className="text-right p-4 rounded-lg border border-gray-200 dark:border-slate-700 hover:border-[#4A1F66]/30 hover:shadow transition bg-white dark:bg-slate-800">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-[#4A1F66]/10 dark:bg-purple-900/40 text-[#4A1F66] dark:text-purple-300">{f.code}</span>
+                    <span className="text-sm font-bold text-gray-800 dark:text-slate-100">{f.title}</span>
+                  </div>
+                  <p className="text-[11px] text-gray-500 dark:text-slate-400 line-clamp-2">{f.description}</p>
+                  <div className="mt-2 text-[10px] text-gray-500 dark:text-slate-400">
+                    سلسلة: {f.approvalChain.map(r => roleName(r)).join(' ← ')}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const Creator = creators[code];
+  if (Creator) {
+    return <Creator user={user} api={api} users={users} context={context} onClose={onClose} preselect={code} />;
+  }
+
+  // Generic minimal creator for codes without specialized component
+  return <GenericCreator user={user} api={api} code={code} onClose={onClose} />;
+};
+
+const GenericCreator: React.FC<{
+  user: UserProfile; api: FormsApi; code: FormCode; onClose: () => void;
+}> = ({ user, api, code, onClose }) => {
+  const def = FORM_BY_CODE[code];
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
   const submit = async () => {
     setBusy(true);
-    try {
-      await api.createForm({ code, user, notes });
-      onClose();
-    } finally { setBusy(false); }
+    try { await api.createForm({ code, user, notes }); onClose(); }
+    finally { setBusy(false); }
   };
-
-  const def = FORM_BY_CODE[code];
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" dir="rtl">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
+      <div className="relative bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md">
         <div className="bg-gradient-to-l from-[#4A1F66] to-[#6B3D87] px-5 py-4 flex items-center justify-between text-white">
-          <div className="flex items-center gap-3">
-            <Plus className="w-5 h-5" />
-            <h2 className="font-bold text-lg">نموذج جديد</h2>
-          </div>
+          <h2 className="font-bold">إنشاء {def?.title}</h2>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/15 transition"><X className="w-5 h-5" /></button>
         </div>
-        <div className="overflow-y-auto p-5 space-y-4">
-          <div>
-            <label className="text-xs font-bold text-gray-700">اختر النموذج</label>
-            <select value={code} onChange={e => setCode(e.target.value as FormCode)}
-              className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] bg-white">
-              {allowed.map(f => (
-                <option key={f.code} value={f.code}>{f.code} — {f.title}</option>
-              ))}
-            </select>
-          </div>
-          {def && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 leading-relaxed">
-              {def.description}
-              <div className="mt-2 flex items-center gap-2 text-[11px]">
-                <span className="font-bold">سلسلة الاعتماد:</span>
-                <span>{def.approvalChain.map(r => roleName(r)).join(' ← ')}</span>
-              </div>
-            </div>
-          )}
-          <div>
-            <label className="text-xs font-bold text-gray-700">ملاحظات أولية (اختياري)</label>
-            <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3}
-              className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] resize-y"
-              placeholder="نقاط رئيسية، رقم مرجع، ..." />
-          </div>
+        <div className="p-5 space-y-3">
+          <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 text-xs text-blue-900 dark:text-blue-200">{def?.description}</div>
+          <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={4} placeholder="ملاحظات أولية"
+            className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-[#56B894]" />
         </div>
-        <div className="border-t p-4 flex gap-3 justify-end">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-bold bg-gray-100 text-gray-600 hover:bg-gray-200 transition">إلغاء</button>
-          <button onClick={submit} disabled={busy}
-            className="px-5 py-2 rounded-lg text-sm font-bold bg-[#4A1F66] text-white hover:bg-[#3A1652] transition disabled:opacity-50 flex items-center gap-1.5">
-            <Send className="w-4 h-4" /> {busy ? 'جاري...' : 'إرسال للاعتماد'}
+        <div className="border-t dark:border-slate-700 p-4 flex gap-3 justify-end">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-bold bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-200">إلغاء</button>
+          <button onClick={submit} disabled={busy} className="px-5 py-2 rounded-lg text-sm font-bold bg-[#4A1F66] text-white hover:bg-[#3A1652] transition flex items-center gap-1.5">
+            <Send className="w-4 h-4" /> إرسال
           </button>
         </div>
       </div>
@@ -353,27 +458,40 @@ export const NewFormModal: React.FC<{
 };
 
 /* ──────────────────────────────────────────────────────────────────
-   InboxPanel — صندوق الوارد للأدوار التي تنتظر اعتماداً
+   Approval action bar — used inside specialized form components
    ────────────────────────────────────────────────────────────────── */
 
-export const InboxPanel: React.FC<{
-  user: UserProfile; api: FormsApi; onOpen: (id: string) => void;
-}> = ({ user, api, onOpen }) => {
-  const myRole = user.role as RoleKey;
-  const inbox = api.forms.filter(f => formAwaitsRole(f, myRole));
-
+export const ApprovalActions: React.FC<{
+  rec: FormRecord; user: UserProfile; api: FormsApi; onAfter?: () => void;
+  approveLabel?: string; allowDefer?: boolean;
+}> = ({ rec, user, api, onAfter, approveLabel = 'اعتماد', allowDefer = true }) => {
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const awaits = formAwaitsUser(rec, user);
+  if (!awaits) return null;
+  const act = async (kind: 'approve' | 'reject' | 'defer') => {
+    setBusy(true);
+    try {
+      if (kind === 'approve') await api.approveForm(rec.id, user, note);
+      else if (kind === 'reject') await api.rejectForm(rec.id, user, note);
+      else await api.deferForm(rec.id, user, note);
+      onAfter?.();
+    } finally { setBusy(false); }
+  };
   return (
-    <Card title={`صندوق الوارد (${inbox.length})`} icon={Inbox}>
-      {inbox.length === 0 ? (
-        <div className="text-center py-8 text-gray-400">
-          <CheckCircle className="w-10 h-10 mx-auto mb-2 opacity-50" />
-          <p className="text-sm font-semibold">لا توجد طلبات معلّقة على دورك حالياً</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {inbox.map(f => <FormCard key={f.id} rec={f} highlight onOpen={() => onOpen(f.id)} />)}
-        </div>
-      )}
-    </Card>
+    <div className="border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-900/20 rounded-lg p-3 space-y-3">
+      <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300">
+        <Activity className="w-4 h-4" />
+        <span className="text-xs font-bold">هذا الطلب بانتظار اعتمادك ({roleName(user.role)})</span>
+      </div>
+      <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="ملاحظتك (اختياري)"
+        className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-[#56B894]" />
+      <div className="flex gap-2 flex-wrap">
+        <button onClick={() => act('approve')} disabled={busy} className="flex-1 min-w-[120px] py-2 bg-green-600 text-white rounded-lg font-bold text-sm hover:bg-green-700 transition flex items-center justify-center gap-1.5"><CheckCircle className="w-4 h-4" /> {approveLabel}</button>
+        {allowDefer && <button onClick={() => act('defer')} disabled={busy} className="px-4 py-2 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-200 rounded-lg font-bold text-sm transition flex items-center gap-1.5"><Clock className="w-4 h-4" /> تأجيل</button>}
+        <button onClick={() => act('reject')} disabled={busy} className="flex-1 min-w-[120px] py-2 bg-red-600 text-white rounded-lg font-bold text-sm hover:bg-red-700 transition flex items-center justify-center gap-1.5"><XCircle className="w-4 h-4" /> رفض</button>
+      </div>
+    </div>
   );
 };
+

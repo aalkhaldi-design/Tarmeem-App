@@ -238,10 +238,11 @@ function App() {
   /** يحدّد المرحلة حسب اعتمادات النموذج المكتمل */
   const phaseTransition = useCallback((code: FormCode): { phase: ProjectRecord['phase']; progress: number } | null => {
     switch (code) {
-      case 'F-08': return { phase: 'DIAGNOSIS', progress: 25 };
-      case 'F-18': return { phase: 'EVACUATION', progress: 35 };
-      case 'F-85': return { phase: 'TENDERING', progress: 50 };
-      case 'F-14': return { phase: 'EXECUTION', progress: 65 };
+      case 'F-03': return { phase: 'DIAGNOSIS', progress: 25 };
+      case 'F-08': return { phase: 'DIAGNOSIS', progress: 35 };
+      case 'F-18': return { phase: 'EVACUATION', progress: 40 };
+      case 'F-85': return { phase: 'TENDERING', progress: 55 };
+      case 'F-14': return { phase: 'EXECUTION', progress: 70 };
       case 'F-07': return { phase: 'CLOSED', progress: 100 };
       default: return null;
     }
@@ -291,6 +292,7 @@ function App() {
       };
       const ref = await addDoc(collection(db, 'forms'), rec);
       await updateDoc(ref, { id: ref.id });
+      const newFormId = ref.id;
 
       // إشعار التالي
       const nextRole = def.approvalChain[startIdx];
@@ -319,9 +321,31 @@ function App() {
           });
         }
       }
-      return ref.id;
+      // F-08 (كراسة تشخيص المبنى): فور إنشائها أطلق F-20 و F-09 لرئيس قسم الإشراف
+      if (def.code === 'F-08' && input.projectRefId) {
+        await createFormRef.current?.({
+          code: 'F-20', user: input.user,
+          projectId: input.projectId, projectRefId: input.projectRefId,
+          beneficiaryName: input.beneficiaryName,
+          triggeredBy: newFormId,
+          notes: 'أُطلق تلقائياً مع كراسة التشخيص F-08.',
+        });
+        await createFormRef.current?.({
+          code: 'F-09', user: input.user,
+          projectId: input.projectId, projectRefId: input.projectRefId,
+          beneficiaryName: input.beneficiaryName,
+          triggeredBy: newFormId,
+          notes: 'أُطلق تلقائياً مع كراسة التشخيص F-08.',
+        });
+      }
+
+      return newFormId;
     } catch (e) { console.error('createForm:', e); return null; }
   }, [dispatchNotification, usersByRole, usersByDeptManager, projects]);
+
+  /** مرجع متغيّر إلى createForm حتى نتمكّن من الاستدعاء الذاتي للنماذج المُتسلسلة (F-08 ➡️ F-20/F-09 …). */
+  const createFormRef = useRef<FormsApi['createForm'] | null>(null);
+  useEffect(() => { createFormRef.current = createForm; }, [createForm]);
 
   /** إجراءات الاعتماد المركزية */
   const advanceForm = useCallback(async (
@@ -444,6 +468,38 @@ function App() {
             notes: 'أُطلق تلقائياً من F-07.',
             triggeredBy: rec.id,
           });
+        }
+        // F-03 (التحويل النهائي إلى إدارة المشاريع): افتح F-04 لرئيس قسم التشخيص
+        if (rec.code === 'F-03') {
+          await createForm({
+            code: 'F-04', user,
+            projectId: rec.projectId, projectRefId: rec.projectRefId,
+            beneficiaryName: rec.beneficiaryName,
+            notes: 'أُطلق تلقائياً بعد اعتماد F-03 وإحالة المشروع إلى إدارة المشاريع.',
+            triggeredBy: rec.id,
+          });
+        }
+        // F-04: يحفظ مهندس التشخيص في المشروع ثم يفتح كراسة التشخيص F-08 للمهندس المُختار
+        if (rec.code === 'F-04') {
+          const patchedData = { ...(rec.data || {}), ...(dataPatch || {}) };
+          if (patchedData.engineerId) {
+            await updateProject(rec.projectRefId, { diagnosisEngineerId: patchedData.engineerId });
+          }
+          await createForm({
+            code: 'F-08', user,
+            projectId: rec.projectId, projectRefId: rec.projectRefId,
+            beneficiaryName: rec.beneficiaryName,
+            assigneeId: patchedData.engineerId || null,
+            notes: 'أُطلق تلقائياً بعد تعيين مهندس التشخيص.',
+            triggeredBy: rec.id,
+          });
+        }
+        // F-09: يحفظ المهندس المشرف في المشروع
+        if (rec.code === 'F-09') {
+          const patchedData = { ...(rec.data || {}), ...(dataPatch || {}) };
+          if (patchedData.engineerId) {
+            await updateProject(rec.projectRefId, { supervisingEngineerId: patchedData.engineerId });
+          }
         }
       }
 

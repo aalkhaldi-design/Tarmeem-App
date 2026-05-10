@@ -5,16 +5,20 @@ import {
 } from 'lucide-react';
 import {
   Card, Pill, SearchBar, EmptyState,
-  ProjectCardRing, PhaseStepper, ReadOnlyField, Input,
-  type PhaseStepperItem, type StepperPhaseStatus,
+  ProjectCardRing, PhaseBrickWall, ReadOnlyField, Input,
+  BRICK_COLORS,
+  type PhaseBrickItem, type SubPhaseSlot, type BrickStatus,
 } from './ui';
-import { FORM_BY_CODE, roleName } from '../lib/data';
+import { FORM_BY_CODE, roleName, canCreateForm, requiredDeptForApprovalStep, FormCode } from '../lib/data';
 import { FormCard, FormsApi, formAwaitsUser, FormRecord } from './Forms';
-import { F02ReadOnlyBody, type ProjectRecord } from './forms/FormRenderers';
+import {
+  F02ReadOnlyBody, F03StepInlineSection, F04InlineSection, F09InlineSection,
+  type ProjectRecord,
+} from './forms/FormRenderers';
 import type { UserProfile } from './Auth';
 
 /* ──────────────────────────────────────────────────────────────────
-   Phase model — 5 main phases (sub-phases like EVACUATION are deferred)
+   Phase model — 5 main phases
    ────────────────────────────────────────────────────────────────── */
 
 type MainPhaseKey = 'STUDY' | 'PREP' | 'AWARD' | 'EXEC' | 'CLOSE';
@@ -22,7 +26,6 @@ type MainPhaseKey = 'STUDY' | 'PREP' | 'AWARD' | 'EXEC' | 'CLOSE';
 interface MainPhaseDef {
   key: MainPhaseKey;
   name: string;
-  /** أي قيمة من project.phase تُعتبر داخل هذه المرحلة الرئيسية */
   mapsFromProjectPhases: ProjectRecord['phase'][];
 }
 
@@ -39,7 +42,7 @@ const mainPhaseOf = (project: ProjectRecord): MainPhaseKey => {
   return found?.key ?? 'STUDY';
 };
 
-const phaseStatusFor = (phase: MainPhaseDef, project: ProjectRecord): StepperPhaseStatus => {
+const brickStatusFor = (phase: MainPhaseDef, project: ProjectRecord): BrickStatus => {
   const currentIdx = MAIN_PHASES.findIndex(mp => mp.key === mainPhaseOf(project));
   const myIdx = MAIN_PHASES.findIndex(mp => mp.key === phase.key);
   if (project.phase === 'CLOSED' && phase.key === 'CLOSE') return 'completed';
@@ -48,21 +51,15 @@ const phaseStatusFor = (phase: MainPhaseDef, project: ProjectRecord): StepperPha
   return 'notStarted';
 };
 
-/* الحقول المتوقعة لحساب نسبة الإنجاز — تعكس phaseTransition في App.tsx */
-const EXPECTED_PROJECT_FORMS = ['F-02', 'F-03', 'F-08', 'F-85', 'F-14', 'F-15', 'F-07'] as const;
-
-const expectedFormsCount = () => EXPECTED_PROJECT_FORMS.length;
-
-const approvedFormCountForProject = (projectId: string, allForms: FormRecord[]): number =>
-  allForms.filter(f =>
-    f.projectRefId === projectId &&
-    f.status === 'approved' &&
-    (EXPECTED_PROJECT_FORMS as readonly string[]).includes(f.code),
-  ).length;
+const EXPECTED_PROJECT_FORMS: readonly FormCode[] = ['F-02', 'F-03', 'F-04', 'F-08', 'F-09', 'F-20', 'F-85', 'F-14', 'F-15', 'F-07'];
 
 const projectProgressPct = (project: ProjectRecord, allForms: FormRecord[]): number => {
-  const approved = approvedFormCountForProject(project.id, allForms);
-  return Math.min(100, Math.round((approved / expectedFormsCount()) * 100));
+  const approved = allForms.filter(f =>
+    f.projectRefId === project.id &&
+    f.status === 'approved' &&
+    EXPECTED_PROJECT_FORMS.includes(f.code),
+  ).length;
+  return Math.min(100, Math.round((approved / EXPECTED_PROJECT_FORMS.length) * 100));
 };
 
 /* ──────────────────────────────────────────────────────────────────
@@ -112,7 +109,7 @@ export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, 
         {filtered.length === 0 ? (
           <EmptyState icon={Building2} title="لا توجد مشاريع مطابقة" hint="ينشأ المشروع تلقائياً عند رفع استمارة البحث الاجتماعي F-02." />
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-5 gap-y-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-5 gap-y-10">
             {filtered.map(p => {
               const projectForms = api.forms.filter(f => f.projectRefId === p.id);
               const pendingCount = projectForms.filter(f => f.status === 'pending').length;
@@ -154,7 +151,7 @@ export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, 
                       </div>
                     </button>
                   </ProjectCardRing>
-                  {/* Percentage chip — outside the ring (room kept for countdown/timeframe later) */}
+                  {/* Percentage chip — anchored at bottom-center; the ring's path starts/ends from its sides. */}
                   <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 px-2.5 py-0.5 rounded-full bg-[#3F9B7A] text-white text-[11px] font-bold shadow-md border-2 border-white dark:border-slate-900">
                     {pct}%
                   </div>
@@ -169,14 +166,14 @@ export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, 
 };
 
 /* ──────────────────────────────────────────────────────────────────
-   Foldable phase-1 form sections (read-only view)
+   Foldable form section (used inside expanded brick panels)
    ────────────────────────────────────────────────────────────────── */
 
 type SectionStatus = 'completed' | 'pending' | 'notStarted' | 'rejected';
 
 const SECTION_HEADER_BG: Record<SectionStatus, string> = {
   completed:  '#3F9B7A',
-  pending:    '#B45309',
+  pending:    '#92400E',
   notStarted: '#4A1F66',
   rejected:   '#B91C1C',
 };
@@ -223,14 +220,14 @@ const FoldableFormSection: React.FC<{
 };
 
 /* ──────────────────────────────────────────────────────────────────
-   Status derivation for the 4 sections of phase 1
+   Status helpers per form / step
    ────────────────────────────────────────────────────────────────── */
 
-const f02SectionStatus = (f02?: FormRecord): SectionStatus => {
-  if (!f02) return 'notStarted';
-  if (f02.status === 'approved') return 'completed';
-  if (f02.status === 'rejected') return 'rejected';
-  if (f02.status === 'pending') return 'pending';
+const recSectionStatus = (rec?: FormRecord): SectionStatus => {
+  if (!rec) return 'notStarted';
+  if (rec.status === 'approved') return 'completed';
+  if (rec.status === 'rejected') return 'rejected';
+  if (rec.status === 'pending') return 'pending';
   return 'notStarted';
 };
 
@@ -244,44 +241,43 @@ const f03StepStatus = (f03: FormRecord | undefined, step: number): SectionStatus
 };
 
 /* ──────────────────────────────────────────────────────────────────
-   Read-only views for individual F-03 approval steps
+   Mode resolution (view vs edit)
    ────────────────────────────────────────────────────────────────── */
 
-const F03StepReadOnly: React.FC<{ rec?: FormRecord; step: 0 | 1 | 2 }> = ({ rec, step }) => {
+const resolveSectionMode = (
+  user: UserProfile,
+  formCode: FormCode,
+  rec: FormRecord | undefined,
+): 'view' | 'edit' => {
+  if (user.role === 'ADMIN') return 'edit';
   if (!rec) {
-    return <p className="text-xs text-gray-400 dark:text-slate-500">لم تبدأ هذه الخطوة بعد.</p>;
+    return canCreateForm(formCode, user) ? 'edit' : 'view';
   }
-  const approval = rec.approvals?.[step];
-  if (step === 0) {
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <ReadOnlyField label="القرار (اعتماد استحقاق الخدمة)" value={rec.data?.eligibility} />
-        <ReadOnlyField label="ملاحظات مدير البحث" value={rec.data?.managerNotes} />
-        {approval && <ReadOnlyField label="بواسطة" value={`${approval.actorName || '—'} · ${new Date(approval.at).toLocaleDateString('ar-SA')}`} />}
-      </div>
-    );
+  if (formAwaitsUser(rec, user)) {
+    const requiredDept = requiredDeptForApprovalStep(rec.code, rec.approvalIndex);
+    if (requiredDept && user.department !== requiredDept) return 'view';
+    return 'edit';
   }
-  if (step === 1) {
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <ReadOnlyField label="قرار المدير التنفيذي" value={approval?.decision === 'approved' ? 'اعتماد' : approval?.decision === 'rejected' ? 'رفض' : approval?.decision === 'deferred' ? 'تأجيل' : ''} />
-        <ReadOnlyField label="ملاحظات المدير التنفيذي" value={approval?.note} />
-        {approval && <ReadOnlyField label="بواسطة" value={`${approval.actorName || '—'} · ${new Date(approval.at).toLocaleDateString('ar-SA')}`} />}
-      </div>
-    );
-  }
-  // step 2 — final transfer
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-      <ReadOnlyField label="ملاحظات التحويل" value={approval?.note} />
-      <ReadOnlyField label="رقم المشروع المُحوَّل" value={rec.projectId} />
-      {approval && <ReadOnlyField label="بواسطة" value={`${approval.actorName || '—'} · ${new Date(approval.at).toLocaleDateString('ar-SA')}`} />}
-    </div>
-  );
+  return 'view';
+};
+
+const f03StepMode = (
+  user: UserProfile,
+  rec: FormRecord | undefined,
+  step: number,
+): 'view' | 'edit' => {
+  if (!rec) return 'view';
+  if (user.role === 'ADMIN') return 'edit';
+  if (rec.status !== 'pending') return 'view';
+  if (rec.approvalIndex !== step) return 'view';
+  if (rec.approvalChain[step] !== user.role) return 'view';
+  const requiredDept = requiredDeptForApprovalStep(rec.code, step);
+  if (requiredDept && user.department !== requiredDept) return 'view';
+  return 'edit';
 };
 
 /* ──────────────────────────────────────────────────────────────────
-   Project number widget — editable + freeze button
+   Project number widget (header)
    ────────────────────────────────────────────────────────────────── */
 
 const ProjectNumberWidget: React.FC<{
@@ -294,7 +290,6 @@ const ProjectNumberWidget: React.FC<{
   const [busy, setBusy] = useState(false);
   const locked = !!project.projectIdLocked;
 
-  // أي مستخدم لديه دور مطابق لاعتماد معلّق على هذا المشروع يستطيع التعديل
   const canEdit = useMemo(() => {
     if (locked) return false;
     if (user.role === 'ADMIN') return true;
@@ -347,6 +342,186 @@ const ProjectNumberWidget: React.FC<{
 };
 
 /* ──────────────────────────────────────────────────────────────────
+   Phase-1 forms panel
+   ────────────────────────────────────────────────────────────────── */
+
+const Phase1Panel: React.FC<{
+  project: ProjectRecord;
+  user: UserProfile;
+  users: UserProfile[];
+  api: FormsApi;
+  projectForms: FormRecord[];
+}> = ({ project, user, users, api, projectForms }) => {
+  const f02 = projectForms.find(f => f.code === 'F-02');
+  const f03 = projectForms.find(f => f.code === 'F-03');
+
+  return (
+    <div>
+      <FoldableFormSection
+        title="استمارة البحث الاجتماعي"
+        status={recSectionStatus(f02)}
+        defaultOpen={!!f02 && f02.status === 'pending'}>
+        {f02
+          ? <div className={resolveSectionMode(user, 'F-02', f02) === 'view' ? 'opacity-70' : ''}><F02ReadOnlyBody rec={f02} /></div>
+          : (
+            <div className="opacity-70">
+              <F02ReadOnlyBody rec={syntheticEmptyRec('F-02', project)} />
+            </div>
+          )}
+      </FoldableFormSection>
+
+      <FoldableFormSection
+        title="اعتماد مدير البحث الاجتماعي"
+        status={f03StepStatus(f03, 0)}>
+        <F03StepInlineSection rec={f03} step={0} mode={f03StepMode(user, f03, 0)} user={user} users={users} api={api} />
+      </FoldableFormSection>
+
+      <FoldableFormSection
+        title="اعتماد المدير التنفيذي"
+        status={f03StepStatus(f03, 1)}>
+        <F03StepInlineSection rec={f03} step={1} mode={f03StepMode(user, f03, 1)} user={user} users={users} api={api} />
+      </FoldableFormSection>
+
+      <FoldableFormSection
+        title="اعتماد وإحالة إلى إدارة المشاريع"
+        status={f03StepStatus(f03, 2)}>
+        <F03StepInlineSection rec={f03} step={2} mode={f03StepMode(user, f03, 2)} user={user} users={users} api={api} />
+      </FoldableFormSection>
+    </div>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   Phase-2 forms panel
+   ────────────────────────────────────────────────────────────────── */
+
+const Phase2Panel: React.FC<{
+  project: ProjectRecord;
+  user: UserProfile;
+  users: UserProfile[];
+  api: FormsApi;
+  projectForms: FormRecord[];
+  onOpenForm: (id: string) => void;
+}> = ({ project, user, users, api, projectForms, onOpenForm }) => {
+  const f04 = projectForms.find(f => f.code === 'F-04');
+  const f08 = projectForms.find(f => f.code === 'F-08');
+  const f20 = projectForms.find(f => f.code === 'F-20');
+  const f09 = projectForms.find(f => f.code === 'F-09');
+
+  const f08Status = recSectionStatus(f08);
+  const f20Status = recSectionStatus(f20);
+
+  return (
+    <div>
+      <FoldableFormSection
+        title="تعيين مهندس التشخيص"
+        status={recSectionStatus(f04)}
+        defaultOpen={!!f04 && f04.status === 'pending'}>
+        <F04InlineSection rec={f04} mode={resolveSectionMode(user, 'F-04', f04)}
+          user={user} users={users} api={api} project={project} />
+      </FoldableFormSection>
+
+      <FoldableFormSection
+        title="كراسة تشخيص المبنى"
+        status={f08Status}
+        defaultOpen={f08Status === 'pending'}>
+        <F08ProxySection rec={f08} user={user} project={project} onOpenForm={onOpenForm} />
+      </FoldableFormSection>
+
+      <FoldableFormSection
+        title="خطة توريد المواد"
+        status={f20Status}>
+        <F20ProxySection rec={f20} user={user} project={project} onOpenForm={onOpenForm} />
+      </FoldableFormSection>
+
+      <FoldableFormSection
+        title="تعيين مشرف التشخيص"
+        status={recSectionStatus(f09)}>
+        <F09InlineSection rec={f09} mode={resolveSectionMode(user, 'F-09', f09)}
+          user={user} users={users} api={api} project={project} />
+      </FoldableFormSection>
+    </div>
+  );
+};
+
+/* Heavy forms (F-08, F-20) keep their multi-page editor — show summary inline + a button to open the modal. */
+const F08ProxySection: React.FC<{
+  rec?: FormRecord; user: UserProfile; project: ProjectRecord; onOpenForm: (id: string) => void;
+}> = ({ rec, user, onOpenForm }) => {
+  const mode = resolveSectionMode(user, 'F-08', rec);
+  const data = rec?.data || {};
+  return (
+    <div className={`space-y-3 ${mode === 'view' ? 'opacity-70' : ''}`}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <ReadOnlyField label="نوع التشخيص" value={data.diagnosisType} />
+        <ReadOnlyField label="حالة سلامة المبنى" value={data.safetyHazard ? 'خطر السلامة' : data.buildingCondition} />
+        <ReadOnlyField label="عدد الأدوار" value={data.floorsCount} />
+        <ReadOnlyField label="مساحة المبنى (م²)" value={data.buildingArea} />
+      </div>
+      {rec && mode === 'edit' && (
+        <button onClick={() => onOpenForm(rec.id)}
+          className="px-4 py-2 rounded-lg text-sm font-bold bg-[#3F9B7A] text-white hover:bg-[#2f7a5e] transition">
+          فتح الكراسة للتعبئة
+        </button>
+      )}
+      {!rec && <p className="text-xs text-gray-400 dark:text-slate-500">تُفتَح هذه الكراسة تلقائياً بعد تعيين مهندس التشخيص.</p>}
+    </div>
+  );
+};
+
+const F20ProxySection: React.FC<{
+  rec?: FormRecord; user: UserProfile; project: ProjectRecord; onOpenForm: (id: string) => void;
+}> = ({ rec, user, onOpenForm }) => {
+  const mode = resolveSectionMode(user, 'F-20', rec);
+  const items = rec?.data?.items as Array<{ name?: string; qty?: number; unit?: string }> | undefined;
+  return (
+    <div className={`space-y-3 ${mode === 'view' ? 'opacity-70' : ''}`}>
+      {items && items.length > 0 ? (
+        <div className="space-y-1.5">
+          {items.slice(0, 6).map((it, i) => (
+            <div key={i} className="text-xs text-gray-700 dark:text-slate-200 flex justify-between border-b border-gray-100 dark:border-slate-700 pb-1">
+              <span>{it.name || '—'}</span>
+              <span className="font-bold">{it.qty || 0} {it.unit || ''}</span>
+            </div>
+          ))}
+          {items.length > 6 && <p className="text-[11px] text-gray-500">+{items.length - 6} عناصر أخرى</p>}
+        </div>
+      ) : (
+        <ReadOnlyField label="المواد" value="" />
+      )}
+      {rec && mode === 'edit' && (
+        <button onClick={() => onOpenForm(rec.id)}
+          className="px-4 py-2 rounded-lg text-sm font-bold bg-[#3F9B7A] text-white hover:bg-[#2f7a5e] transition">
+          فتح خطة التوريد للتعبئة
+        </button>
+      )}
+      {!rec && <p className="text-xs text-gray-400 dark:text-slate-500">تُفتَح خطة التوريد تلقائياً عند تقديم كراسة التشخيص.</p>}
+    </div>
+  );
+};
+
+/* بناء سجل اصطناعي فارغ لعرض الهيكل الكامل لنموذج لم يُعبَّأ بعد. */
+const syntheticEmptyRec = (code: FormCode, project: ProjectRecord): FormRecord => ({
+  id: `synthetic-${code}-${project.id}`,
+  code,
+  title: FORM_BY_CODE[code]?.title || code,
+  projectId: project.projectId || null,
+  projectRefId: project.id,
+  beneficiaryName: project.beneficiaryName,
+  status: 'draft',
+  approvalIndex: 0,
+  approvalChain: FORM_BY_CODE[code]?.approvalChain || [],
+  approvals: [],
+  createdBy: '',
+  createdByRole: 'SOCIAL_RESEARCHER',
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+  ownerDept: FORM_BY_CODE[code]?.ownerDept || 'RESEARCH',
+  bridgesTo: [],
+  data: {},
+});
+
+/* ──────────────────────────────────────────────────────────────────
    ProjectDetail
    ────────────────────────────────────────────────────────────────── */
 
@@ -357,33 +532,46 @@ interface ProjectDetailProps {
   api: FormsApi;
   onBack: () => void;
   onOpenForm: (id: string) => void;
-  /** اختياري: تحديث وثيقة المشروع (يُستخدم لتجميد رقم المشروع). */
   updateProject?: (projectRefId: string, patch: Partial<ProjectRecord>) => Promise<void>;
 }
 
 export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   project, user, users, api, onBack, onOpenForm, updateProject,
 }) => {
-  const projectForms = api.forms.filter(f => f.projectRefId === project.id);
+  const projectForms = useMemo(
+    () => api.forms.filter(f => f.projectRefId === project.id),
+    [api.forms, project.id],
+  );
   const filesAll = projectForms.flatMap(f => (f.files || []).map(file => ({ ...file, formCode: f.code })));
   const diagnosisEng = users.find(u => u.id === project.diagnosisEngineerId);
   const supervisingEng = users.find(u => u.id === project.supervisingEngineerId);
 
-  const f02 = projectForms.find(f => f.code === 'F-02');
-  const f03 = projectForms.find(f => f.code === 'F-03');
-
-  const stepperItems: PhaseStepperItem[] = MAIN_PHASES.map((p, i) => ({
+  const phases: PhaseBrickItem[] = MAIN_PHASES.map((p, i) => ({
     key: p.key,
     name: p.name,
-    status: phaseStatusFor(p, project),
     index: i,
+    status: brickStatusFor(p, project),
   }));
 
-  const pct = projectProgressPct(project, api.forms);
+  // 4 sub-phase slots between adjacent main phases — all inactive for now.
+  const subPhases: SubPhaseSlot[] = [
+    { key: 'sub-1-2', name: 'مرحلة فرعية 1-2', status: 'inactive' },
+    { key: 'sub-2-3', name: 'مرحلة فرعية 2-3', status: 'inactive' },
+    { key: 'sub-3-4', name: 'مرحلة فرعية 3-4', status: 'inactive' },
+    { key: 'sub-4-5', name: 'مرحلة فرعية 4-5', status: 'inactive' },
+  ];
+
+  const defaultExpanded = mainPhaseOf(project);
+  const [expandedKey, setExpandedKey] = useState<string>(defaultExpanded);
+
+  const expandedPhase = MAIN_PHASES.find(p => p.key === expandedKey);
+  const expandedStatus = expandedPhase ? brickStatusFor(expandedPhase, project) : 'notStarted';
 
   const handleProjectUpdate = updateProject
     ? (patch: Partial<ProjectRecord>) => updateProject(project.id, patch)
     : undefined;
+
+  const pct = projectProgressPct(project, api.forms);
 
   return (
     <div dir="rtl" className="space-y-4">
@@ -413,61 +601,43 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
         </div>
       </div>
 
-      {/* 5-phase stepper */}
-      <Card title="المراحل الرئيسية" icon={Activity} accent="purple">
-        <PhaseStepper phases={stepperItems} />
-      </Card>
+      {/* Brick wall + expanded panel */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 p-3 space-y-3">
+        <PhaseBrickWall
+          phases={phases}
+          subPhases={subPhases}
+          expandedKey={expandedKey}
+          onExpand={setExpandedKey} />
 
-      {/* Phase 1 — fully implemented */}
-      <Card title="١. الدراسة والاعتماد" icon={FileText} accent="purple">
-        <FoldableFormSection
-          title="استمارة البحث الاجتماعي"
-          status={f02SectionStatus(f02)}
-          defaultOpen={!!f02}>
-          {f02
-            ? <F02ReadOnlyBody rec={f02} />
-            : <p className="text-xs text-gray-400 dark:text-slate-500">لم تُعبَّأ الاستمارة بعد.</p>}
-        </FoldableFormSection>
+        {expandedPhase && (
+          <div className="rounded-xl bg-gray-50 dark:bg-slate-900/50 p-4 border border-gray-200 dark:border-slate-700">
+            <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+              <h2 className="text-lg font-extrabold" style={{ color: BRICK_COLORS[expandedStatus] }}>
+                {`${MAIN_PHASES.findIndex(p => p.key === expandedPhase.key) + 1}. ${expandedPhase.name}`}
+              </h2>
+              <span className="text-[10px] font-bold text-white px-2.5 py-0.5 rounded-full"
+                style={{ background: BRICK_COLORS[expandedStatus] }}>
+                {expandedStatus === 'completed' ? 'مكتملة' :
+                 expandedStatus === 'pending' ? 'الجارية حالياً' :
+                 expandedStatus === 'rejected' ? 'مرفوضة' : 'لم تبدأ'}
+              </span>
+            </div>
 
-        <FoldableFormSection
-          title="اعتماد مدير البحث الاجتماعي"
-          status={f03StepStatus(f03, 0)}>
-          <p className="text-[11px] text-gray-500 dark:text-slate-400 mb-3 italic">
-            يعرض هذا القسم نتيجة نموذج "اعتماد استحقاق الخدمة" بعد رفعه.
-          </p>
-          <F03StepReadOnly rec={f03} step={0} />
-        </FoldableFormSection>
+            {expandedPhase.key === 'STUDY' && (
+              <Phase1Panel project={project} user={user} users={users} api={api} projectForms={projectForms} />
+            )}
+            {expandedPhase.key === 'PREP' && (
+              <Phase2Panel project={project} user={user} users={users} api={api}
+                projectForms={projectForms} onOpenForm={onOpenForm} />
+            )}
+            {expandedPhase.key === 'AWARD' && <PhaseStub />}
+            {expandedPhase.key === 'EXEC' && <PhaseStub />}
+            {expandedPhase.key === 'CLOSE' && <PhaseStub />}
+          </div>
+        )}
+      </div>
 
-        <FoldableFormSection
-          title="اعتماد المدير التنفيذي"
-          status={f03StepStatus(f03, 1)}>
-          <F03StepReadOnly rec={f03} step={1} />
-        </FoldableFormSection>
-
-        <FoldableFormSection
-          title="اعتماد وإحالة إلى إدارة المشاريع"
-          status={f03StepStatus(f03, 2)}>
-          <F03StepReadOnly rec={f03} step={2} />
-        </FoldableFormSection>
-      </Card>
-
-      {/* Phases 2-5 — placeholders */}
-      {MAIN_PHASES.slice(1).map((mp, idx) => {
-        const status = phaseStatusFor(mp, project);
-        return (
-          <Card
-            key={mp.key}
-            title={`${idx + 2}. ${mp.name}`}
-            icon={FileText}
-            accent={status === 'completed' ? 'teal' : 'purple'}>
-            <p className="text-xs text-gray-500 dark:text-slate-400 italic">
-              سيتم تفعيل هذه المرحلة لاحقاً.
-            </p>
-          </Card>
-        );
-      })}
-
-      {/* Legacy info + forms list — kept as reference (read-only) */}
+      {/* Legacy info cards (kept) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-700 p-4">
           <p className="text-xs font-bold text-gray-500 dark:text-slate-400 mb-2">مهندس التشخيص</p>
@@ -555,3 +725,8 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   );
 };
 
+const PhaseStub: React.FC = () => (
+  <p className="text-sm text-gray-500 dark:text-slate-400 italic py-2">
+    سيتم تفعيل هذه المرحلة لاحقاً.
+  </p>
+);

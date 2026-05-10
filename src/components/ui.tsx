@@ -444,8 +444,44 @@ export const EventIcon = ({ type }: { type: string }) => {
 };
 
 /* ──────────────────────────────────────────────────────────────────
-   ProjectCardRing — إطار خارجي مُلوَّن يمثّل نسبة الإنجاز حول البطاقة
+   ProjectCardRing — إطار خارجي مُلوَّن يبدأ وينتهي من جانبَي شارة النسبة
    ────────────────────────────────────────────────────────────────── */
+
+/**
+ * يرسم مسار محيط مستطيل ذي زوايا دائرية يبدأ من الجانب الأيمن للشارة (أسفل المنتصف)
+ * يدور باتجاه عقارب الساعة (يميناً ➡️ أعلى ➡️ يساراً ➡️ أسفل) وينتهي من الجانب الأيسر للشارة.
+ * عند 0% لا يظهر شيء (بُعد قصير عند الشارة)؛ عند 100% يلتقي الطرفان مع الشارة.
+ *
+ * نستخدم viewBox ثابت (200×100 وحدة) و preserveAspectRatio='none' حتى يتمدد المسار
+ * مع البطاقة مع تطبيع طول المسار (pathLength=100) لتسهيل حساب الـ dasharray بالنسبة المئوية.
+ */
+const RING_VB_W = 200;
+const RING_VB_H = 100;
+const RING_R = 8;          // نصف قطر الزوايا
+const RING_GAP = 22;       // نصف الفجوة المخصصة للشارة عند أسفل المنتصف (بوحدات viewBox)
+const RING_INSET = 1.5;    // إبعاد بسيط داخل البطاقة حتى لا يُقَص الإطار
+
+const ringPathD = (() => {
+  const x0 = RING_INSET, y0 = RING_INSET;
+  const x1 = RING_VB_W - RING_INSET, y1 = RING_VB_H - RING_INSET;
+  const r = RING_R;
+  const cx = RING_VB_W / 2;
+  const startX = cx + RING_GAP;     // الطرف الأيمن للفجوة (بداية المسار)
+  const endX = cx - RING_GAP;       // الطرف الأيسر للفجوة (نهاية المسار)
+  // M start → H bottom-right → A → V → A top-right → H → A top-left → V → A bottom-left → H end
+  return [
+    `M ${startX} ${y1}`,
+    `H ${x1 - r}`,
+    `A ${r} ${r} 0 0 0 ${x1} ${y1 - r}`,
+    `V ${y0 + r}`,
+    `A ${r} ${r} 0 0 0 ${x1 - r} ${y0}`,
+    `H ${x0 + r}`,
+    `A ${r} ${r} 0 0 0 ${x0} ${y0 + r}`,
+    `V ${y1 - r}`,
+    `A ${r} ${r} 0 0 0 ${x0 + r} ${y1}`,
+    `H ${endX}`,
+  ].join(' ');
+})();
 
 export const ProjectCardRing = ({
   pct, children, className = '',
@@ -457,32 +493,32 @@ export const ProjectCardRing = ({
   const clamped = Math.max(0, Math.min(100, Math.round(pct || 0)));
   return (
     <div className={`relative ${className}`}>
-      {/* SVG overlay tracing the rounded-rect border */}
       <svg
         className="pointer-events-none absolute inset-0 w-full h-full overflow-visible"
         preserveAspectRatio="none"
-        viewBox="0 0 100 100"
+        viewBox={`0 0 ${RING_VB_W} ${RING_VB_H}`}
         aria-hidden="true">
         {/* track */}
-        <rect
-          x="1" y="1" width="98" height="98" rx="6" ry="6"
+        <path
+          d={ringPathD}
           fill="none"
           className="stroke-gray-200 dark:stroke-slate-700"
           strokeWidth="2"
+          strokeLinecap="round"
           vectorEffect="non-scaling-stroke"
           pathLength={100} />
-        {/* progress (RTL: visually starts from top-right going clockwise — matches reading) */}
-        <rect
-          x="1" y="1" width="98" height="98" rx="6" ry="6"
+        {/* progress */}
+        <path
+          d={ringPathD}
           fill="none"
           stroke="#3F9B7A"
           strokeWidth="3"
           strokeLinecap="round"
           vectorEffect="non-scaling-stroke"
           pathLength={100}
-          strokeDasharray="100"
-          strokeDashoffset={100 - clamped}
-          style={{ transition: 'stroke-dashoffset 600ms ease' }} />
+          strokeDasharray={`${clamped} ${100 - clamped}`}
+          strokeDashoffset="0"
+          style={{ transition: 'stroke-dasharray 600ms ease' }} />
       </svg>
       {children}
     </div>
@@ -490,56 +526,103 @@ export const ProjectCardRing = ({
 };
 
 /* ──────────────────────────────────────────────────────────────────
-   PhaseStepper — 5 دوائر متصلة لمراحل المشروع الرئيسية (RTL)
+   PhaseBrickWall — جدار بِركس أفقي للمراحل الرئيسية + المراحل الفرعية
+   تصميم: 5 طوب رئيسية + 4 مثلثات (مقلوبة، رأسها للأسفل) بين كل زوج.
+   التفعيل بالنقر؛ تظهر العناوين فقط عند توسيع اللوحة.
    ────────────────────────────────────────────────────────────────── */
 
-export type StepperPhaseStatus = 'completed' | 'pending' | 'notStarted';
+export type BrickStatus = 'completed' | 'pending' | 'notStarted' | 'rejected';
+export type SubBrickStatus = 'inactive' | 'pending' | 'completed';
 
-const STEPPER_COLORS: Record<StepperPhaseStatus, { bg: string; text: string; ring: string }> = {
-  completed:  { bg: '#3F9B7A', text: '#FFFFFF', ring: '#3F9B7A' }, // logo teal-dark
-  pending:    { bg: '#B45309', text: '#FFFFFF', ring: '#B45309' }, // dark yellow (amber-700)
-  notStarted: { bg: '#4A1F66', text: '#FFFFFF', ring: '#4A1F66' }, // logo purple
+export const BRICK_COLORS: Record<BrickStatus, string> = {
+  completed:  '#3F9B7A', // logo teal-dark
+  pending:    '#92400E', // dark brown (amber-800)
+  notStarted: '#4A1F66', // logo purple
+  rejected:   '#B91C1C',
 };
 
-export interface PhaseStepperItem {
+export const SUB_BRICK_COLORS: Record<SubBrickStatus, string> = {
+  inactive:  '#374151', // dark grey
+  pending:   '#92400E',
+  completed: '#3F9B7A',
+};
+
+export interface PhaseBrickItem {
   key: string;
   name: string;
-  status: StepperPhaseStatus;
   index: number;
+  status: BrickStatus;
 }
 
-export const PhaseStepper = ({
-  phases, className = '',
+export interface SubPhaseSlot {
+  key: string;
+  name: string;
+  status: SubBrickStatus;
+}
+
+/** نمط طوبٍ خفيف: خطّان أفقيّان شبه شفّافَين يُحاكيان خطوط الملاط. */
+const BRICK_TEXTURE = `
+  linear-gradient(to bottom,
+    transparent 0%,
+    transparent 32%,
+    rgba(255,255,255,0.18) 32%,
+    rgba(255,255,255,0.18) 33%,
+    transparent 33%,
+    transparent 65%,
+    rgba(255,255,255,0.18) 65%,
+    rgba(255,255,255,0.18) 66%,
+    transparent 66%,
+    transparent 100%)
+`;
+
+export const PhaseBrickWall = ({
+  phases, subPhases, expandedKey, onExpand, className = '',
 }: {
-  phases: PhaseStepperItem[];
+  phases: PhaseBrickItem[];
+  subPhases: SubPhaseSlot[];
+  expandedKey: string | null;
+  onExpand: (key: string) => void;
   className?: string;
 }) => (
-  <div dir="rtl" className={`flex items-start justify-between gap-2 px-2 py-4 ${className}`}>
+  <div dir="rtl" className={`flex items-stretch gap-0.5 w-full ${className}`}>
     {phases.map((p, i) => {
-      const c = STEPPER_COLORS[p.status];
+      const isExpanded = expandedKey === p.key;
+      const bg = BRICK_COLORS[p.status];
+      const sub = subPhases[i]; // المثلث الذي بعد الطوبة (i بين الطوبة i و i+1)
       const isLast = i === phases.length - 1;
-      const next = phases[i + 1];
-      const connectorColor = next
-        ? (next.status === 'completed' ? STEPPER_COLORS.completed.bg
-            : p.status === 'completed' ? STEPPER_COLORS.completed.bg
-            : STEPPER_COLORS.notStarted.bg)
-        : 'transparent';
       return (
         <React.Fragment key={p.key}>
-          <div className="flex flex-col items-center gap-2 flex-shrink-0 min-w-0" title={p.name}>
-            <div
-              className={`w-14 h-14 rounded-full flex items-center justify-center font-bold text-base shadow-md ${
-                p.status === 'pending' ? 'animate-pulse' : ''
-              }`}
-              style={{ background: c.bg, color: c.text, boxShadow: `0 0 0 4px ${c.ring}33` }}>
-              {p.status === 'completed' ? <CheckCircle2 className="w-6 h-6" /> : p.index + 1}
-            </div>
-            <span className="text-[11px] font-bold text-gray-700 dark:text-slate-200 text-center max-w-[90px] leading-tight">
-              {p.name}
-            </span>
-          </div>
-          {!isLast && (
-            <div className="flex-1 h-1 rounded-full mt-7 min-w-[16px]" style={{ background: connectorColor, opacity: 0.6 }} />
+          <button
+            type="button"
+            onClick={() => onExpand(p.key)}
+            title={p.name}
+            className={`group relative flex-1 min-w-[36px] h-[52px] rounded-md flex items-center justify-center font-bold text-white transition-all
+              ${p.status === 'pending' ? 'shadow-[0_0_0_2px_rgba(146,64,14,0.4)]' : ''}
+              ${isExpanded ? 'ring-2 ring-white/80 dark:ring-slate-100/60 ring-offset-1 ring-offset-transparent scale-[1.02]' : 'hover:brightness-110'}`}
+            style={{
+              background: bg,
+              backgroundImage: BRICK_TEXTURE,
+            }}
+            aria-pressed={isExpanded}>
+            <span className="text-base font-extrabold drop-shadow-sm">{p.index + 1}</span>
+          </button>
+          {!isLast && sub && (
+            <button
+              type="button"
+              disabled={sub.status === 'inactive'}
+              onClick={() => sub.status !== 'inactive' && onExpand(sub.key)}
+              title={sub.status === 'inactive' ? 'مرحلة فرعية غير مُفعَّلة' : sub.name}
+              className={`relative w-7 h-[52px] flex items-start justify-center pt-1 transition-all
+                ${sub.status === 'inactive' ? 'cursor-not-allowed opacity-80' : 'hover:brightness-110'}
+                ${expandedKey === sub.key ? 'scale-110' : ''}`}
+              style={{
+                background: SUB_BRICK_COLORS[sub.status],
+                backgroundImage: sub.status === 'inactive' ? 'none' : BRICK_TEXTURE,
+                clipPath: 'polygon(0 0, 100% 0, 50% 100%)',
+              }}
+              aria-pressed={expandedKey === sub.key}>
+              <span className="text-[10px] font-bold text-white/90 leading-none">{i + 1}.{i + 2}</span>
+            </button>
           )}
         </React.Fragment>
       );

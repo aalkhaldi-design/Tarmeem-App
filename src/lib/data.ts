@@ -161,7 +161,7 @@ export const isAdminEmail = (email: string | null | undefined) =>
    ────────────────────────────────────────────────────────────────── */
 
 export type FormCode =
-  | 'F-02' | 'F-03' | 'F-08'
+  | 'F-02' | 'F-03' | 'F-04' | 'F-08' | 'F-09'
   | 'F-18' | 'F-22' | 'F-21' | 'F-20' | 'F-19'
   | 'F-85' | 'F-14' | 'F-23' | 'F-15'
   | 'F-07' | 'F-52';
@@ -223,9 +223,19 @@ export const FORMS: FormDef[] = [
     originRoles: ['RESEARCH_MANAGER'],
     approvalChain: ['RESEARCH_MANAGER', 'EXEC_DIRECTOR', 'RESEARCH_MANAGER'],
     bridgesTo: ['EXEC', 'PROJECTS'],
-    triggers: ['F-08'],
+    triggers: ['F-04'],
     slaDays: 3,
-    description: 'مدير البحث ➡️ المدير التنفيذي ➡️ مدير البحث (للتحويل إلى المشاريع). يولّد رقم المشروع TRM-YYYY-NNN ويُطلق F-08.',
+    description: 'مدير البحث ➡️ المدير التنفيذي ➡️ مدير البحث (للتحويل إلى المشاريع). عند الاعتماد النهائي يُطلق F-04 لتعيين مهندس التشخيص.',
+  },
+  /* F-04 — تعيين مهندس التشخيص (single-step, HEAD_DIAGNOSIS) */
+  {
+    code: 'F-04', title: 'تعيين مهندس التشخيص', titleEn: 'Diagnosis Engineer Assignment',
+    category: 'BENEFICIARY', ownerDept: 'PROJECTS',
+    originRoles: ['HEAD_DIAGNOSIS'],
+    approvalChain: ['HEAD_DIAGNOSIS'],
+    triggers: ['F-08'],
+    slaDays: 2,
+    description: 'رئيس قسم التشخيص يختار مهندس التشخيص للمشروع. عند الإرسال يُفتَح F-08 وكراسة التشخيص للمهندس.',
   },
   /* F-08 */
   {
@@ -233,9 +243,18 @@ export const FORMS: FormDef[] = [
     category: 'BENEFICIARY', ownerDept: 'PROJECTS',
     originRoles: ['DIAGNOSIS_ENGINEER'],
     approvalChain: ['DIAGNOSIS_ENGINEER', 'HEAD_DIAGNOSIS', 'PROJECTS_MANAGER'],
-    triggers: ['F-20'],
+    triggers: ['F-20', 'F-09'],
     slaDays: 7,
-    description: 'مهندس التشخيص ميدانياً ➡️ رئيس قسم التشخيص/الإشراف ➡️ مدير المشاريع. عند safetyHazard=true يُفتَح F-18 و F-22.',
+    description: 'مهندس التشخيص ميدانياً ➡️ رئيس قسم التشخيص ➡️ مدير المشاريع. عند الإرسال يُفتَح F-20 و F-09 لرئيس قسم الإشراف. عند safetyHazard=true يُفتَح F-18 و F-22.',
+  },
+  /* F-09 — تعيين مشرف التشخيص (single-step, HEAD_SUPERVISION) */
+  {
+    code: 'F-09', title: 'تعيين مشرف التشخيص', titleEn: 'Diagnosis Supervisor Assignment',
+    category: 'BENEFICIARY', ownerDept: 'PROJECTS',
+    originRoles: ['HEAD_SUPERVISION'],
+    approvalChain: ['HEAD_SUPERVISION'],
+    slaDays: 2,
+    description: 'رئيس قسم الإشراف يختار المهندس المشرف للمشروع. يُفتَح تلقائياً عند تقديم كراسة التشخيص F-08.',
   },
   /* F-18 */
   {
@@ -271,12 +290,12 @@ export const FORMS: FormDef[] = [
   {
     code: 'F-20', title: 'خطة توريد المواد', titleEn: 'Material Supply Plan',
     category: 'SUPPLY', ownerDept: 'PROJECTS',
-    originRoles: ['DIAGNOSIS_ENGINEER'],
-    approvalChain: ['DIAGNOSIS_ENGINEER', 'SUPPORT_MANAGER'],
+    originRoles: ['HEAD_SUPERVISION'],
+    approvalChain: ['HEAD_SUPERVISION', 'SUPPORT_MANAGER'],
     bridgesTo: ['SUPPORT'],
     triggers: ['F-19'],
     slaDays: 5,
-    description: 'المهندس المشرف يرصد المواد ➡️ الخدمات المساندة تُسند المورد والتواريخ.',
+    description: 'رئيس قسم الإشراف يرصد المواد ➡️ الخدمات المساندة تُسند المورد والتواريخ.',
   },
   /* F-19 */
   {
@@ -364,6 +383,10 @@ export const formsByDepartment = (dept: DepartmentKey): FormDef[] =>
 export const FORM_CREATOR_GATE: Partial<Record<FormCode, { dept: DepartmentKey; roles: RoleKey[] }>> = {
   'F-02': { dept: 'RESEARCH', roles: ['SOCIAL_RESEARCHER'] },
   'F-03': { dept: 'RESEARCH', roles: ['RESEARCH_MANAGER'] },
+  'F-04': { dept: 'PROJECTS', roles: ['HEAD_DIAGNOSIS'] },
+  'F-08': { dept: 'PROJECTS', roles: ['DIAGNOSIS_ENGINEER'] },
+  'F-09': { dept: 'PROJECTS', roles: ['HEAD_SUPERVISION'] },
+  'F-20': { dept: 'PROJECTS', roles: ['HEAD_SUPERVISION'] },
 };
 
 export const canCreateForm = (

@@ -1983,13 +1983,354 @@ const CreatorShell: React.FC<{ title: string; onClose: () => void; footer: React
 );
 
 /* ──────────────────────────────────────────────────────────────────
+   F-04 — تعيين مهندس التشخيص (HEAD_DIAGNOSIS, single-step)
+   F-09 — تعيين مشرف التشخيص (HEAD_SUPERVISION, single-step)
+   ────────────────────────────────────────────────────────────────── */
+
+const engineerOptionsFor = (users: UserProfile[]) =>
+  users.filter(u => u.role === 'DIAGNOSIS_ENGINEER').map(u => ({ value: u.id, label: u.fullName }));
+
+const AssignmentCreatorComponent: React.FC<{
+  user: UserProfile;
+  api: any;
+  users: UserProfile[];
+  context: any;
+  onClose: () => void;
+  formCode: 'F-04' | 'F-09';
+  title: string;
+  selectLabel: string;
+  buttonLabel: string;
+}> = ({ user, api, users, context, onClose, formCode, title, selectLabel, buttonLabel }) => {
+  const projects = context.projects as ProjectRecord[];
+  const [projectRefId, setProjectRefId] = useState<string>(projects[0]?.id || '');
+  const [engineerId, setEngineerId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!canCreateForm(formCode, user)) return;
+    const p = projects.find(x => x.id === projectRefId);
+    if (!p || !engineerId) return;
+    setBusy(true);
+    try {
+      const engineer = users.find(u => u.id === engineerId);
+      await api.createForm({
+        code: formCode, user,
+        projectId: p.projectId || '', projectRefId: p.id,
+        beneficiaryName: p.beneficiaryName,
+        notes,
+        data: { engineerId, engineerName: engineer?.fullName || '' },
+      });
+      onClose();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <CreatorShell title={`${formCode} · ${title}`} onClose={onClose}
+      footer={
+        <button onClick={submit} disabled={busy || !engineerId || !projectRefId}
+          className="px-5 py-2 text-sm font-bold bg-[#4A1F66] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
+          <Send className="w-4 h-4" /> {buttonLabel}
+        </button>
+      }>
+      <Card title="المشروع" icon={Building2}>
+        <Select label="المشروع"
+          options={projects.map(p => ({ value: p.id, label: `${p.projectId || '—'} · ${p.beneficiaryName}` }))}
+          value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
+      </Card>
+      <Card title={selectLabel} icon={UsersIcon}>
+        <Select label={selectLabel} required
+          options={engineerOptionsFor(users)}
+          value={engineerId} onChange={e => setEngineerId(e.target.value)} />
+        <TextArea className="mt-3" label="ملاحظات (اختياري)" rows={2}
+          value={notes} onChange={e => setNotes(e.target.value)} />
+      </Card>
+    </CreatorShell>
+  );
+};
+
+export const F04Creator: FormCreator = (props) => (
+  <AssignmentCreatorComponent {...props} formCode="F-04" title="تعيين مهندس التشخيص"
+    selectLabel="مهندس ومشرف التشخيص" buttonLabel="تعيين وإطلاق F-08" />
+);
+
+export const F09Creator: FormCreator = (props) => (
+  <AssignmentCreatorComponent {...props} formCode="F-09" title="تعيين مشرف التشخيص"
+    selectLabel="المهندس المشرف" buttonLabel="تعيين" />
+);
+
+const AssignmentRendererComponent: React.FC<{
+  rec: FormRecord;
+  user: UserProfile;
+  api: any;
+  users: UserProfile[];
+  selectLabel: string;
+  approveLabel: string;
+}> = ({ rec, user, api, users, selectLabel, approveLabel }) => {
+  const awaitsMe = formAwaitsUser(rec, user);
+  const [engineerId, setEngineerId] = useState<string>(rec.data?.engineerId || '');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!engineerId) return;
+    setBusy(true);
+    try {
+      const engineer = users.find(u => u.id === engineerId);
+      await api.approveForm(rec.id, user, note || approveLabel, {
+        engineerId, engineerName: engineer?.fullName || '',
+      });
+    } finally { setBusy(false); }
+  };
+
+  const chosenName =
+    rec.data?.engineerName ||
+    users.find(u => u.id === rec.data?.engineerId)?.fullName ||
+    '';
+
+  return (
+    <FormShell rec={rec} user={user} api={api}
+      approvalSection={
+        awaitsMe ? (
+          <div className="border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-900/20 rounded-lg p-3 space-y-3">
+            <p className="text-xs font-bold text-amber-800 dark:text-amber-300">
+              {selectLabel} — اختر اسماً ثم اضغط {approveLabel}.
+            </p>
+            <Select label={selectLabel} required
+              options={engineerOptionsFor(users)}
+              value={engineerId} onChange={e => setEngineerId(e.target.value)} />
+            <TextArea label="ملاحظات (اختياري)" rows={2} value={note} onChange={e => setNote(e.target.value)} />
+            <button onClick={submit} disabled={busy || !engineerId}
+              className="w-full py-2 bg-[#3F9B7A] text-white rounded-lg font-bold text-sm hover:bg-[#2f7a5e] transition disabled:opacity-50 flex items-center justify-center gap-1.5">
+              <Send className="w-4 h-4" /> {busy ? 'جاري الإرسال...' : approveLabel}
+            </button>
+          </div>
+        ) : undefined
+      }>
+      <Card title={selectLabel} icon={UsersIcon}>
+        <ReadOnlyField label={selectLabel} value={chosenName} />
+        {rec.notes && <ReadOnlyField className="mt-3" label="ملاحظات" value={rec.notes} />}
+      </Card>
+    </FormShell>
+  );
+};
+
+export const F04Renderer: FormRenderer = (props) => (
+  <AssignmentRendererComponent {...props}
+    selectLabel="مهندس ومشرف التشخيص" approveLabel="تعيين وإطلاق كراسة التشخيص" />
+);
+
+export const F09Renderer: FormRenderer = (props) => (
+  <AssignmentRendererComponent {...props}
+    selectLabel="المهندس المشرف" approveLabel="تعيين" />
+);
+
+/* ──────────────────────────────────────────────────────────────────
+   Inline section components used by ProjectDetail's brick accordion
+   ────────────────────────────────────────────────────────────────── */
+
+/** قسم F-04 (داخل لوحة المرحلة الثانية في عرض المشروع). */
+export const F04InlineSection: React.FC<{
+  rec?: FormRecord;
+  mode: 'view' | 'edit';
+  user: UserProfile;
+  users: UserProfile[];
+  api: any;
+  project: ProjectRecord;
+}> = ({ rec, mode, user, users, api, project }) => {
+  const [engineerId, setEngineerId] = useState<string>(rec?.data?.engineerId || '');
+  const [notes, setNotes] = useState<string>(rec?.notes || '');
+  const [busy, setBusy] = useState(false);
+
+  const chosenName =
+    rec?.data?.engineerName ||
+    users.find(u => u.id === (rec?.data?.engineerId || engineerId))?.fullName ||
+    '';
+
+  const submit = async () => {
+    if (!engineerId) return;
+    setBusy(true);
+    try {
+      const engineer = users.find(u => u.id === engineerId);
+      const dataPatch = { engineerId, engineerName: engineer?.fullName || '' };
+      if (rec) {
+        await api.approveForm(rec.id, user, notes || 'تعيين مهندس التشخيص', dataPatch);
+      } else {
+        await api.createForm({
+          code: 'F-04', user,
+          projectId: project.projectId || '', projectRefId: project.id,
+          beneficiaryName: project.beneficiaryName, notes, data: dataPatch,
+        });
+      }
+    } finally { setBusy(false); }
+  };
+
+  if (mode === 'view') {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 opacity-70">
+        <ReadOnlyField label="مهندس ومشرف التشخيص" value={chosenName} />
+        <ReadOnlyField label="ملاحظات" value={rec?.notes} />
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <Select label="مهندس ومشرف التشخيص" required
+        options={engineerOptionsFor(users)}
+        value={engineerId} onChange={e => setEngineerId(e.target.value)} />
+      <TextArea label="ملاحظات (اختياري)" rows={2} value={notes} onChange={e => setNotes(e.target.value)} />
+      <button onClick={submit} disabled={busy || !engineerId}
+        className="px-4 py-2 rounded-lg text-sm font-bold bg-[#3F9B7A] text-white hover:bg-[#2f7a5e] transition disabled:opacity-50 flex items-center gap-1.5">
+        <Send className="w-4 h-4" /> {busy ? 'جاري الإرسال...' : 'تعيين وإطلاق كراسة التشخيص'}
+      </button>
+    </div>
+  );
+};
+
+/** قسم F-09 — تعيين مشرف التشخيص. */
+export const F09InlineSection: React.FC<{
+  rec?: FormRecord;
+  mode: 'view' | 'edit';
+  user: UserProfile;
+  users: UserProfile[];
+  api: any;
+  project: ProjectRecord;
+}> = ({ rec, mode, user, users, api, project }) => {
+  const [engineerId, setEngineerId] = useState<string>(rec?.data?.engineerId || '');
+  const [notes, setNotes] = useState<string>(rec?.notes || '');
+  const [busy, setBusy] = useState(false);
+
+  const chosenName =
+    rec?.data?.engineerName ||
+    users.find(u => u.id === (rec?.data?.engineerId || engineerId))?.fullName ||
+    '';
+
+  const submit = async () => {
+    if (!engineerId) return;
+    setBusy(true);
+    try {
+      const engineer = users.find(u => u.id === engineerId);
+      const dataPatch = { engineerId, engineerName: engineer?.fullName || '' };
+      if (rec) {
+        await api.approveForm(rec.id, user, notes || 'تعيين مشرف التشخيص', dataPatch);
+      } else {
+        await api.createForm({
+          code: 'F-09', user,
+          projectId: project.projectId || '', projectRefId: project.id,
+          beneficiaryName: project.beneficiaryName, notes, data: dataPatch,
+        });
+      }
+    } finally { setBusy(false); }
+  };
+
+  if (mode === 'view') {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 opacity-70">
+        <ReadOnlyField label="المهندس المشرف" value={chosenName} />
+        <ReadOnlyField label="ملاحظات" value={rec?.notes} />
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <Select label="المهندس المشرف" required
+        options={engineerOptionsFor(users)}
+        value={engineerId} onChange={e => setEngineerId(e.target.value)} />
+      <TextArea label="ملاحظات (اختياري)" rows={2} value={notes} onChange={e => setNotes(e.target.value)} />
+      <button onClick={submit} disabled={busy || !engineerId}
+        className="px-4 py-2 rounded-lg text-sm font-bold bg-[#3F9B7A] text-white hover:bg-[#2f7a5e] transition disabled:opacity-50 flex items-center gap-1.5">
+        <Send className="w-4 h-4" /> {busy ? 'جاري الإرسال...' : 'تعيين'}
+      </button>
+    </div>
+  );
+};
+
+/** قسم F-03 لخطوة معيّنة (داخل لوحة المرحلة الأولى). */
+export const F03StepInlineSection: React.FC<{
+  rec?: FormRecord;
+  step: 0 | 1 | 2;
+  mode: 'view' | 'edit';
+  user: UserProfile;
+  users: UserProfile[];
+  api: any;
+}> = ({ rec, step, mode, user, api }) => {
+  const [decision, setDecision] = useState<'approved' | 'rejected'>('approved');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const approval = rec?.approvals?.[step];
+  const dimWrap = mode === 'view' ? 'opacity-70' : '';
+
+  const act = async () => {
+    if (!rec) return;
+    setBusy(true);
+    try {
+      if (decision === 'approved') {
+        await api.approveForm(rec.id, user, note);
+      } else {
+        await api.rejectForm(rec.id, user, note);
+      }
+    } finally { setBusy(false); }
+  };
+
+  let body: React.ReactNode;
+  if (step === 0) {
+    body = (
+      <div className={`grid grid-cols-1 md:grid-cols-2 gap-3 ${dimWrap}`}>
+        <ReadOnlyField label="القرار (اعتماد استحقاق الخدمة)" value={rec?.data?.eligibility} />
+        <ReadOnlyField label="ملاحظات مدير البحث" value={rec?.data?.managerNotes} />
+        {approval && <ReadOnlyField label="بواسطة" value={`${approval.actorName || '—'} · ${new Date(approval.at).toLocaleDateString('ar-SA')}`} />}
+      </div>
+    );
+  } else if (step === 1) {
+    body = (
+      <div className={`grid grid-cols-1 md:grid-cols-2 gap-3 ${dimWrap}`}>
+        <ReadOnlyField label="قرار المدير التنفيذي" value={
+          approval?.decision === 'approved' ? 'اعتماد' :
+          approval?.decision === 'rejected' ? 'رفض' :
+          approval?.decision === 'deferred' ? 'تأجيل' : ''} />
+        <ReadOnlyField label="ملاحظات المدير التنفيذي" value={approval?.note} />
+        {approval && <ReadOnlyField label="بواسطة" value={`${approval.actorName || '—'} · ${new Date(approval.at).toLocaleDateString('ar-SA')}`} />}
+      </div>
+    );
+  } else {
+    body = (
+      <div className={`grid grid-cols-1 md:grid-cols-2 gap-3 ${dimWrap}`}>
+        <ReadOnlyField label="ملاحظات التحويل" value={approval?.note} />
+        <ReadOnlyField label="رقم المشروع المُحوَّل" value={rec?.projectId} />
+        {approval && <ReadOnlyField label="بواسطة" value={`${approval.actorName || '—'} · ${new Date(approval.at).toLocaleDateString('ar-SA')}`} />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {body}
+      {mode === 'edit' && rec && step !== 2 && (
+        <div className="border-t pt-3 space-y-2 dark:border-slate-700">
+          <Select label="القرار" options={[{ value: 'approved', label: 'اعتماد' }, { value: 'rejected', label: 'رفض' }]}
+            value={decision} onChange={e => setDecision(e.target.value as any)} />
+          <TextArea label="ملاحظات (اختياري)" rows={2} value={note} onChange={e => setNote(e.target.value)} />
+          <button onClick={act} disabled={busy}
+            className="px-4 py-2 rounded-lg text-sm font-bold bg-[#3F9B7A] text-white hover:bg-[#2f7a5e] transition disabled:opacity-50 flex items-center gap-1.5">
+            <Send className="w-4 h-4" /> {busy ? 'جاري الإرسال...' : 'إرسال القرار'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
    Registries
    ────────────────────────────────────────────────────────────────── */
 
 export const RENDERERS: Record<string, FormRenderer | undefined> = {
   'F-02': F02Renderer,
   'F-03': F03Renderer,
+  'F-04': F04Renderer,
   'F-08': F08Renderer,
+  'F-09': F09Renderer,
   'F-18': F18Renderer,
   'F-22': F22Renderer,
   'F-21': F21Renderer,
@@ -2006,7 +2347,9 @@ export const RENDERERS: Record<string, FormRenderer | undefined> = {
 export const CREATORS: Record<string, FormCreator | undefined> = {
   'F-02': F02Creator,
   'F-03': F03Creator,
+  'F-04': F04Creator,
   'F-08': F08Creator,
+  'F-09': F09Creator,
   'F-18': F18Creator,
   'F-21': F21Creator,
   'F-20': F20Creator,

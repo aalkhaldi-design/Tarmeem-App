@@ -5,8 +5,8 @@ import {
 } from 'lucide-react';
 import {
   FORMS, FORM_BY_CODE, FORM_STATUS_LABELS,
-  FormCode, FormDef, FormStatus, RoleKey, roleName,
-  DepartmentKey, departmentName, slaStatus,
+  FormCode, FormStatus, RoleKey, roleName,
+  DepartmentKey, departmentName, slaStatus, canCreateForm,
 } from '../lib/data';
 import { Card, Pill, EmptyState } from './ui';
 import type { UserProfile } from './Auth';
@@ -76,10 +76,6 @@ export interface FormsApi {
 /* ──────────────────────────────────────────────────────────────────
    Helpers
    ────────────────────────────────────────────────────────────────── */
-
-export function formCanBeOriginatedBy(form: FormDef, role: RoleKey): boolean {
-  return form.originRoles.includes(role);
-}
 
 export function formAwaitsRole(record: FormRecord, role: RoleKey): boolean {
   if (record.status !== 'pending') return false;
@@ -361,8 +357,8 @@ export const NewFormModal: React.FC<{
   onClose: () => void;
 }> = ({ user, api, users, context, creators, preselect, onClose }) => {
   const allowed = useMemo(
-    () => FORMS.filter(f => formCanBeOriginatedBy(f, user.role as RoleKey) || user.role === 'ADMIN'),
-    [user.role],
+    () => FORMS.filter(f => canCreateForm(f.code, user)),
+    [user],
   );
   const [code, setCode] = useState<FormCode | null>(preselect && allowed.some(f => f.code === preselect) ? preselect : null);
 

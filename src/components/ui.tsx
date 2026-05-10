@@ -443,5 +443,109 @@ export const EventIcon = ({ type }: { type: string }) => {
   }
 };
 
+/* ──────────────────────────────────────────────────────────────────
+   ProjectCardRing — إطار خارجي مُلوَّن يمثّل نسبة الإنجاز حول البطاقة
+   ────────────────────────────────────────────────────────────────── */
+
+export const ProjectCardRing = ({
+  pct, children, className = '',
+}: {
+  pct: number;
+  children: React.ReactNode;
+  className?: string;
+}) => {
+  const clamped = Math.max(0, Math.min(100, Math.round(pct || 0)));
+  return (
+    <div className={`relative ${className}`}>
+      {/* SVG overlay tracing the rounded-rect border */}
+      <svg
+        className="pointer-events-none absolute inset-0 w-full h-full overflow-visible"
+        preserveAspectRatio="none"
+        viewBox="0 0 100 100"
+        aria-hidden="true">
+        {/* track */}
+        <rect
+          x="1" y="1" width="98" height="98" rx="6" ry="6"
+          fill="none"
+          className="stroke-gray-200 dark:stroke-slate-700"
+          strokeWidth="2"
+          vectorEffect="non-scaling-stroke"
+          pathLength={100} />
+        {/* progress (RTL: visually starts from top-right going clockwise — matches reading) */}
+        <rect
+          x="1" y="1" width="98" height="98" rx="6" ry="6"
+          fill="none"
+          stroke="#3F9B7A"
+          strokeWidth="3"
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+          pathLength={100}
+          strokeDasharray="100"
+          strokeDashoffset={100 - clamped}
+          style={{ transition: 'stroke-dashoffset 600ms ease' }} />
+      </svg>
+      {children}
+    </div>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   PhaseStepper — 5 دوائر متصلة لمراحل المشروع الرئيسية (RTL)
+   ────────────────────────────────────────────────────────────────── */
+
+export type StepperPhaseStatus = 'completed' | 'pending' | 'notStarted';
+
+const STEPPER_COLORS: Record<StepperPhaseStatus, { bg: string; text: string; ring: string }> = {
+  completed:  { bg: '#3F9B7A', text: '#FFFFFF', ring: '#3F9B7A' }, // logo teal-dark
+  pending:    { bg: '#B45309', text: '#FFFFFF', ring: '#B45309' }, // dark yellow (amber-700)
+  notStarted: { bg: '#4A1F66', text: '#FFFFFF', ring: '#4A1F66' }, // logo purple
+};
+
+export interface PhaseStepperItem {
+  key: string;
+  name: string;
+  status: StepperPhaseStatus;
+  index: number;
+}
+
+export const PhaseStepper = ({
+  phases, className = '',
+}: {
+  phases: PhaseStepperItem[];
+  className?: string;
+}) => (
+  <div dir="rtl" className={`flex items-start justify-between gap-2 px-2 py-4 ${className}`}>
+    {phases.map((p, i) => {
+      const c = STEPPER_COLORS[p.status];
+      const isLast = i === phases.length - 1;
+      const next = phases[i + 1];
+      const connectorColor = next
+        ? (next.status === 'completed' ? STEPPER_COLORS.completed.bg
+            : p.status === 'completed' ? STEPPER_COLORS.completed.bg
+            : STEPPER_COLORS.notStarted.bg)
+        : 'transparent';
+      return (
+        <React.Fragment key={p.key}>
+          <div className="flex flex-col items-center gap-2 flex-shrink-0 min-w-0" title={p.name}>
+            <div
+              className={`w-14 h-14 rounded-full flex items-center justify-center font-bold text-base shadow-md ${
+                p.status === 'pending' ? 'animate-pulse' : ''
+              }`}
+              style={{ background: c.bg, color: c.text, boxShadow: `0 0 0 4px ${c.ring}33` }}>
+              {p.status === 'completed' ? <CheckCircle2 className="w-6 h-6" /> : p.index + 1}
+            </div>
+            <span className="text-[11px] font-bold text-gray-700 dark:text-slate-200 text-center max-w-[90px] leading-tight">
+              {p.name}
+            </span>
+          </div>
+          {!isLast && (
+            <div className="flex-1 h-1 rounded-full mt-7 min-w-[16px]" style={{ background: connectorColor, opacity: 0.6 }} />
+          )}
+        </React.Fragment>
+      );
+    })}
+  </div>
+);
+
 /* Note: THEME re-export to satisfy any legacy imports */
 export const __THEME_REF = THEME;

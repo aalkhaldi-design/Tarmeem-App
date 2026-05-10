@@ -357,6 +357,37 @@ export const formsByDepartment = (dept: DepartmentKey): FormDef[] =>
   FORMS.filter(f => f.ownerDept === dept || (f.bridgesTo || []).includes(dept));
 
 /* ──────────────────────────────────────────────────────────────────
+   صلاحيات إنشاء النماذج (admin-set rules — strict gate)
+   ────────────────────────────────────────────────────────────────── */
+
+/** قاعدة صارمة لمن يستطيع فتح منشئ النموذج: الإدارة + الدور المسموحان. */
+export const FORM_CREATOR_GATE: Partial<Record<FormCode, { dept: DepartmentKey; roles: RoleKey[] }>> = {
+  'F-02': { dept: 'RESEARCH', roles: ['SOCIAL_RESEARCHER'] },
+  'F-03': { dept: 'RESEARCH', roles: ['RESEARCH_MANAGER'] },
+};
+
+export const canCreateForm = (
+  code: FormCode,
+  user: { role: string; department?: string },
+): boolean => {
+  if (user.role === 'ADMIN') return true;
+  const gate = FORM_CREATOR_GATE[code];
+  if (gate) {
+    return user.department === gate.dept && gate.roles.includes(user.role as RoleKey);
+  }
+  return (FORM_BY_CODE[code]?.originRoles || []).includes(user.role as RoleKey);
+};
+
+/** المرحلة الفرعية لاعتماد F-03: index 1 يتطلب إدارة EXEC حتى وإن كان ownerDept هو RESEARCH. */
+export const requiredDeptForApprovalStep = (
+  code: FormCode,
+  approvalIndex: number,
+): DepartmentKey | null => {
+  if (code === 'F-03' && approvalIndex === 1) return 'EXEC';
+  return FORM_BY_CODE[code]?.ownerDept ?? null;
+};
+
+/* ──────────────────────────────────────────────────────────────────
    صلاحيات بوابات الإدارات (Portal Access)
    ────────────────────────────────────────────────────────────────── */
 

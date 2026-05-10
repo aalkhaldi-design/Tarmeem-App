@@ -5,12 +5,12 @@ import {
   Shield,
 } from 'lucide-react';
 import {
-  DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, RoleKey, formsByDepartment,
-  departmentName, roleName, FormCode,
+  DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, formsByDepartment,
+  departmentName, roleName, FormCode, canCreateForm,
 } from '../lib/data';
 import { Card, Pill, EmptyState, SearchBar } from './ui';
 import {
-  FormsApi, FormCard, formCanBeOriginatedBy, formAwaitsUser,
+  FormsApi, FormCard, formAwaitsUser,
 } from './Forms';
 import type { UserProfile } from './Auth';
 
@@ -38,7 +38,6 @@ const DepartmentPortalLayout: React.FC<PortalProps & { dept: DepartmentKey; extr
   ({ dept, user, api, onOpenForm, onCreateForm, extras }) => {
     const def = DEPT_BY_KEY[dept];
     const Icon = DEPT_ICON[dept];
-    const myRole = user.role as RoleKey;
 
     const ownedForms = useMemo(() => formsByDepartment(dept), [dept]);
     const records = useMemo(() => api.forms.filter(f => f.ownerDept === dept || (f.bridgesTo || []).includes(dept)), [api.forms, dept]);
@@ -63,7 +62,7 @@ const DepartmentPortalLayout: React.FC<PortalProps & { dept: DepartmentKey; extr
       rejected: records.filter(f => f.status === 'rejected').length,
     };
 
-    const creatable = ownedForms.filter(f => formCanBeOriginatedBy(f, myRole) || user.role === 'ADMIN');
+    const creatable = ownedForms.filter(f => canCreateForm(f.code, user));
 
     return (
       <div dir="rtl" className="space-y-5">

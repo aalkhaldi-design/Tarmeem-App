@@ -21,6 +21,7 @@ import { EmployeeProfile } from './components/EmployeeProfile';
 import {
   DEPARTMENTS, DepartmentKey, RoleKey, FORM_BY_CODE, FormCode,
   portalAccessForRole, roleName, isAdminEmail, formatProjectId,
+  requiredDeptForApprovalStep,
 } from './lib/data';
 import type { FormRecord, FormsApi } from './components/Forms';
 import { FormDetailModal, NewFormModal } from './components/Forms';
@@ -332,6 +333,8 @@ function App() {
     const myRole = user.role as RoleKey;
     const expected = rec.approvalChain[rec.approvalIndex];
     if (expected !== myRole && user.role !== 'ADMIN') return;
+    const requiredDept = requiredDeptForApprovalStep(rec.code, rec.approvalIndex);
+    if (requiredDept && user.department !== requiredDept && user.role !== 'ADMIN') return;
     if (rec.assigneeId && rec.assigneeId !== user.id && user.role !== 'ADMIN') return;
 
     const now = new Date().toISOString();
@@ -640,7 +643,8 @@ function App() {
     if (active === 'PROJECTS_LIST') {
       return activeProject ? (
         <ProjectDetail project={activeProject} user={userProfile} users={users} api={formsApi}
-          onBack={() => setActiveProjectId(null)} onOpenForm={openForm} />
+          onBack={() => setActiveProjectId(null)} onOpenForm={openForm}
+          updateProject={updateProject} />
       ) : (
         <MasterProjectList user={userProfile} api={formsApi} projects={projects} users={users} onOpenProject={openProject} />
       );

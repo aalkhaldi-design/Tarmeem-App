@@ -15,7 +15,7 @@ import {
   Card, Input, Select, TextArea, ReadOnlyField, FileUploader, Pill, NumberCounter,
   ProgressBar,
 } from '../ui';
-import { DEFAULT_LISTS, FormCode } from '../../lib/data';
+import { DEFAULT_LISTS, FormCode, canCreateForm } from '../../lib/data';
 import {
   FormCreator, FormRenderer, formAwaitsUser, FormRecord,
 } from '../Forms';
@@ -62,6 +62,8 @@ export interface ProjectRecord {
   awardedPrice?: number | null;
   safetyHazard?: boolean;
   partnerEntity?: string;
+  /** عند true: رقم المشروع تم تأكيده وتجميده ولا يمكن تعديله. */
+  projectIdLocked?: boolean;
   createdAt: string;
   updatedAt: string;
   createdBy: string;
@@ -75,6 +77,8 @@ export interface ProjectRecord {
 
 const F02_INIT = {
   caseRef: `CS-${Math.floor(1000 + Math.random() * 9000)}`,
+  projectNumber: '',
+  projectNumberLocked: false,
   personal: { fullName: '', idNumber: '', nationality: 'سعودي', gender: 'ذكر', dob: '', mobile1: '', mobile2: '', city: '', neighborhood: '', gps: '', socialStatus: '', education: '' },
   work: { commercialReg: 'لا يوجد', currentJob: 'لا يعمل' },
   income: { socialSecurity: 0, salary: 0, pension: 0, rehab: 0, citizenAccount: 0, realEstate: 0 },
@@ -86,22 +90,39 @@ const F02_INIT = {
   pledge: false,
 };
 
-export const F02Creator: FormCreator = ({ user, api, onClose }) => {
+export const F02Creator: FormCreator = ({ user, api, context, onClose }) => {
   const [data, setData] = useState<any>({ ...F02_INIT, researcher: { ...F02_INIT.researcher, name: user.fullName, mobile: '' } });
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const update = (sec: string, key: string, value: any) => setData((d: any) => ({ ...d, [sec]: { ...d[sec], [key]: value } }));
+  const updateRoot = (key: string, value: any) => setData((d: any) => ({ ...d, [key]: value }));
 
   const totalIncome: number = Object.values(data.income).reduce<number>((a, b) => a + Number(b || 0), 0);
   const totalDebts: number = Object.values(data.debts).reduce<number>((a, b) => a + Number(b || 0), 0);
 
   const submit = async () => {
+    if (!canCreateForm('F-02', user)) return;
     if (!data.pledge) return;
     if (!data.personal.fullName || !data.personal.idNumber) return;
     setBusy(true);
     try {
+      const projectRefId = await context.createProject({
+        projectId: data.projectNumber || '',
+        projectIdLocked: !!data.projectNumberLocked,
+        beneficiaryName: data.personal.fullName,
+        beneficiaryId: data.personal.idNumber,
+        city: data.personal.city,
+        neighborhood: data.personal.neighborhood,
+        caseRef: data.caseRef,
+        phase: 'RESEARCH',
+        progressPct: 0,
+        createdBy: user.id,
+        data: {},
+      });
       await api.createForm({
         code: 'F-02', user,
+        projectId: data.projectNumber || '',
+        projectRefId: projectRefId,
         beneficiaryName: data.personal.fullName,
         notes: data.researcher.opinion,
         data,
@@ -137,6 +158,33 @@ export const F02Creator: FormCreator = ({ user, api, onClose }) => {
 
         <div className="overflow-y-auto p-5 flex-1 space-y-4">
           {step === 0 && (
+            <>
+            <Card title="رقم المشروع (اختياري)" icon={Building2} accent="teal">
+              <div className="flex items-end gap-3 flex-wrap">
+                <Input
+                  label="رقم المشروع"
+                  className="flex-1 min-w-[220px]"
+                  value={data.projectNumber}
+                  readOnly={!!data.projectNumberLocked}
+                  onChange={e => updateRoot('projectNumber', e.target.value)}
+                  placeholder="اتركه فارغاً ليُملأ لاحقاً" />
+                {data.projectNumberLocked ? (
+                  <Pill tone="green" className="mb-1.5"><CheckCircle2 className="w-3 h-3" /> مُعتمَد ومُجمَّد</Pill>
+                ) : (
+                  data.projectNumber.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => updateRoot('projectNumberLocked', true)}
+                      className="mb-0 px-4 py-2 rounded-lg text-xs font-bold bg-[#3F9B7A] text-white hover:bg-[#2f7a5e] transition flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4" /> تأكيد وتجميد رقم المشروع
+                    </button>
+                  )
+                )}
+              </div>
+              <p className="text-[11px] text-gray-500 dark:text-slate-400 mt-2 leading-relaxed">
+                اختياري — يمكنك تركه فارغاً، أو إدخاله هنا أو لاحقاً من شاشة المشروع. بعد التأكيد لا يمكن تعديله.
+              </p>
+            </Card>
             <Card title="بيانات المستفيد" icon={UsersIcon} accent="purple">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Input label="الاسم الكامل" required value={data.personal.fullName} onChange={e => update('personal', 'fullName', e.target.value)} />
@@ -153,6 +201,7 @@ export const F02Creator: FormCreator = ({ user, api, onClose }) => {
                 <Input label="رابط الخريطة (GPS)" value={data.personal.gps} onChange={e => update('personal', 'gps', e.target.value)} placeholder="https://maps.google.com/..." />
               </div>
             </Card>
+            </>
           )}
           {step === 1 && (
             <>
@@ -248,10 +297,21 @@ export const F02Creator: FormCreator = ({ user, api, onClose }) => {
   );
 };
 
-export const F02Renderer: FormRenderer = ({ rec, user, api }) => {
+/** قراءة فقط لمحتوى F-02 — يُعاد استخدامه في عرض المشروع. */
+export const F02ReadOnlyBody: React.FC<{ rec: FormRecord }> = ({ rec }) => {
   const d = rec.data || {};
   return (
-    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد ورفعه لقرار الاستحقاق">
+    <>
+      {(d.projectNumber || d.projectNumberLocked) && (
+        <Card title="رقم المشروع" icon={Building2} accent="teal">
+          <div className="flex items-center gap-3 flex-wrap">
+            <ReadOnlyField label="رقم المشروع" value={d.projectNumber || '—'} className="flex-1 min-w-[220px]" />
+            {d.projectNumberLocked && (
+              <Pill tone="green" className="mb-1.5"><CheckCircle2 className="w-3 h-3" /> مُجمَّد</Pill>
+            )}
+          </div>
+        </Card>
+      )}
       <Card title="بيانات المستفيد" icon={UsersIcon}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <ReadOnlyField label="الاسم الكامل" value={d.personal?.fullName} />
@@ -285,9 +345,15 @@ export const F02Renderer: FormRenderer = ({ rec, user, api }) => {
       <Card title="رأي الباحث" icon={Activity}>
         <ReadOnlyField label="رأي الباحث" value={d.researcher?.opinion} />
       </Card>
-    </FormShell>
+    </>
   );
 };
+
+export const F02Renderer: FormRenderer = ({ rec, user, api }) => (
+  <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد ورفعه لقرار الاستحقاق">
+    <F02ReadOnlyBody rec={rec} />
+  </FormShell>
+);
 
 /* ──────────────────────────────────────────────────────────────────
    F-03 — اعتماد استحقاق الخدمة
@@ -305,11 +371,14 @@ export const F03Creator: FormCreator = ({ user, api, onClose }) => {
   const f02 = api.forms.find(f => f.id === f02Id);
 
   const submit = async () => {
+    if (!canCreateForm('F-03', user)) return;
     if (!f02 || !eligibility) return;
     setBusy(true);
     try {
       await api.createForm({
         code: 'F-03', user,
+        projectId: f02.projectId || '',
+        projectRefId: f02.projectRefId || null,
         beneficiaryName: f02.beneficiaryName,
         notes,
         data: { f02Id, eligibility, managerNotes: notes, f02Snapshot: f02.data },
@@ -358,25 +427,35 @@ export const F03Renderer: FormRenderer = ({ rec, user, api, context, onClose }) 
   const f02 = api.forms.find(f => f.id === rec.data?.f02Id);
   const awaitsMe = formAwaitsUser(rec, user);
   const isFinalStep = rec.approvalIndex === rec.approvalChain.length - 1;
-  const isResearchManagerFinal = awaitsMe && user.role === 'RESEARCH_MANAGER' && isFinalStep;
+  const isResearchManagerFinal =
+    awaitsMe && user.role === 'RESEARCH_MANAGER' && user.department === 'RESEARCH' && isFinalStep;
 
   const transferToProjects = async () => {
     setBusy(true);
     try {
-      // أنشئ المشروع برقم TRM-YYYY-NNN
-      const { projectId } = await context.generateProjectId();
-      const projectRefId = await context.createProject({
-        projectId,
-        beneficiaryName: rec.beneficiaryName || f02?.beneficiaryName || 'مستفيد',
-        city: f02?.data?.personal?.city || '',
-        neighborhood: f02?.data?.personal?.neighborhood || '',
-        caseRef: f02?.data?.caseRef,
-        phase: 'DIAGNOSIS',
-        progressPct: 10,
-        createdBy: user.id,
-        data: { f02Id: f02?.id, f03Id: rec.id },
-      });
-      // اعتمد الخطوة الأخيرة (تنتقل تلقائياً إلى المشاريع عبر trigger F-08)
+      let projectRefId = rec.projectRefId || null;
+      let projectId = rec.projectId || '';
+
+      // المشروع موجود مسبقاً منذ تقديم F-02 — نُحدِّث المرحلة فقط.
+      if (projectRefId) {
+        await context.updateProject(projectRefId, { phase: 'DIAGNOSIS', progressPct: 25 });
+      } else {
+        // مسار احتياطي للسجلات القديمة التي لا تحمل projectRefId.
+        const gen = await context.generateProjectId();
+        projectId = gen.projectId;
+        projectRefId = await context.createProject({
+          projectId,
+          beneficiaryName: rec.beneficiaryName || f02?.beneficiaryName || 'مستفيد',
+          city: f02?.data?.personal?.city || '',
+          neighborhood: f02?.data?.personal?.neighborhood || '',
+          caseRef: f02?.data?.caseRef,
+          phase: 'DIAGNOSIS',
+          progressPct: 25,
+          createdBy: user.id,
+          data: { f02Id: f02?.id, f03Id: rec.id },
+        });
+      }
+
       await api.approveForm(rec.id, user, extraNote || 'تحويل إلى إدارة المشاريع', { projectId, projectRefId });
       onClose();
     } finally { setBusy(false); }
@@ -387,11 +466,11 @@ export const F03Renderer: FormRenderer = ({ rec, user, api, context, onClose }) 
       isResearchManagerFinal ? (
         <div className="border border-purple-200 dark:border-purple-800 bg-purple-50/70 dark:bg-purple-900/20 rounded-lg p-3 space-y-3">
           <div className="text-xs font-bold text-[#4A1F66] dark:text-purple-300">الخطوة النهائية: تحويل المستفيد إلى إدارة المشاريع.</div>
-          <p className="text-xs text-purple-800 dark:text-purple-300">سيتم إنشاء رقم مشروع تلقائي بالصيغة <code className="bg-white dark:bg-slate-800 px-1 rounded">TRM-{new Date().getFullYear()}-NNN</code> وفتح كراسة التشخيص F-08.</p>
+          <p className="text-xs text-purple-800 dark:text-purple-300">سيتم تحديث مرحلة المشروع إلى <strong>التشخيص</strong> وفتح كراسة التشخيص F-08.</p>
           <textarea value={extraNote} onChange={e => setExtraNote(e.target.value)} rows={2} placeholder="ملاحظات التحويل (اختياري)"
             className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-[#56B894]" />
           <button onClick={transferToProjects} disabled={busy} className="w-full py-2 bg-[#4A1F66] text-white rounded-lg font-bold text-sm hover:bg-[#3A1652] transition flex items-center justify-center gap-1.5">
-            <Send className="w-4 h-4" /> {busy ? 'جاري التحويل...' : 'إنشاء مشروع وتحويل لإدارة المشاريع'}
+            <Send className="w-4 h-4" /> {busy ? 'جاري التحويل...' : 'تحويل المشروع لإدارة المشاريع'}
           </button>
         </div>
       ) : undefined

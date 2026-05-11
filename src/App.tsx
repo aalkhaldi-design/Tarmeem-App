@@ -242,6 +242,7 @@ function App() {
       case 'F-08': return { phase: 'DIAGNOSIS', progress: 35 };
       case 'F-18': return { phase: 'EVACUATION', progress: 40 };
       case 'F-85': return { phase: 'TENDERING', progress: 55 };
+      case 'F-33': return { phase: 'EXECUTION', progress: 60 };
       case 'F-14': return { phase: 'EXECUTION', progress: 70 };
       case 'F-07': return { phase: 'CLOSED', progress: 100 };
       default: return null;
@@ -425,32 +426,49 @@ function App() {
       if (rec.projectRefId) {
         const t = phaseTransition(rec.code);
         if (t) await updateProject(rec.projectRefId, { phase: t.phase, progressPct: t.progress });
-        // F-08: إذا safetyHazard=true ⇒ يفتح F-18 و F-22
-        if (rec.code === 'F-08' && rec.data?.safetyHazard) {
+        // Trigger A — F-08.safetyHazard => spawn BOTH F-18 and F-22 simultaneously
+        if (rec.code === 'F-08' && (rec.data?.safetyHazard || dataPatch?.safetyHazard)) {
           await createForm({
             code: 'F-18', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
             beneficiaryName: rec.beneficiaryName, notes: 'أُطلق تلقائياً من F-08 (سلامة).',
             triggeredBy: rec.id,
           });
-        }
-        // F-14: عند milestone تطلق F-15
-        if (rec.code === 'F-14' && rec.data?.milestone) {
           await createForm({
-            code: 'F-15', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
-            beneficiaryName: rec.beneficiaryName,
-            data: { milestone: rec.data.milestone, amount: 0 },
-            notes: `أُطلق تلقائياً عند بلوغ المحطة ${rec.data.milestone}`,
+            code: 'F-22', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
+            beneficiaryName: rec.beneficiaryName, notes: 'أُطلق تلقائياً من F-08 (سلامة).',
             triggeredBy: rec.id,
           });
         }
-        if (rec.code === 'F-14' && rec.data?.scopeChange) {
-          await createForm({
-            code: 'F-23', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
-            beneficiaryName: rec.beneficiaryName,
-            data: { items: [], reason: 'تغيير نطاق ميداني' },
-            notes: 'أُطلق تلقائياً من F-14 (تغيير نطاق).',
-            triggeredBy: rec.id,
-          });
+        // F-14 dynamic loop — triggersPayment spawns matching F-15 + next-seq F-14
+        if (rec.code === 'F-14') {
+          const patched = { ...(rec.data || {}), ...(dataPatch || {}) };
+          const seq = (patched.seq as number) || 1;
+          if (patched.triggersPayment) {
+            await createForm({
+              code: 'F-15', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
+              beneficiaryName: rec.beneficiaryName,
+              data: { seq, milestone: seq, amount: 0 },
+              notes: `أُطلق تلقائياً من F-14 #${seq}`,
+              triggeredBy: rec.id,
+            });
+            await createForm({
+              code: 'F-14', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
+              beneficiaryName: rec.beneficiaryName,
+              data: { seq: seq + 1, triggersPayment: false, requestScopeChange: false },
+              notes: `تقرير دوري جديد متابعة لـ #${seq}`,
+              triggeredBy: rec.id,
+            });
+          }
+          // Trigger B — requestScopeChange => spawn F-23
+          if (patched.requestScopeChange) {
+            await createForm({
+              code: 'F-23', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
+              beneficiaryName: rec.beneficiaryName,
+              data: { items: [], reason: 'تغيير نطاق ميداني', seq },
+              notes: 'أُطلق تلقائياً من F-14 (تغيير نطاق).',
+              triggeredBy: rec.id,
+            });
+          }
         }
         // F-85: تحدّث contractor & price على المشروع
         if (rec.code === 'F-85') {
@@ -503,16 +521,8 @@ function App() {
         }
       }
 
-      // F-18: ينشئ F-22 آلياً
-      if (rec.code === 'F-18') {
-        await createForm({
-          code: 'F-22', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
-          beneficiaryName: rec.beneficiaryName,
-          data: { evacDate: rec.data?.evacDate, returnDate: rec.data?.returnDate, city: '' },
-          notes: 'أُطلق تلقائياً مع F-18.',
-          triggeredBy: rec.id,
-        });
-      }
+      // (Note: F-22 is now spawned directly from F-08.safetyHazard above,
+      // not chained via F-18 approval, per the user's Trigger A requirement.)
 
       // التحريك التلقائي حسب triggers الموجودة في FORMS
       const def = FORM_BY_CODE[rec.code];

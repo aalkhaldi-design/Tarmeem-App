@@ -164,6 +164,7 @@ export type FormCode =
   | 'F-02' | 'F-03' | 'F-04' | 'F-08' | 'F-09'
   | 'F-18' | 'F-22' | 'F-21' | 'F-20' | 'F-19'
   | 'F-85' | 'F-14' | 'F-23' | 'F-15'
+  | 'F-33'
   | 'F-07' | 'F-52';
 
 export type FormStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'deferred' | 'completed';
@@ -255,6 +256,15 @@ export const FORMS: FormDef[] = [
     approvalChain: ['HEAD_SUPERVISION'],
     slaDays: 2,
     description: 'رئيس قسم الإشراف يختار المهندس المشرف للمشروع. يُفتَح تلقائياً عند تقديم كراسة التشخيص F-08.',
+  },
+  /* F-33 — توثيق بدء العمل (single-step, supervising engineer) */
+  {
+    code: 'F-33', title: 'توثيق بدء العمل', titleEn: 'Site Start Documentation',
+    category: 'BENEFICIARY', ownerDept: 'PROJECTS',
+    originRoles: ['DIAGNOSIS_ENGINEER'],
+    approvalChain: ['DIAGNOSIS_ENGINEER'],
+    slaDays: 2,
+    description: 'المهندس المشرف يوثّق تاريخ بدء الأعمال الفعلي بعد ترسية المقاول.',
   },
   /* F-18 */
   {
@@ -387,6 +397,7 @@ export const FORM_CREATOR_GATE: Partial<Record<FormCode, { dept: DepartmentKey; 
   'F-08': { dept: 'PROJECTS', roles: ['DIAGNOSIS_ENGINEER'] },
   'F-09': { dept: 'PROJECTS', roles: ['HEAD_SUPERVISION'] },
   'F-20': { dept: 'PROJECTS', roles: ['HEAD_SUPERVISION'] },
+  'F-33': { dept: 'PROJECTS', roles: ['DIAGNOSIS_ENGINEER'] },
 };
 
 export const canCreateForm = (

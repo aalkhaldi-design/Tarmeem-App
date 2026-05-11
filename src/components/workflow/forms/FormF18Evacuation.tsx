@@ -4,16 +4,19 @@ import React, { useState } from 'react';
 import { Calendar, UploadCloud, CheckCircle2, X, Lock } from 'lucide-react';
 import { DarkCard, DarkInput } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 const FormF18Evacuation: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
-  const init = rec?.data || {};
-  const [data, setData] = useState<any>({
-    renovationStartDate: init.renovationStartDate || '',
-    renovationEndDate: init.renovationEndDate || '',
-    evacuationDate: init.evacuationDate || init.evacDate || '',
-    researcherName: init.researcherName || '',
-    familyRepName: init.familyRepName || project.beneficiaryName,
-    employeePledge: !!init.employeePledge,
+  const F18_DEFAULTS = {
+    renovationStartDate: '',
+    renovationEndDate: '',
+    evacuationDate: '',
+    researcherName: '',
+    familyRepName: project.beneficiaryName,
+    employeePledge: false,
+  };
+  const [data, setData] = useFormDraft<typeof F18_DEFAULTS>({
+    api, user, project, rec, draftKey: 'F-18', initial: F18_DEFAULTS,
   });
   const [pledgeFile, setPledgeFile] = useState<any>(null);
   const [busy, setBusy] = useState(false);

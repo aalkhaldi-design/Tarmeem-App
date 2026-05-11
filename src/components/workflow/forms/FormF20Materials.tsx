@@ -4,19 +4,33 @@ import React, { useState } from 'react';
 import { ClipboardList, Truck, Plus, Trash2, Lock, ArrowLeftRight } from 'lucide-react';
 import { DarkCard, DarkSelect, DarkInput, DarkTextArea } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 const categories = ['مواد الكهرباء', 'الأدوات الصحية', 'العزل', 'السيراميك'];
 const supplyTypes = ['شراء مباشر', 'دعم عيني (مجاني)', 'مخفض (شراكات)'];
 
+const F20_DEFAULTS = {
+  materials: [{ id: 1, category: 'مواد الكهرباء', name: '', unit: 'حبة', quantity: '', supplier: '', supplyType: '', pricingDate: '', paymentDate: '', supplyDate: '' }],
+  procurementMethod: 'شراء مباشر',
+  targetDate: '',
+  notes: '',
+  pledge: false,
+};
+
 const FormF20Materials: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
-  const init = rec?.data || {};
-  const [materials, setMaterials] = useState<any[]>(init.materials || [
-    { id: 1, category: 'مواد الكهرباء', name: '', unit: 'حبة', quantity: '', supplier: '', supplyType: '', pricingDate: '', paymentDate: '', supplyDate: '' },
-  ]);
-  const [procurementMethod, setProcurementMethod] = useState<string>(init.procurementMethod || 'شراء مباشر');
-  const [targetDate, setTargetDate] = useState<string>(init.targetDate || '');
-  const [notes, setNotes] = useState<string>(init.notes || '');
-  const [pledge, setPledge] = useState<boolean>(!!init.pledge);
+  const [draft, setDraft] = useFormDraft<typeof F20_DEFAULTS>({
+    api, user, project, rec, draftKey: 'F-20', initial: F20_DEFAULTS,
+  });
+  const materials = draft.materials;
+  const procurementMethod = draft.procurementMethod;
+  const targetDate = draft.targetDate;
+  const notes = draft.notes;
+  const pledge = draft.pledge;
+  const setMaterials = (next: any[]) => setDraft(d => ({ ...d, materials: next }));
+  const setProcurementMethod = (v: string) => setDraft(d => ({ ...d, procurementMethod: v }));
+  const setTargetDate = (v: string) => setDraft(d => ({ ...d, targetDate: v }));
+  const setNotes = (v: string) => setDraft(d => ({ ...d, notes: v }));
+  const setPledge = (v: boolean) => setDraft(d => ({ ...d, pledge: v }));
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;
 

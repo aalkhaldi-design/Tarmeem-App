@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { DollarSign, FileText, FileSignature, AlertTriangle, UploadCloud, UserCheck, Lock } from 'lucide-react';
 import { DarkCard, DarkInput, DarkTextArea } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 interface FormF42Props extends SharedFormProps {
   seq: number;
@@ -11,11 +12,19 @@ interface FormF42Props extends SharedFormProps {
 }
 
 const FormF42Payment: React.FC<FormF42Props> = ({ rec, user, api, project, isEditable, isCompleted, seq, isFloating }) => {
-  const initData: any = rec?.data || {};
-  const [type, setType] = useState<string>(initData.type || 'الثانية');
-  const [val, setVal] = useState<string>(initData.amount || '');
-  const [invoiceNo, setInvoiceNo] = useState<string>(initData.invoiceNo || '');
-  const [pledge, setPledge] = useState<boolean>(!!initData.pledge);
+  const F15_DEFAULTS = { seq, type: 'الثانية', amount: '', invoiceNo: '', pledge: false };
+  const [draft, setDraft] = useFormDraft<typeof F15_DEFAULTS>({
+    api, user, project, rec, draftKey: `F-15-seq-${seq}`, initial: F15_DEFAULTS,
+    hydrate: !isFloating,
+  });
+  const type = draft.type;
+  const setType = (v: string) => setDraft(d => ({ ...d, type: v }));
+  const val = draft.amount;
+  const setVal = (v: string) => setDraft(d => ({ ...d, amount: v }));
+  const invoiceNo = draft.invoiceNo;
+  const setInvoiceNo = (v: string) => setDraft(d => ({ ...d, invoiceNo: v }));
+  const pledge = draft.pledge;
+  const setPledge = (v: boolean) => setDraft(d => ({ ...d, pledge: v }));
   const [busy, setBusy] = useState(false);
   const isFinal = type === 'الأخيرة';
   const dis = !isEditable;

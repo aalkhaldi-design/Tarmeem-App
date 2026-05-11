@@ -4,12 +4,24 @@ import React, { useState } from 'react';
 import { ShoppingCart, FileText, Plus, Trash2, Lock } from 'lucide-react';
 import { DarkCard, DarkInput, DarkTextArea } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
+
+const F19_DEFAULTS = {
+  items: [{ id: 1, desc: '', qty: '', notes: '' }] as any[],
+  justification: '',
+  pledge: false,
+};
 
 const FormF19Supply: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
-  const init: any = rec?.data || {};
-  const [items, setItems] = useState<any[]>(init.items || [{ id: 1, desc: '', qty: '', notes: '' }]);
-  const [justification, setJustification] = useState<string>(init.justification || '');
-  const [pledge, setPledge] = useState<boolean>(!!init.pledge);
+  const [draft, setDraft] = useFormDraft<typeof F19_DEFAULTS>({
+    api, user, project, rec, draftKey: 'F-19', initial: F19_DEFAULTS,
+  });
+  const items = draft.items;
+  const setItems = (next: any[]) => setDraft(d => ({ ...d, items: next }));
+  const justification = draft.justification;
+  const setJustification = (v: string) => setDraft(d => ({ ...d, justification: v }));
+  const pledge = draft.pledge;
+  const setPledge = (v: boolean) => setDraft(d => ({ ...d, pledge: v }));
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;
 

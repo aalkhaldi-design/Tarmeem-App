@@ -64,6 +64,9 @@ export interface ProjectRecord {
   partnerEntity?: string;
   /** عند true: رقم المشروع تم تأكيده وتجميده ولا يمكن تعديله. */
   projectIdLocked?: boolean;
+  /** مسودات النماذج التي لم تُنشأ بعد كسجلات FormRecord. مفتاح المسودة عادة FormCode (مثلاً 'F-02'، 'F-08')
+   *  أو للنماذج الديناميكية في المرحلة 4 يكون 'F-14-seq-3'. */
+  formDrafts?: Record<string, any>;
   createdAt: string;
   updatedAt: string;
   createdBy: string;

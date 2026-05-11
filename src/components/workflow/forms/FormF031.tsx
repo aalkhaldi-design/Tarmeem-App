@@ -4,9 +4,14 @@ import React, { useState } from 'react';
 import { CheckCircle2, XCircle, Lock, UserCheck } from 'lucide-react';
 import { DarkCard, DarkReadOnlyField, DarkTextArea } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 const FormF031: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
-  const [executiveNotes, setExecutiveNotes] = useState<string>(rec?.data?.executiveNotes || '');
+  const [draft, setDraft] = useFormDraft<{ executiveNotes: string }>({
+    api, user, project, rec, draftKey: 'F-03', initial: { executiveNotes: '' },
+  });
+  const executiveNotes = draft.executiveNotes;
+  const setExecutiveNotes = (v: string) => setDraft(d => ({ ...d, executiveNotes: v }));
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;
 

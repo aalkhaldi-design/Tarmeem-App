@@ -4,14 +4,13 @@ import React, { useState } from 'react';
 import { Mail, FileText, UploadCloud, CheckCircle2, X, Lock } from 'lucide-react';
 import { DarkCard, DarkInput, DarkReadOnlyField } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
+
+const F22_DEFAULTS = { partnerEntity: 'جمعية البر بالشرقية', periodFrom: '', periodTo: '', employeePledge: false };
 
 const FormF22Housing: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
-  const init = rec?.data || {};
-  const [data, setData] = useState<any>({
-    partnerEntity: init.partnerEntity || 'جمعية البر بالشرقية',
-    periodFrom: init.periodFrom || '',
-    periodTo: init.periodTo || '',
-    employeePledge: !!init.employeePledge,
+  const [data, setData] = useFormDraft<typeof F22_DEFAULTS>({
+    api, user, project, rec, draftKey: 'F-22', initial: F22_DEFAULTS,
   });
   const [attachedFile, setAttachedFile] = useState<any>(null);
   const [busy, setBusy] = useState(false);

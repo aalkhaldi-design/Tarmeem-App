@@ -9,7 +9,7 @@ import { FORM_BY_CODE } from '../lib/data';
 import type { FormCode } from '../lib/data';
 import type { FormsApi, FormRecord } from './Forms';
 import type { ProjectRecord } from './forms/FormRenderers';
-import type { UserProfile } from './Auth';
+import { isAdminUser, type UserProfile } from './Auth';
 import WorkflowDetailBody from './workflow/WorkflowDetailBody';
 
 /* ──────────────────────────────────────────────────────────────────
@@ -166,7 +166,7 @@ const ProjectNumberWidget: React.FC<{
 
   const canEdit = useMemo(() => {
     if (locked) return false;
-    if (user.role === 'ADMIN') return true;
+    if (isAdminUser(user)) return true;
     return projectForms.some(f => f.status === 'pending' && f.approvalChain?.[f.approvalIndex] === user.role);
   }, [locked, user, projectForms]);
 

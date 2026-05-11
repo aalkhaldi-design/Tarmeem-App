@@ -4,9 +4,14 @@ import React, { useState } from 'react';
 import { Lock, ArrowLeftRight, UserCheck } from 'lucide-react';
 import { DarkCard, DarkTextArea } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
-const FormF032: React.FC<SharedFormProps> = ({ rec, user, api, isEditable, isCompleted }) => {
-  const [managerFinalNotes, setManagerFinalNotes] = useState<string>(rec?.data?.managerFinalNotes || '');
+const FormF032: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
+  const [draft, setDraft] = useFormDraft<{ managerFinalNotes: string }>({
+    api, user, project, rec, draftKey: 'F-03', initial: { managerFinalNotes: '' },
+  });
+  const managerFinalNotes = draft.managerFinalNotes;
+  const setManagerFinalNotes = (v: string) => setDraft(d => ({ ...d, managerFinalNotes: v }));
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;
 

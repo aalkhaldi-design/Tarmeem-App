@@ -4,10 +4,16 @@ import React, { useState } from 'react';
 import { Activity, CheckCircle2, Lock } from 'lucide-react';
 import { DarkCard, DarkInput } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 const FormF33StartDoc: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
-  const [date, setDate] = useState<string>(rec?.data?.startDate || '');
-  const [pledge, setPledge] = useState<boolean>(!!rec?.data?.pledge);
+  const [draft, setDraft] = useFormDraft<{ startDate: string; pledge: boolean }>({
+    api, user, project, rec, draftKey: 'F-33', initial: { startDate: '', pledge: false },
+  });
+  const date = draft.startDate;
+  const setDate = (v: string) => setDraft(d => ({ ...d, startDate: v }));
+  const pledge = draft.pledge;
+  const setPledge = (v: boolean) => setDraft(d => ({ ...d, pledge: v }));
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;
 

@@ -30,7 +30,13 @@ export interface UserProfile {
   auditLog: any[];
   /** إعادة ضبط: عند الترقية إلى البنية الجديدة، يُعيَّن لإعادة الإسناد */
   needsRoleReset?: boolean;
+  /** صلاحية المسؤول العام (مدير النظام). يُكافئ role === 'ADMIN' ويتجاوز كل القيود. */
+  isAdmin?: boolean;
 }
+
+/** فحص موحَّد للمسؤول العام: يدعم البنية الجديدة (isAdmin boolean) والقديمة (role === 'ADMIN'). */
+export const isAdminUser = (profile: UserProfile | null | undefined): boolean =>
+  !!profile && (profile.isAdmin === true || profile.role === 'ADMIN');
 
 export async function getUserProfile(uid: string): Promise<UserProfile | null> {
   const snap = await getDoc(doc(db, 'users', uid));
@@ -52,7 +58,8 @@ export async function createUserProfile(
       approvedBy: 'system', approvedAt: new Date().toISOString(),
       deactivatedAt: null, deactivatedBy: null,
       notificationPrefs: { inApp: true, email: true },
-      auditLog: [{ at: new Date().toISOString(), actor: 'system', action: 'auto-admin', from: null, to: { role: 'ADMIN' } }],
+      auditLog: [{ at: new Date().toISOString(), actor: 'system', action: 'auto-admin', from: null, to: { role: 'ADMIN', isAdmin: true } }],
+      isAdmin: true,
     };
     await setDoc(doc(db, 'users', uid), profile);
     return;

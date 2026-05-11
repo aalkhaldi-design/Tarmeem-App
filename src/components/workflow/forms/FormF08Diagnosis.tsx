@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { DarkCard, DarkInput, DarkSelect, DarkTextArea, DarkReadOnlyField, DarkNumberCounter } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 const F08_DEFAULTS = {
   general: { caseRef: '', projectNumber: '', familyName: '', contactNumber: '', cityNeighborhood: '', partnerEntity: '', partnerRep: '', repContact: '', safetyHazard: false },
@@ -21,8 +22,9 @@ const F08_DEFAULTS = {
 
 const FormF08Diagnosis: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
   const [currentStep, setCurrentStep] = useState(0);
-  const hydrated: any = { ...F08_DEFAULTS, ...(rec?.data || {}) };
-  const [data, setData] = useState<any>(hydrated);
+  const [data, setData] = useFormDraft<any>({
+    api, user, project, rec, draftKey: 'F-08', initial: F08_DEFAULTS,
+  });
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;
 

@@ -4,23 +4,31 @@ import React, { useState } from 'react';
 import { Home, Calendar, ShieldCheck, Camera, UploadCloud, CheckCircle2, X, Plus, Trash2, Lock, FileSignature } from 'lucide-react';
 import { DarkCard, DarkInput, DarkReadOnlyField } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 const FormF07Handover: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
-  const init: any = rec?.data || {};
-  const [data, setData] = useState<any>({
-    streetName: init.streetName || '',
-    supervisingEngineer: init.supervisingEngineer || user.fullName,
-    contractorName: init.contractorName || project.contractorName || 'مؤسسة البناء الحديث',
-    projectType: init.projectType || 'ترميم',
-    actualStartDate: init.actualStartDate || '',
-    actualEndDate: init.actualEndDate || '',
-    insulationGuarantee: init.insulationGuarantee || '',
-    mediaRequested: !!init.mediaRequested,
-    employeePledge: !!init.employeePledge,
+  const F07_DEFAULTS = {
+    streetName: '',
+    supervisingEngineer: user.fullName,
+    contractorName: project.contractorName || 'مؤسسة البناء الحديث',
+    projectType: 'ترميم',
+    actualStartDate: '',
+    actualEndDate: '',
+    insulationGuarantee: '',
+    mediaRequested: false,
+    employeePledge: false,
+    guarantees: [{ id: 1, item: 'مواد الكهرباء والسباكة', qty: 'متعدد', supplier: 'المورد التقني', invoiceNo: 'INV-0912', duration: 'سنة واحدة' }],
+  };
+  const [draft, setDraft] = useFormDraft<typeof F07_DEFAULTS>({
+    api, user, project, rec, draftKey: 'F-07', initial: F07_DEFAULTS,
   });
-  const [guarantees, setGuarantees] = useState<any[]>(init.guarantees || [
-    { id: 1, item: 'مواد الكهرباء والسباكة', qty: 'متعدد', supplier: 'المورد التقني', invoiceNo: 'INV-0912', duration: 'سنة واحدة' },
-  ]);
+  const data = draft;
+  const setData = (updater: any) => {
+    if (typeof updater === 'function') setDraft(prev => ({ ...prev, ...updater(prev) }));
+    else setDraft(prev => ({ ...prev, ...updater }));
+  };
+  const guarantees = draft.guarantees;
+  const setGuarantees = (next: any[]) => setDraft(d => ({ ...d, guarantees: next }));
   const [certificateFile, setCertificateFile] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;

@@ -8,7 +8,7 @@ import {
   REGION_LABELS, formatRelativeTime, isAdminEmail, roleName,
 } from '../lib/data';
 import { Card, AccessDeniedCard, Pill, EmptyState, SearchBar } from './ui';
-import type { UserProfile } from './Auth';
+import { isAdminUser, type UserProfile } from './Auth';
 
 interface AdminProps {
   users: UserProfile[];
@@ -59,20 +59,24 @@ function Modal({ open, onClose, title, children, wide }: {
    UserAdminForm — لاعتماد طلبات وتعديل المستخدمين
    ────────────────────────────────────────────────────────────────── */
 
-function UserAdminForm({ user, mode, onSubmit, onSecondary, busy }: {
+function UserAdminForm({ user, mode, onSubmit, onSecondary, busy, currentUser }: {
   user: UserProfile;
   mode: 'approve' | 'edit';
-  onSubmit: (edits: { role: RoleKey; department: string; region: string; isManager: boolean }) => void;
+  onSubmit: (edits: { role: RoleKey; department: string; region: string; isManager: boolean; isAdmin: boolean }) => void;
   onSecondary?: (reason: string) => void;
   busy: boolean;
+  currentUser: UserProfile;
 }) {
   const startRole = (user.role && user.role !== 'PENDING' && user.role !== 'ADMIN' ? user.role as RoleKey : 'SOCIAL_RESEARCHER');
   const [role, setRole] = useState<RoleKey>(startRole);
   const [department, setDepartment] = useState(user.department || ROLE_BY_KEY[startRole]?.department || 'RESEARCH');
   const [region, setRegion] = useState(user.region || 'DAM');
   const [isManager, setIsManager] = useState(user.isManager || ROLE_BY_KEY[startRole]?.isManager || false);
+  const [isAdminFlag, setIsAdminFlag] = useState<boolean>(user.isAdmin === true || user.role === 'ADMIN');
   const [showSecondary, setShowSecondary] = useState(false);
   const [reason, setReason] = useState('');
+  // Only an existing super admin can promote another user.
+  const canEditAdminFlag = isAdminUser(currentUser);
 
   const onRoleChange = (r: RoleKey) => {
     setRole(r);
@@ -159,6 +163,17 @@ function UserAdminForm({ user, mode, onSubmit, onSecondary, busy }: {
         <span className="text-sm text-gray-700 dark:text-slate-300 font-semibold">يحقّ له اعتماد طلبات قسمه (مدير)</span>
       </label>
 
+      {canEditAdminFlag && (
+        <label className={`flex items-start gap-2 cursor-pointer p-3 rounded-lg border-2 transition ${isAdminFlag ? 'border-red-400 bg-red-50/60 dark:border-red-700 dark:bg-red-900/20' : 'border-gray-200 dark:border-slate-700 bg-gray-50/40 dark:bg-slate-900/30'}`}>
+          <input type="checkbox" checked={isAdminFlag} onChange={e => setIsAdminFlag(e.target.checked)}
+            className="rounded border-gray-300 text-red-600 focus:ring-red-500 w-4 h-4 mt-0.5" />
+          <span className="text-sm text-gray-700 dark:text-slate-200 leading-relaxed">
+            <strong className="text-red-600 dark:text-red-300 flex items-center gap-1"><Shield className="w-3.5 h-3.5" /> ترقية إلى مسؤول النظام (Super Admin)</strong>
+            <span className="block text-[11px] text-gray-500 dark:text-slate-400 mt-0.5">يتجاوز جميع قيود الأدوار ويستطيع تعديل أي نموذج وإدارة المستخدمين.</span>
+          </span>
+        </label>
+      )}
+
       <div className="flex gap-3 justify-end border-t dark:border-slate-700 pt-4">
         {mode === 'approve' && (
           <button onClick={() => setShowSecondary(true)}
@@ -166,7 +181,7 @@ function UserAdminForm({ user, mode, onSubmit, onSecondary, busy }: {
             <XCircle className="w-4 h-4" /> رفض
           </button>
         )}
-        <button onClick={() => onSubmit({ role, department, region, isManager })} disabled={busy}
+        <button onClick={() => onSubmit({ role, department, region, isManager, isAdmin: isAdminFlag })} disabled={busy}
           className={`px-4 py-2 rounded-lg text-sm font-bold transition disabled:opacity-40 flex items-center gap-1
             ${mode === 'approve' ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-[#4A1F66] text-white hover:bg-[#3A1652]'}`}>
           <CheckCircle className="w-4 h-4" />
@@ -188,7 +203,7 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
   const [mode, setMode] = useState<'approve' | 'edit' | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const isAdmin = currentUser.role === 'ADMIN' || isAdminEmail(currentUser.email);
+  const isAdmin = isAdminUser(currentUser) || isAdminEmail(currentUser.email);
 
   const filtered = useMemo(() => {
     let list = users;
@@ -367,10 +382,10 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
       </Card>
 
       <Modal open={mode === 'approve'} onClose={() => { setSelected(null); setMode(null); }} title="مراجعة الطلب وإسناد العضوية">
-        {selected && <UserAdminForm user={selected} mode="approve" onSubmit={handleApprove} onSecondary={handleReject} busy={busy} />}
+        {selected && <UserAdminForm user={selected} mode="approve" onSubmit={handleApprove} onSecondary={handleReject} busy={busy} currentUser={currentUser} />}
       </Modal>
       <Modal open={mode === 'edit'} onClose={() => { setSelected(null); setMode(null); }} title="تعديل بيانات المستخدم">
-        {selected && <UserAdminForm user={selected} mode="edit" onSubmit={handleEdit} busy={busy} />}
+        {selected && <UserAdminForm user={selected} mode="edit" onSubmit={handleEdit} busy={busy} currentUser={currentUser} />}
       </Modal>
     </div>
   );

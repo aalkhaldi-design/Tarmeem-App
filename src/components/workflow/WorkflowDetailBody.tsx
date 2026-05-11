@@ -17,6 +17,7 @@ import {
   ROLE_ALIASES,
   type DynamicP4Form,
 } from './workflowState';
+import { isAdminUser } from '../Auth';
 
 import FormF02 from './forms/FormF02';
 import FormF03 from './forms/FormF03';
@@ -172,7 +173,7 @@ export const WorkflowDetailBody: React.FC<Props> = ({ project, user, users, api 
   };
 
   const addReport = async () => {
-    if (!ROLE_ALIASES.SUPERVISING_ENGINEER.includes(user.role as any) && user.role !== 'ADMIN') return;
+    if (!ROLE_ALIASES.SUPERVISING_ENGINEER.includes(user.role as any) && !isAdminUser(user)) return;
     const existingReports = projectForms.filter(f => f.code === 'F-14');
     const nextSeq = existingReports.length + 1;
     await api.createForm({
@@ -246,7 +247,7 @@ export const WorkflowDetailBody: React.FC<Props> = ({ project, user, users, api 
       const step = meta.step;
       completed = !!(rec && (rec.approvalIndex > step || (rec.status === 'approved' && step === 2)));
       editable = !!(rec && rec.status === 'pending' && rec.approvalIndex === step && rec.approvalChain[step] === user.role)
-        || (user.role === 'ADMIN' && !!rec)
+        || (isAdminUser(user) && !!rec)
         || (!rec && step === 0 && isFormEditable('F-03', undefined, user));
     } else {
       editable = isFormEditable(meta.code, rec, user);
@@ -275,7 +276,7 @@ export const WorkflowDetailBody: React.FC<Props> = ({ project, user, users, api 
     }
   };
 
-  const canAddReport = ROLE_ALIASES.SUPERVISING_ENGINEER.includes(user.role as any) || user.role === 'ADMIN';
+  const canAddReport = ROLE_ALIASES.SUPERVISING_ENGINEER.includes(user.role as any) || isAdminUser(user);
 
   return (
     <div dir="rtl" className="bg-[#050505] text-gray-200 font-sans rounded-2xl border border-gray-800 selection:bg-[#43bba1] selection:text-black mt-4 overflow-hidden">

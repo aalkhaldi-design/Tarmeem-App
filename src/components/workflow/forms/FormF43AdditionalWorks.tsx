@@ -4,12 +4,23 @@ import React, { useState } from 'react';
 import { HardHat, ClipboardList, Plus, Trash2, ShieldAlert, UserCheck, Lock } from 'lucide-react';
 import { DarkCard, DarkInput, DarkTextArea } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 const FormF43AdditionalWorks: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
-  const init: any = rec?.data || {};
-  const [works, setWorks] = useState<any[]>(init.works || [{ id: 1, desc: '', dim: '', price: '', contractorName: project.contractorName || 'مؤسسة البناء الحديث' }]);
-  const [notes, setNotes] = useState<string>(init.notes || '');
-  const [pledge, setPledge] = useState<boolean>(!!init.pledge);
+  const F23_DEFAULTS = {
+    works: [{ id: 1, desc: '', dim: '', price: '', contractorName: project.contractorName || 'مؤسسة البناء الحديث' }] as any[],
+    notes: '',
+    pledge: false,
+  };
+  const [draft, setDraft] = useFormDraft<typeof F23_DEFAULTS>({
+    api, user, project, rec, draftKey: 'F-23', initial: F23_DEFAULTS,
+  });
+  const works = draft.works;
+  const setWorks = (next: any[]) => setDraft(d => ({ ...d, works: next }));
+  const notes = draft.notes;
+  const setNotes = (v: string) => setDraft(d => ({ ...d, notes: v }));
+  const pledge = draft.pledge;
+  const setPledge = (v: boolean) => setDraft(d => ({ ...d, pledge: v }));
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;
 

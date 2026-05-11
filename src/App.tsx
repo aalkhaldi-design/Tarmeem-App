@@ -7,7 +7,7 @@ import {
   collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc, runTransaction,
 } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
-import { getUserProfile, AuthScreen, type UserProfile } from './components/Auth';
+import { getUserProfile, AuthScreen, isAdminUser, type UserProfile } from './components/Auth';
 import { TarmeemLogo, TarmeemSplash, ThemeProvider, ThemeToggle } from './components/ui';
 import {
   DashboardHome, PendingAccountScreen, DeactivatedAccountScreen,
@@ -79,9 +79,10 @@ function App() {
             role: 'ADMIN',
             status: 'active',
             isManager: true,
+            isAdmin: true,
             department: profile.department || 'EXEC',
             auditLog: [...(profile.auditLog || []), {
-              at: new Date().toISOString(), actor: 'system', action: 'auto-promoted-admin', from: { role: profile.role }, to: { role: 'ADMIN' },
+              at: new Date().toISOString(), actor: 'system', action: 'auto-promoted-admin', from: { role: profile.role }, to: { role: 'ADMIN', isAdmin: true },
             }],
           });
         }
@@ -139,13 +140,13 @@ function App() {
   const userProfile: UserProfile | null = useMemo(() => {
     if (!rawUserProfile) return null;
     const r = rawUserProfile.role as string;
-    if (isAdminEmail(rawUserProfile.email) || (typeof r === 'string' && r.toLowerCase() === 'admin')) {
-      return { ...rawUserProfile, role: 'ADMIN', status: 'active' } as UserProfile;
+    if (rawUserProfile.isAdmin === true || isAdminEmail(rawUserProfile.email) || (typeof r === 'string' && r.toLowerCase() === 'admin')) {
+      return { ...rawUserProfile, role: 'ADMIN', status: 'active', isAdmin: true } as UserProfile;
     }
     return rawUserProfile;
   }, [rawUserProfile]);
 
-  const isAdmin = userProfile?.role === 'ADMIN';
+  const isAdmin = isAdminUser(userProfile);
 
   /* ────────── Notifications ────────── */
   const dispatchNotification = useCallback(async (n: {
@@ -549,6 +550,64 @@ function App() {
     await updateDoc(doc(db, 'forms', formId), { files: [...(rec.files || []), ...(files || [])], updatedAt: new Date().toISOString() });
   }, [forms]);
 
+  /** يحفظ مسودة نموذج لم يُنشأ بعد كحقل ضمن projects/{id}.formDrafts.{key}.
+   *  يحرّك المشغلات المباشرة عند ضبط الحقول الحاكمة (safetyHazard / requestScopeChange / mediaRequested). */
+  const saveDraft: FormsApi['saveDraft'] = useCallback(async (projectRefId, key, data, user) => {
+    if (!projectRefId || !key) return;
+    try {
+      const project = projects.find(p => p.id === projectRefId);
+      await updateDoc(doc(db, 'projects', projectRefId), {
+        [`formDrafts.${key}`]: data,
+        updatedAt: new Date().toISOString(),
+      });
+
+      // ── Inline triggers (fire IMMEDIATELY when the gate field flips true, not on approval).
+      // Trigger A — F-08 safetyHazard => spawn F-18 + F-22 if not yet present.
+      if (key === 'F-08' && data?.general?.safetyHazard) {
+        const existingF18 = forms.find(f => f.code === 'F-18' && f.projectRefId === projectRefId);
+        const existingF22 = forms.find(f => f.code === 'F-22' && f.projectRefId === projectRefId);
+        if (!existingF18) {
+          await createFormRef.current?.({
+            code: 'F-18', user, projectId: project?.projectId || '', projectRefId,
+            beneficiaryName: project?.beneficiaryName,
+            notes: 'أُطلق مباشرةً عند ضبط حقل سلامة المبنى في كراسة التشخيص (F-08).',
+          });
+        }
+        if (!existingF22) {
+          await createFormRef.current?.({
+            code: 'F-22', user, projectId: project?.projectId || '', projectRefId,
+            beneficiaryName: project?.beneficiaryName,
+            notes: 'أُطلق مباشرةً عند ضبط حقل سلامة المبنى في كراسة التشخيص (F-08).',
+          });
+        }
+      }
+      // Trigger B — F-14 requestScopeChange => spawn F-23 if not yet present.
+      if (key.startsWith('F-14') && data?.requestScopeChange) {
+        const seq = data?.seq;
+        const alreadyForSeq = forms.find(f => f.code === 'F-23' && f.projectRefId === projectRefId && f.data?.seq === seq);
+        if (!alreadyForSeq) {
+          await createFormRef.current?.({
+            code: 'F-23', user, projectId: project?.projectId || '', projectRefId,
+            beneficiaryName: project?.beneficiaryName,
+            data: { seq, items: [], reason: 'تغيير نطاق ميداني' },
+            notes: 'أُطلق مباشرةً عند ضبط طلب الأعمال الإضافية في تقرير الإشراف (F-14).',
+          });
+        }
+      }
+      // Trigger C — F-07 mediaRequested => spawn F-52 if not yet present.
+      if (key === 'F-07' && data?.mediaRequested) {
+        const existingF52 = forms.find(f => f.code === 'F-52' && f.projectRefId === projectRefId);
+        if (!existingF52) {
+          await createFormRef.current?.({
+            code: 'F-52', user, projectId: project?.projectId || '', projectRefId,
+            beneficiaryName: project?.beneficiaryName,
+            notes: 'أُطلق مباشرةً عند ضبط طلب التغطية الإعلامية في شهادة التسليم (F-07).',
+          });
+        }
+      }
+    } catch (e) { console.error('saveDraft:', e); }
+  }, [projects, forms]);
+
   const formsApi: FormsApi = useMemo(() => ({
     forms,
     createForm,
@@ -557,7 +616,8 @@ function App() {
     deferForm: (id, user, note) => advanceForm(id, user, 'deferred', note),
     updateFormData,
     attachFiles,
-  }), [forms, createForm, advanceForm, updateFormData, attachFiles]);
+    saveDraft,
+  }), [forms, createForm, advanceForm, updateFormData, attachFiles, saveDraft]);
 
   /* ────────── Forms context for renderers ────────── */
   const formsContext: FormsContext = useMemo(() => ({
@@ -574,9 +634,12 @@ function App() {
   const approveUser = useCallback(async (userId: string, edits: any, approverId: string) => {
     try {
       const existing = users.find(u => u.id === userId);
-      const auditEntry = { at: new Date().toISOString(), actor: approverId, action: 'approved', from: { status: 'pending' }, to: { ...edits, status: 'active' } };
+      // Super-admin promotion couples isAdmin <-> role === 'ADMIN'
+      const effectiveEdits = { ...edits };
+      if (edits.isAdmin === true) effectiveEdits.role = 'ADMIN';
+      const auditEntry = { at: new Date().toISOString(), actor: approverId, action: 'approved', from: { status: 'pending' }, to: { ...effectiveEdits, status: 'active' } };
       await updateDoc(doc(db, 'users', userId), {
-        ...edits, status: 'active', approvedBy: approverId, approvedAt: new Date().toISOString(),
+        ...effectiveEdits, status: 'active', approvedBy: approverId, approvedAt: new Date().toISOString(),
         needsRoleReset: false,
         auditLog: [...(existing?.auditLog || []), auditEntry],
       });
@@ -595,8 +658,15 @@ function App() {
     try {
       const existing = users.find(u => u.id === userId);
       if (!existing) return;
-      const auditEntry = { at: new Date().toISOString(), actor: actorId, action: 'updated', from: { role: existing.role, department: existing.department }, to: edits };
-      await updateDoc(doc(db, 'users', userId), { ...edits, auditLog: [...(existing.auditLog || []), auditEntry] });
+      // Super-admin promotion couples isAdmin <-> role === 'ADMIN'
+      const effectiveEdits = { ...edits };
+      if (edits.isAdmin === true) {
+        effectiveEdits.role = 'ADMIN';
+      } else if (edits.isAdmin === false && existing.role === 'ADMIN') {
+        // demoting an existing super admin — fall back to the form's chosen role (already in edits.role)
+      }
+      const auditEntry = { at: new Date().toISOString(), actor: actorId, action: 'updated', from: { role: existing.role, department: existing.department, isAdmin: !!existing.isAdmin }, to: effectiveEdits };
+      await updateDoc(doc(db, 'users', userId), { ...effectiveEdits, auditLog: [...(existing.auditLog || []), auditEntry] });
     } catch (e) { console.error('updateUser:', e); }
   }, [users]);
 

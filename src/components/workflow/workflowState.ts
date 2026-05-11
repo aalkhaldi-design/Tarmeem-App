@@ -9,7 +9,7 @@
 
 import type { FormCode, RoleKey } from '../../lib/data';
 import type { FormRecord } from '../Forms';
-import type { UserProfile } from '../Auth';
+import { isAdminUser, type UserProfile } from '../Auth';
 
 /* ───── 1. Role-name aliases (user's mental model -> RoleKey) ───── */
 
@@ -54,7 +54,7 @@ export const isFormEditable = (
   rec: FormRecord | undefined,
   user: UserProfile,
 ): boolean => {
-  if (user.role === 'ADMIN') return true;
+  if (isAdminUser(user)) return true;
   if (rec?.status === 'approved' || rec?.status === 'rejected') return false;
 
   if (rec && rec.status === 'pending') {

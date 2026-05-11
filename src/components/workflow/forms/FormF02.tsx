@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { DarkCard, DarkInput, DarkSelect, DarkTextArea, DarkAmountToggle } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 const F02_DEFAULTS = {
   caseRef: '',
@@ -31,9 +32,10 @@ const FormF02: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditabl
   const cities = ['الدمام', 'الخبر', 'الأحساء', 'الجبيل', 'بقيق', 'حفر الباطن', 'الخفجي', 'أم الساهك', 'عنك', 'القطيف', 'النعيرية', 'الظهران', 'العديد', 'رأس تنورة', 'صفوى', 'أبو معن', 'عين دار القديمة', 'القرية العليا', 'جزيرة دارين', 'مليجة', 'سيهات', 'الرفيعة', 'أخرى'];
   const housings = ['ملك', 'ملكيته للأقارب من الدرجة الأولى / ورثة', 'إيجار', 'سكن خيري', 'ملك للمستفيد/ـة', 'ملك للزوج/ة', 'ملك للزوج/ة (المتوفى/ة)', 'ملك للأب /الام', 'ملك للأب/الام (متوفى/ة)', 'ملك للأبن/الابنة', 'ملك للأبن/الابنة(متوفى/ة)', 'ملك أقارب درجة ثانية/ثالثة'];
 
-  const hydrated: any = { ...F02_DEFAULTS, ...(rec?.data || {}) };
-  if (!hydrated.caseRef) hydrated.caseRef = `CS-${Math.floor(1000 + Math.random() * 9000)}`;
-  const [data, setData] = useState<any>(hydrated);
+  const defaultsWithCaseRef = { ...F02_DEFAULTS, caseRef: F02_DEFAULTS.caseRef || `CS-${Math.floor(1000 + Math.random() * 9000)}` };
+  const [data, setData] = useFormDraft<any>({
+    api, user, project, rec, draftKey: 'F-02', initial: defaultsWithCaseRef,
+  });
   const [busy, setBusy] = useState(false);
 
   const steps = [

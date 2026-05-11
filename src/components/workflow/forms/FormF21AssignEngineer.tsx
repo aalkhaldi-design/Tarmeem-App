@@ -4,9 +4,14 @@ import React, { useState } from 'react';
 import { Lock, UserCog } from 'lucide-react';
 import { DarkCard, DarkSelect } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 const FormF21AssignEngineer: React.FC<SharedFormProps> = ({ rec, user, users, api, project, isEditable, isCompleted }) => {
-  const [engineerId, setEngineerId] = useState<string>(rec?.data?.engineerId || '');
+  const [draft, setDraft] = useFormDraft<{ engineerId: string }>({
+    api, user, project, rec, draftKey: 'F-04', initial: { engineerId: '' },
+  });
+  const engineerId = draft.engineerId;
+  const setEngineerId = (v: string) => setDraft(d => ({ ...d, engineerId: v }));
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;
 

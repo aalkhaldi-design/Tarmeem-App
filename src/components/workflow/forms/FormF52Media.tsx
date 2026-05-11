@@ -4,15 +4,15 @@ import React, { useState } from 'react';
 import { Camera, FileText, UserCheck, Lock } from 'lucide-react';
 import { DarkCard, DarkReadOnlyField } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 const phases = ['قبل (تشخيص)', 'أثناء التنفيذ', 'يوم التسليم', 'مبادرة تطوعية'];
 
+const F52_DEFAULTS = { targetDate: '', docPhase: 'يوم التسليم', mediaPledge: false };
+
 const FormF52Media: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
-  const init: any = rec?.data || {};
-  const [data, setData] = useState<any>({
-    targetDate: init.targetDate || '',
-    docPhase: init.docPhase || init.type || 'يوم التسليم',
-    mediaPledge: !!init.mediaPledge,
+  const [data, setData] = useFormDraft<typeof F52_DEFAULTS>({
+    api, user, project, rec, draftKey: 'F-52', initial: F52_DEFAULTS,
   });
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;

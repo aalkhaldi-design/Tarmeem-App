@@ -4,16 +4,27 @@ import React, { useState } from 'react';
 import { Calculator, Trophy, ShieldAlert, Plus, Trash2, UserCheck, Lock } from 'lucide-react';
 import { DarkCard, DarkInput, DarkReadOnlyField, DarkTextArea } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
+
+const F85_DEFAULTS = {
+  contractors: [{ id: 1, name: '', amount: '' }, { id: 2, name: '', amount: '' }] as any[],
+  winnerContractorId: '',
+  notes: '',
+  employeePledge: false,
+};
 
 const FormF31Pricing: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
-  const init = rec?.data || {};
-  const [contractors, setContractors] = useState<any[]>(init.contractors || [
-    { id: 1, name: '', amount: '' },
-    { id: 2, name: '', amount: '' },
-  ]);
-  const [selectedContractorId, setSelectedContractorId] = useState<string>(init.winnerContractorId || '');
-  const [notes, setNotes] = useState<string>(init.notes || '');
-  const [employeePledge, setEmployeePledge] = useState<boolean>(!!init.employeePledge);
+  const [draft, setDraft] = useFormDraft<typeof F85_DEFAULTS>({
+    api, user, project, rec, draftKey: 'F-85', initial: F85_DEFAULTS,
+  });
+  const contractors = draft.contractors;
+  const setContractors = (next: any[]) => setDraft(d => ({ ...d, contractors: next }));
+  const selectedContractorId = draft.winnerContractorId;
+  const setSelectedContractorId = (v: string) => setDraft(d => ({ ...d, winnerContractorId: v }));
+  const notes = draft.notes;
+  const setNotes = (v: string) => setDraft(d => ({ ...d, notes: v }));
+  const employeePledge = draft.employeePledge;
+  const setEmployeePledge = (v: boolean) => setDraft(d => ({ ...d, employeePledge: v }));
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;
 

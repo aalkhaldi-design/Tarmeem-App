@@ -6,23 +6,35 @@ import {
 } from 'lucide-react';
 import { DarkCard, DarkInput, DarkTextArea } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 interface FormF14Props extends SharedFormProps {
   seq: number;
 }
 
 const FormF14SupervisionReport: React.FC<FormF14Props> = ({ rec, user, api, project, isEditable, isCompleted, seq }) => {
-  const initData: any = rec?.data || {};
-  const [visitData, setVisitData] = useState<any>({
-    date: initData.date || new Date().toISOString().split('T')[0],
-    engineerName: initData.engineerName || user.fullName,
-    recommendation: initData.recommendation || '',
-    pledge: !!initData.pledge,
+  const F14_DEFAULTS = {
+    seq,
+    date: new Date().toISOString().split('T')[0],
+    engineerName: user.fullName,
+    recommendation: '',
+    pledge: false,
+    progress: {} as Record<string, any>,
+    requestScopeChange: false,
+    triggersPayment: false,
+  };
+  const [draft, setDraft] = useFormDraft<typeof F14_DEFAULTS>({
+    api, user, project, rec, draftKey: `F-14-seq-${seq}`, initial: F14_DEFAULTS,
   });
-  const [progress, setProgress] = useState<any>(initData.progress || {});
+  const visitData = { date: draft.date, engineerName: draft.engineerName, recommendation: draft.recommendation, pledge: draft.pledge };
+  const setVisitData = (next: typeof visitData) => setDraft(d => ({ ...d, ...next }));
+  const progress = draft.progress;
+  const setProgress = (next: any) => setDraft(d => ({ ...d, progress: next }));
   const [expandedSpaces, setExpandedSpaces] = useState<number[]>([1]);
-  const [requestScopeChange, setRequestScopeChange] = useState<boolean>(!!initData.requestScopeChange);
-  const [triggersPayment, setTriggersPayment] = useState<boolean>(!!initData.triggersPayment);
+  const requestScopeChange = draft.requestScopeChange;
+  const setRequestScopeChange = (v: boolean) => setDraft(d => ({ ...d, requestScopeChange: v }));
+  const triggersPayment = draft.triggersPayment;
+  const setTriggersPayment = (v: boolean) => setDraft(d => ({ ...d, triggersPayment: v }));
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;
 

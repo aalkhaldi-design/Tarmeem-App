@@ -71,6 +71,10 @@ export interface FormsApi {
   deferForm: (formId: string, user: UserProfile, note?: string) => Promise<void>;
   updateFormData: (formId: string, dataPatch: Record<string, any>) => Promise<void>;
   attachFiles: (formId: string, files: FormRecord['files']) => Promise<void>;
+  /** يحفظ مسودة نموذج لم يُنشأ بعد على وثيقة المشروع (projects/{id}.formDrafts.{key} = data).
+   *  يُستدعى مع كل تغيير حقل عبر useFormDraft (debounced). يُفعّل المشغلات المباشرة
+   *  (safetyHazard / requestScopeChange / mediaRequested) فور تحديث الحقل. */
+  saveDraft: (projectRefId: string, key: string, data: Record<string, any>, user: UserProfile) => Promise<void>;
 }
 
 /* ──────────────────────────────────────────────────────────────────

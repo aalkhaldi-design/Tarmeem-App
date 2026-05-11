@@ -5,10 +5,16 @@ import React, { useState } from 'react';
 import { FileText, CheckCircle2, RefreshCcw, Lock, UserCog } from 'lucide-react';
 import { DarkCard, DarkReadOnlyField, DarkTextArea } from '../DarkUI';
 import type { SharedFormProps } from './_shared';
+import { useFormDraft } from './useFormDraft';
 
 const FormF03: React.FC<SharedFormProps> = ({ rec, user, api, project, isEditable, isCompleted }) => {
-  const [eligibility, setEligibility] = useState<string>(rec?.data?.eligibility || '');
-  const [managerNotes, setManagerNotes] = useState<string>(rec?.data?.managerNotes || '');
+  const [draft, setDraft] = useFormDraft<{ eligibility: string; managerNotes: string }>({
+    api, user, project, rec, draftKey: 'F-03', initial: { eligibility: '', managerNotes: '' },
+  });
+  const eligibility = draft.eligibility;
+  const managerNotes = draft.managerNotes;
+  const setEligibility = (v: string) => setDraft(d => ({ ...d, eligibility: v }));
+  const setManagerNotes = (v: string) => setDraft(d => ({ ...d, managerNotes: v }));
   const [busy, setBusy] = useState(false);
   const dis = !isEditable;
 

@@ -1,192 +1,166 @@
 import React, { useState } from 'react';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { Mail, Lock, User as UserIcon, Eye, EyeOff, ShieldCheck, ArrowRight } from 'lucide-react';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { TarmeemLogo } from './ui';
-import { ROLES_DEF, ROLE_BY_KEY, RoleKey, DEPARTMENTS, REGION_LABELS, isAdminEmail } from '../lib/data';
+import { RoleKey, DepartmentKey } from '../lib/data';
 
+// 🚨 FIXED: Strict types added for mobile and ext to prevent dangerous 'any' casting downstream
 export interface UserProfile {
   id: string;
   email: string;
+  username: string;
   fullName: string;
-  /** أحد مفاتيح الأدوار (RoleKey) أو 'ADMIN' للمسؤول العام */
-  role: RoleKey | 'ADMIN' | 'PENDING';
-  /** مفتاح الإدارة الأساسية للمستخدم (قد يكون فارغاً للمعلّقين) */
-  department: string;
-  region: string;
-  /** يحدّد ما إذا كان المستخدم مديراً للقسم (للاعتمادات) */
+  mobile?: string;
+  ext?: string;
+  role: RoleKey | 'PENDING';
+  department: DepartmentKey | '';
   isManager: boolean;
-  /** هاتف للتواصل (اختياري) */
-  phone?: string;
-  bio?: string;
-  status: 'active' | 'pending' | 'deactivated';
-  registeredAt: string;
-  lastSeenAt: string;
-  approvedBy: string | null;
-  approvedAt: string | null;
-  deactivatedAt: string | null;
-  deactivatedBy: string | null;
-  notificationPrefs: { inApp: boolean; email: boolean };
-  auditLog: any[];
-  /** إعادة ضبط: عند الترقية إلى البنية الجديدة، يُعيَّن لإعادة الإسناد */
+  isAdmin?: boolean;
+  status: 'pending' | 'active' | 'deactivated';
+  createdAt: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  deactivatedAt?: string | null;
+  deactivatedBy?: string | null;
   needsRoleReset?: boolean;
+  auditLog?: { at: string; actor: string; action: string }[];
 }
 
-export async function getUserProfile(uid: string): Promise<UserProfile | null> {
-  const snap = await getDoc(doc(db, 'users', uid));
-  return snap.exists() ? { id: snap.id, ...snap.data() } as UserProfile : null;
-}
-
-export async function createUserProfile(
-  uid: string, email: string, fullName: string,
-  requestedRole: RoleKey | null, region: string,
-): Promise<void> {
-  // إذا كان البريد ضمن قائمة الأدمنز الافتراضيين، أنشئه أدمن مباشرة
-  if (isAdminEmail(email)) {
-    const profile: UserProfile = {
-      id: uid, email: email.toLowerCase().trim(), fullName,
-      role: 'ADMIN', department: 'EXEC', region,
-      isManager: true, status: 'active',
-      registeredAt: new Date().toISOString(),
-      lastSeenAt: new Date().toISOString(),
-      approvedBy: 'system', approvedAt: new Date().toISOString(),
-      deactivatedAt: null, deactivatedBy: null,
-      notificationPrefs: { inApp: true, email: true },
-      auditLog: [{ at: new Date().toISOString(), actor: 'system', action: 'auto-admin', from: null, to: { role: 'ADMIN' } }],
-    };
-    await setDoc(doc(db, 'users', uid), profile);
-    return;
+export const getUserProfile = async (uid: string): Promise<UserProfile | null> => {
+  try {
+    const d = await getDoc(doc(db, 'users', uid));
+    if (d.exists()) return { id: d.id, ...d.data() } as UserProfile;
+    return null;
+  } catch (e) {
+    console.error(e);
+    return null;
   }
-  const def = requestedRole ? ROLE_BY_KEY[requestedRole] : null;
-  const profile: UserProfile = {
-    id: uid, email: email.toLowerCase().trim(), fullName,
-    role: requestedRole || 'PENDING',
-    department: def?.department || '',
-    region,
-    isManager: !!def?.isManager,
-    status: 'pending',
-    registeredAt: new Date().toISOString(),
-    lastSeenAt: new Date().toISOString(),
-    approvedBy: null, approvedAt: null,
-    deactivatedAt: null, deactivatedBy: null,
-    notificationPrefs: { inApp: true, email: true },
-    auditLog: [{ at: new Date().toISOString(), actor: 'system', action: 'registered', from: null, to: { status: 'pending', role: requestedRole } }],
-  };
-  await setDoc(doc(db, 'users', uid), profile);
-}
+};
 
-export function AuthScreen({ onAuth }: { onAuth: (user: any) => void }) {
+export const AuthScreen: React.FC<{ onAuth: () => void }> = ({ onAuth }) => {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [requestedRole, setRequestedRole] = useState<RoleKey>('SOCIAL_RESEARCHER');
-  const [region, setRegion] = useState('DAM');
-  const [error, setError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
+
     try {
       if (isLogin) {
-        const cred = await signInWithEmailAndPassword(auth, email, password);
-        onAuth(cred.user);
+        await signInWithEmailAndPassword(auth, email, password);
+        const user = auth.currentUser;
+        if (user) {
+           const profile = await getUserProfile(user.uid);
+           if (profile && !profile.username) {
+              const username = `@${email.split('@')[0].toLowerCase()}`;
+              await setDoc(doc(db, 'users', user.uid), { username }, { merge: true });
+           }
+        }
       } else {
-        if (!fullName.trim()) { setError('الاسم الكامل مطلوب'); setLoading(false); return; }
+        if (!fullName.trim()) throw new Error('يرجى إدخال الاسم الرباعي');
         const cred = await createUserWithEmailAndPassword(auth, email, password);
-        await createUserProfile(cred.user.uid, email, fullName, requestedRole, region);
-        onAuth(cred.user);
+        const username = `@${email.split('@')[0].toLowerCase()}`;
+
+        const newProfile: UserProfile = {
+          id: cred.user.uid,
+          email: cred.user.email || email,
+          username,
+          fullName: fullName.trim(),
+          role: 'PENDING',
+          department: '',
+          isManager: false,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+        };
+        await setDoc(doc(db, 'users', cred.user.uid), newProfile);
       }
+      onAuth();
     } catch (err: any) {
-      const msg = err.code === 'auth/user-not-found' ? 'الحساب غير موجود' :
-        err.code === 'auth/wrong-password' ? 'كلمة المرور غير صحيحة' :
-        err.code === 'auth/email-already-in-use' ? 'البريد مسجل مسبقاً' :
-        err.code === 'auth/weak-password' ? 'كلمة المرور ضعيفة (6 أحرف على الأقل)' :
-        err.code === 'auth/invalid-email' ? 'بريد إلكتروني غير صالح' :
-        'حدث خطأ، حاول مرة أخرى';
-      setError(msg);
-    } finally { setLoading(false); }
+      if (err.code === 'auth/email-already-in-use') setError('البريد الإلكتروني مسجل مسبقاً.');
+      else if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') setError('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
+      else if (err.code === 'auth/weak-password') setError('كلمة المرور ضعيفة. يجب أن تكون 6 أحرف على الأقل.');
+      else setError(err.message || 'حدث خطأ أثناء المصادقة.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const rolesByDept = DEPARTMENTS.map(d => ({
-    dept: d,
-    roles: ROLES_DEF.filter(r => r.department === d.key),
-  }));
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#4A1F66] via-[#6B3D87] to-[#56B894] flex items-center justify-center p-4" dir="rtl">
-      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md p-8">
-        <div className="flex flex-col items-center mb-8">
-          <TarmeemLogo variant="stacked" size={60} color="auto" animated={false} />
-          <h1 className="text-xl font-bold text-[#4A1F66] dark:text-purple-300 mt-4">منصة العمليات الموحّدة</h1>
-          <p className="text-xs text-gray-500 dark:text-slate-400 mt-1">جمعية ترميم</p>
+    <div className="min-h-screen bg-[#050505] flex items-center justify-center p-4 relative overflow-hidden" dir="rtl">
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute top-[-10%] right-[-5%] w-[40vw] h-[40vw] bg-[#4A1F66] rounded-full blur-[120px] opacity-20 animate-pulse" />
+        <div className="absolute bottom-[-10%] left-[-5%] w-[30vw] h-[30vw] bg-[#43bba1] rounded-full blur-[120px] opacity-10 animate-pulse" style={{ animationDelay: '2s' }} />
+      </div>
+
+      <div className="w-full max-w-md bg-[#0a0a0a]/80 backdrop-blur-2xl rounded-3xl shadow-[0_0_40px_rgba(74,31,102,0.2)] border border-[#2D124C] p-8 relative z-10">
+        <div className="text-center mb-8">
+          <TarmeemLogo variant="stacked" size={64} color="white" className="mx-auto mb-6" animated />
+          <h1 className="text-2xl font-black text-white mb-2">{isLogin ? 'تسجيل الدخول' : 'إنشاء حساب جديد'}</h1>
+          <p className="text-sm text-gray-400">منصة العمليات الموحّدة (ERP) - جمعية ترميم</p>
         </div>
 
-        <div className="flex bg-gray-100 dark:bg-slate-800 rounded-lg p-1 mb-6">
-          <button onClick={() => { setIsLogin(true); setError(''); }}
-            className={`flex-1 py-2 rounded-md text-sm font-bold transition ${isLogin ? 'bg-white dark:bg-slate-700 shadow text-[#4A1F66] dark:text-purple-300' : 'text-gray-500 dark:text-slate-400'}`}>تسجيل الدخول</button>
-          <button onClick={() => { setIsLogin(false); setError(''); }}
-            className={`flex-1 py-2 rounded-md text-sm font-bold transition ${!isLogin ? 'bg-white dark:bg-slate-700 shadow text-[#4A1F66] dark:text-purple-300' : 'text-gray-500 dark:text-slate-400'}`}>طلب حساب جديد</button>
-        </div>
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/50 text-red-400 p-4 rounded-xl text-sm font-bold mb-6 flex items-start gap-3">
+            <ShieldCheck className="w-5 h-5 shrink-0 mt-0.5" />
+            <p>{error}</p>
+          </div>
+        )}
 
-        {error && <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs font-bold p-3 rounded-lg mb-4">{error}</div>}
-
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleAuth} className="space-y-4">
           {!isLogin && (
-            <>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-semibold text-gray-700 dark:text-slate-300">الاسم الكامل</label>
-                <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} required
-                  className="px-3 py-2 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]" />
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-gray-400 ml-1">الاسم الرباعي</label>
+              <div className="relative">
+                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none"><UserIcon className="h-5 w-5 text-gray-500" /></div>
+                <input type="text" required value={fullName} onChange={(e) => setFullName(e.target.value)} className="block w-full pl-3 pr-10 py-3 border border-gray-800 rounded-xl leading-5 bg-[#111] text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-[#4A1F66] focus:border-[#4A1F66] transition-all" placeholder="أحمد عبدالله الخالدي" />
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-semibold text-gray-700 dark:text-slate-300">الدور المطلوب</label>
-                <select value={requestedRole} onChange={e => setRequestedRole(e.target.value as RoleKey)}
-                  className="px-3 py-2 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]">
-                  {rolesByDept.map(g => (
-                    <optgroup key={g.dept.key} label={g.dept.name}>
-                      {g.roles.map(r => (
-                        <option key={r.key} value={r.key}>{r.name}</option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-semibold text-gray-700 dark:text-slate-300">المنطقة</label>
-                <select value={region} onChange={e => setRegion(e.target.value)}
-                  className="px-3 py-2 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]">
-                  {Object.entries(REGION_LABELS).filter(([k]) => k !== 'ALL').map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
-                  ))}
-                </select>
-              </div>
-            </>
+            </div>
           )}
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-semibold text-gray-700 dark:text-slate-300">البريد الإلكتروني</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} required dir="ltr"
-              className="px-3 py-2 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]" />
+
+          <div className="space-y-1">
+            <label className="text-xs font-bold text-gray-400 ml-1">البريد الإلكتروني</label>
+            <div className="relative">
+              <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none"><Mail className="h-5 w-5 text-gray-500" /></div>
+              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="block w-full pl-3 pr-10 py-3 border border-gray-800 rounded-xl leading-5 bg-[#111] text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-[#4A1F66] focus:border-[#4A1F66] transition-all text-left dir-ltr" placeholder="email@tarmeem.org" dir="ltr" />
+            </div>
           </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-semibold text-gray-700 dark:text-slate-300">كلمة المرور</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={6}
-              className="px-3 py-2 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]" dir="ltr" />
+
+          <div className="space-y-1">
+            <label className="text-xs font-bold text-gray-400 ml-1">كلمة المرور</label>
+            <div className="relative">
+              <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none"><Lock className="h-5 w-5 text-gray-500" /></div>
+              <input type={showPassword ? 'text' : 'password'} required value={password} onChange={(e) => setPassword(e.target.value)} className="block w-full pl-10 pr-10 py-3 border border-gray-800 rounded-xl leading-5 bg-[#111] text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-[#4A1F66] focus:border-[#4A1F66] transition-all text-left dir-ltr" placeholder="••••••••" dir="ltr" />
+              <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-500 hover:text-gray-300 transition-colors">
+                {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+              </button>
+            </div>
           </div>
-          <button type="submit" disabled={loading}
-            className="w-full bg-[#4A1F66] text-white py-3 rounded-lg font-bold hover:bg-[#3A1652] transition disabled:opacity-50">
-            {loading ? 'جاري...' : isLogin ? 'دخول' : 'إنشاء طلب'}
+
+          <button type="submit" disabled={loading} className="w-full mt-6 bg-gradient-to-r from-[#4A1F66] to-[#6B3D87] text-white py-3.5 rounded-xl font-bold text-sm shadow-[0_0_20px_rgba(74,31,102,0.4)] hover:shadow-[0_0_30px_rgba(74,31,102,0.6)] disabled:opacity-50 transition-all flex justify-center items-center gap-2">
+            {loading ? 'جاري المعالجة...' : isLogin ? 'تسجيل الدخول' : 'إنشاء الحساب'} {loading ? null : <ArrowRight className="w-4 h-4" />}
           </button>
         </form>
 
-        {!isLogin && (
-          <p className="text-[10px] text-gray-400 dark:text-slate-500 text-center mt-4">
-            بعد التسجيل سيراجع مدير النظام طلبك ويسند الدور والإدارة المناسبة قبل تفعيل الحساب.
+        <div className="mt-8 text-center border-t border-gray-800 pt-6">
+          <p className="text-sm text-gray-400">
+            {isLogin ? 'ليس لديك حساب؟' : 'لديك حساب بالفعل؟'}{' '}
+            <button onClick={() => { setIsLogin(!isLogin); setError(''); }} className="text-[#43bba1] font-bold hover:underline transition-colors focus:outline-none">
+              {isLogin ? 'سجل الآن' : 'سجل دخولك'}
+            </button>
           </p>
-        )}
+        </div>
       </div>
     </div>
   );
-}
+};
+
+// Fix #1 — App.tsx imports { Auth } from this file; alias to the supplied AuthScreen.
+export const Auth = AuthScreen;

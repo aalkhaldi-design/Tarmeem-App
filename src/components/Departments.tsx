@@ -1,281 +1,157 @@
-import React, { useMemo, useState } from 'react';
-import {
-  Building2, Users as UsersIcon, Stethoscope, Wallet, Truck, HeartHandshake,
-  Megaphone, Handshake, Mic2, FileText, Plus, Activity, Inbox,
-  Shield,
-} from 'lucide-react';
-import {
-  DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, RoleKey, formsByDepartment,
-  departmentName, roleName, FormCode,
-} from '../lib/data';
-import { Card, Pill, EmptyState, SearchBar } from './ui';
-import {
-  FormsApi, FormCard, formCanBeOriginatedBy, formAwaitsUser,
-} from './Forms';
-import type { UserProfile } from './Auth';
-
-const DEPT_ICON: Record<DepartmentKey, React.ElementType> = {
-  EXEC: Building2,
-  RESEARCH: UsersIcon,
-  PROJECTS: Stethoscope,
-  FINANCE: Wallet,
-  SUPPORT: Truck,
-  VOLUNTEER: HeartHandshake,
-  MARKETING: Megaphone,
-  PARTNERSHIP: Handshake,
-  COMMS: Mic2,
-};
-
-interface PortalProps {
-  user: UserProfile;
-  users: UserProfile[];
-  api: FormsApi;
-  onOpenForm: (id: string) => void;
-  onCreateForm: (preselect?: FormCode) => void;
-}
-
-const DepartmentPortalLayout: React.FC<PortalProps & { dept: DepartmentKey; extras?: React.ReactNode }> =
-  ({ dept, user, api, onOpenForm, onCreateForm, extras }) => {
-    const def = DEPT_BY_KEY[dept];
-    const Icon = DEPT_ICON[dept];
-    const myRole = user.role as RoleKey;
-
-    const ownedForms = useMemo(() => formsByDepartment(dept), [dept]);
-    const records = useMemo(() => api.forms.filter(f => f.ownerDept === dept || (f.bridgesTo || []).includes(dept)), [api.forms, dept]);
-
-    const [search, setSearch] = useState('');
-    const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
-
-    const filtered = useMemo(() => {
-      const q = search.trim().toLowerCase();
-      return records.filter(f => {
-        if (statusFilter !== 'all' && f.status !== statusFilter) return false;
-        if (!q) return true;
-        return (f.title.toLowerCase().includes(q) || f.code.toLowerCase().includes(q) || (f.beneficiaryName || '').toLowerCase().includes(q) || (f.projectId || '').toLowerCase().includes(q));
-      });
-    }, [records, search, statusFilter]);
-
-    const inbox = useMemo(() => api.forms.filter(f => formAwaitsUser(f, user)), [api.forms, user]);
-    const stats = {
-      total: records.length,
-      pending: records.filter(f => f.status === 'pending').length,
-      approved: records.filter(f => f.status === 'approved').length,
-      rejected: records.filter(f => f.status === 'rejected').length,
-    };
-
-    const creatable = ownedForms.filter(f => formCanBeOriginatedBy(f, myRole) || user.role === 'ADMIN');
-
-    return (
-      <div dir="rtl" className="space-y-5">
-        <div className="rounded-2xl p-6 text-white shadow-lg" style={{ background: `linear-gradient(135deg, ${def.color}, ${def.accent})` }}>
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-xl bg-white/15 flex items-center justify-center backdrop-blur-sm">
-                <Icon className="w-7 h-7" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold">{def.name}</h1>
-                <p className="text-white/80 text-sm mt-1">{def.description}</p>
-              </div>
-            </div>
-            {creatable.length > 0 && (
-              <button onClick={() => onCreateForm()} className="bg-white text-gray-800 px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-white/90 shadow">
-                <Plus className="w-4 h-4" /> نموذج جديد
-              </button>
-            )}
-          </div>
-        </div>
-
-        {extras}
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="rounded-xl bg-purple-50 dark:bg-purple-900/30 p-4">
-            <p className="text-2xl font-bold text-purple-700 dark:text-purple-300">{stats.total}</p>
-            <p className="text-xs font-semibold text-purple-700/80 dark:text-purple-300/80 mt-1">إجمالي النماذج</p>
-          </div>
-          <div className="rounded-xl bg-amber-50 dark:bg-amber-900/30 p-4">
-            <p className="text-2xl font-bold text-amber-700 dark:text-amber-300">{stats.pending}</p>
-            <p className="text-xs font-semibold text-amber-700/80 dark:text-amber-300/80 mt-1">معلّقة</p>
-          </div>
-          <div className="rounded-xl bg-green-50 dark:bg-green-900/30 p-4">
-            <p className="text-2xl font-bold text-green-700 dark:text-green-300">{stats.approved}</p>
-            <p className="text-xs font-semibold text-green-700/80 dark:text-green-300/80 mt-1">معتمدة</p>
-          </div>
-          <div className="rounded-xl bg-red-50 dark:bg-red-900/30 p-4">
-            <p className="text-2xl font-bold text-red-700 dark:text-red-300">{stats.rejected}</p>
-            <p className="text-xs font-semibold text-red-700/80 dark:text-red-300/80 mt-1">مرفوضة</p>
-          </div>
-        </div>
-
-        <Card title={`صندوق وارد العضو (${inbox.length})`} icon={Inbox} accent="teal">
-          {inbox.length === 0 ? (
-            <EmptyState icon={Activity} title="لا توجد طلبات معلّقة على دورك" />
-          ) : (
-            <div className="space-y-2">{inbox.map(f => <FormCard key={f.id} rec={f} highlight onOpen={() => onOpenForm(f.id)} />)}</div>
-          )}
-        </Card>
-
-        {creatable.length > 0 && (
-          <Card title="النماذج المتاحة لدورك" icon={FileText}>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {creatable.map(f => (
-                <button key={f.code} onClick={() => onCreateForm(f.code)}
-                  className="text-right p-3 rounded-lg border border-gray-200 dark:border-slate-700 hover:border-[#4A1F66]/30 hover:shadow transition bg-white dark:bg-slate-800">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Pill tone="purple">{f.code}</Pill>
-                    <span className="text-sm font-bold text-gray-800 dark:text-slate-100">{f.title}</span>
-                  </div>
-                  <p className="text-[11px] text-gray-500 dark:text-slate-400 line-clamp-2">{f.description}</p>
-                </button>
-              ))}
-            </div>
-          </Card>
-        )}
-
-        <Card title={`نماذج ${def.name} (${records.length})`} icon={FileText} accent="purple">
-          <div className="flex flex-col md:flex-row gap-3 mb-4">
-            <div className="flex-1"><SearchBar value={search} onChange={setSearch} placeholder="بحث برمز أو عنوان أو مستفيد..." /></div>
-            <div className="flex flex-wrap gap-2">
-              {(['all', 'pending', 'approved', 'rejected'] as const).map(s => (
-                <button key={s} onClick={() => setStatusFilter(s)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-bold transition ${statusFilter === s ? 'bg-[#4A1F66] text-white shadow' : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300'}`}>
-                  {s === 'all' ? 'الكل' : s === 'pending' ? 'بانتظار' : s === 'approved' ? 'معتمدة' : 'مرفوضة'}
-                </button>
-              ))}
-            </div>
-          </div>
-          {filtered.length === 0 ? (
-            <EmptyState icon={FileText} title="لا توجد نماذج مطابقة" />
-          ) : (
-            <div className="space-y-2">
-              {filtered.map(f => <FormCard key={f.id} rec={f} highlight={formAwaitsUser(f, user)} onOpen={() => onOpenForm(f.id)} />)}
-            </div>
-          )}
-        </Card>
-
-        <Card title="فهرس نماذج الإدارة (مرجعي)" icon={FileText}>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {ownedForms.map(f => (
-              <div key={f.code} className="flex items-start gap-2 p-2 rounded-lg border border-gray-100 dark:border-slate-700">
-                <Pill tone="gray">{f.code}</Pill>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold text-gray-800 dark:text-slate-100">{f.title}</p>
-                  <p className="text-[10px] text-gray-500 dark:text-slate-400">
-                    {f.ownerDept !== dept ? <span className="text-pink-600">جسر من {departmentName(f.ownerDept)}</span> : 'مالك أصلي'}
-                    {' · '}
-                    {f.approvalChain.map(r => roleName(r)).join(' ← ')}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
-    );
-  };
-
-const makePortal = (dept: DepartmentKey) => function P(props: PortalProps) {
-  return <DepartmentPortalLayout dept={dept} {...props} />;
-};
-
-export const ExecutivePortal     = makePortal('EXEC');
-export const ResearchPortal      = makePortal('RESEARCH');
-export const ProjectsPortal      = makePortal('PROJECTS');
-export const FinancePortal       = makePortal('FINANCE');
-export const SupportPortal       = makePortal('SUPPORT');
-export const VolunteerPortal     = makePortal('VOLUNTEER');
-export const MarketingPortal     = makePortal('MARKETING');
-export const PartnershipPortal   = makePortal('PARTNERSHIP');
-export const CommsPortal         = makePortal('COMMS');
-
-export const DEPT_PORTALS: Record<DepartmentKey, React.FC<PortalProps>> = {
-  EXEC: ExecutivePortal,
-  RESEARCH: ResearchPortal,
-  PROJECTS: ProjectsPortal,
-  FINANCE: FinancePortal,
-  SUPPORT: SupportPortal,
-  VOLUNTEER: VolunteerPortal,
-  MARKETING: MarketingPortal,
-  PARTNERSHIP: PartnershipPortal,
-  COMMS: CommsPortal,
-};
-
-/* ──────────────────────────────────────────────────────────────────
-   Sidebar / Mobile nav
-   ────────────────────────────────────────────────────────────────── */
+import React, { useState } from 'react';
+import { Home, Users, Briefcase, FileText, CheckCircle2, Bell, Info, X } from 'lucide-react';
+import { DepartmentKey, DEPARTMENTS, FormCode, FORMS, roleName } from '../lib/data';
+import { UserProfile } from './Auth';
+import { FormsApi, formAwaitsUser, FormCard } from './Forms';
+import { Pill } from './ui';
 
 export type ActivePortal = DepartmentKey | 'HOME' | 'ADMIN' | 'PROJECTS_LIST' | 'PROFILE';
 
-export const PortalSidebar: React.FC<{
-  active: ActivePortal;
-  onChange: (p: ActivePortal) => void;
-  user: UserProfile;
-  api: FormsApi;
-  isAdmin: boolean;
-  allowedDepts: DepartmentKey[];
-}> = ({ active, onChange, user, api, isAdmin, allowedDepts }) => {
-  const inboxCount = api.forms.filter(f => formAwaitsUser(f, user)).length;
+export const PortalSidebar: React.FC<{ active: ActivePortal; onChange: (p: ActivePortal) => void; user: UserProfile; api: FormsApi; isAdmin: boolean; allowedDepts: DepartmentKey[]; }> = ({ active, onChange, user, api, isAdmin, allowedDepts }) => {
+  // Fix #7 — guard `bridgesTo` in case a snapshot record lacks the field.
+  const pendingCountFor = (deptKey: string) => {
+    return api.forms.filter(f => f.status === 'pending' && (f.ownerDept === deptKey || (f.bridgesTo || []).includes(deptKey as any)) && formAwaitsUser(f, user)).length;
+  };
+
+  const orderedDepts = [...DEPARTMENTS].sort((a,b) => (a.key === user.department ? -1 : b.key === user.department ? 1 : 0));
 
   return (
-    <aside className="hidden md:flex md:flex-col w-60 shrink-0 bg-white dark:bg-slate-900 border-l border-gray-200 dark:border-slate-700 sticky top-0 h-screen overflow-y-auto" dir="rtl">
-      <div className="px-4 py-3 border-b border-gray-100 dark:border-slate-800">
-        <p className="text-xs font-bold text-gray-700 dark:text-slate-200">{user.fullName}</p>
-        <p className="text-[10px] text-gray-400 dark:text-slate-500">{roleName(user.role)}</p>
+    <aside className="w-64 bg-[#050505] border-l border-gray-800 hidden md:flex flex-col h-[calc(100vh-64px)] sticky top-16 shadow-xl" dir="rtl">
+      <div className="flex-1 overflow-y-auto py-4 px-3 space-y-1 custom-scrollbar">
+        <button onClick={() => onChange('HOME')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-bold text-sm ${active === 'HOME' ? 'bg-[#4A1F66] text-white shadow-md' : 'text-gray-400 hover:bg-[#111] hover:text-white'}`}><Home className="w-5 h-5" /> الرئيسية</button>
+        <button onClick={() => onChange('PROJECTS_LIST')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-bold text-sm ${active === 'PROJECTS_LIST' ? 'bg-[#4A1F66] text-white shadow-md' : 'text-gray-400 hover:bg-[#111] hover:text-white'}`}><Briefcase className="w-5 h-5" /> قائمة المشاريع</button>
+        {isAdmin && <button onClick={() => onChange('ADMIN')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-bold text-sm ${active === 'ADMIN' ? 'bg-[#4A1F66] text-white shadow-md' : 'text-gray-400 hover:bg-[#111] hover:text-white'}`}><Users className="w-5 h-5" /> إدارة المستخدمين</button>}
+
+        <div className="pt-4 pb-2"><p className="text-[10px] font-black text-gray-600 uppercase tracking-wider px-4">مراكز الإدارات</p></div>
+
+        {orderedDepts.map(d => {
+          const isAllowed = allowedDepts.includes(d.key);
+          const pCount = pendingCountFor(d.key);
+          const isMyDept = d.key === user.department;
+
+          return (
+            <button key={d.key} onClick={() => onChange(d.key)} className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all font-bold text-sm ${active === d.key ? 'bg-gradient-to-l from-[#1a0f2e] to-[#0c0c0c] text-[#a871f7] border border-[#3c1d5d]' : 'text-gray-400 hover:bg-[#111] hover:text-white border border-transparent'}`}>
+              <div className="flex items-center gap-3">
+                <span className={`w-2 h-2 rounded-full ${isMyDept ? 'bg-[#43bba1]' : 'bg-transparent'}`}></span>
+                {d.shortName}
+              </div>
+              {pCount > 0 && <span className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full">{pCount}</span>}
+            </button>
+          );
+        })}
       </div>
-      <nav className="flex-1 p-2 space-y-1">
-        <NavItem active={active === 'HOME'} onClick={() => onChange('HOME')} icon={Activity} label="الرئيسية" />
-        <NavItem active={active === 'PROJECTS_LIST'} onClick={() => onChange('PROJECTS_LIST')} icon={Building2} label="المشاريع" />
-        <div className="my-2 px-3 text-[10px] font-bold text-gray-400 uppercase tracking-wider">الإدارات</div>
-        {DEPARTMENTS.filter(d => allowedDepts.includes(d.key)).map(d => (
-          <NavItem key={d.key} active={active === d.key} onClick={() => onChange(d.key)} icon={DEPT_ICON[d.key]} label={d.name} />
-        ))}
-        <div className="my-2 px-3 text-[10px] font-bold text-gray-400 uppercase tracking-wider">حسابي</div>
-        <NavItem active={active === 'PROFILE'} onClick={() => onChange('PROFILE')} icon={UsersIcon} label="ملفي الشخصي" badge={inboxCount} />
-        {isAdmin && <NavItem active={active === 'ADMIN'} onClick={() => onChange('ADMIN')} icon={Shield} label="لوحة الإدارة" />}
-      </nav>
     </aside>
   );
 };
 
-const NavItem: React.FC<{ active: boolean; onClick: () => void; icon: React.ElementType; label: string; badge?: number }> =
-  ({ active, onClick, icon: Icon, label, badge }) => (
-    <button onClick={onClick}
-      className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-bold transition text-right
-        ${active ? 'bg-[#4A1F66] text-white shadow' : 'text-gray-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800'}`}>
-      <Icon className="w-4 h-4 shrink-0" />
-      <span className="flex-1 truncate">{label}</span>
-      {badge ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500 text-white font-bold">{badge}</span> : null}
-    </button>
-  );
-
-export const PortalMobileNav: React.FC<{
-  active: ActivePortal;
-  onChange: (p: ActivePortal) => void;
-  isAdmin: boolean;
-  allowedDepts: DepartmentKey[];
-}> = ({ active, onChange, isAdmin, allowedDepts }) => {
-  const items: { key: ActivePortal; label: string; icon: React.ElementType }[] = [
-    { key: 'HOME', label: 'الرئيسية', icon: Activity },
-    { key: 'PROJECTS_LIST', label: 'المشاريع', icon: Building2 },
-    ...DEPARTMENTS.filter(d => allowedDepts.includes(d.key)).map(d => ({ key: d.key as ActivePortal, label: d.shortName, icon: DEPT_ICON[d.key] })),
-    { key: 'PROFILE', label: 'ملفي', icon: UsersIcon },
-  ];
-  if (isAdmin) items.push({ key: 'ADMIN', label: 'الإدارة', icon: Shield });
-
+export const PortalMobileNav: React.FC<{ active: ActivePortal; onChange: (p: ActivePortal) => void; isAdmin: boolean; allowedDepts: DepartmentKey[]; }> = ({ active, onChange, isAdmin }) => {
   return (
-    <nav className="md:hidden fixed bottom-0 inset-x-0 bg-white dark:bg-slate-900 border-t border-gray-200 dark:border-slate-700 flex overflow-x-auto z-40 hide-scrollbar" dir="rtl">
-      {items.map(it => {
-        const Icon = it.icon;
-        const isActive = active === it.key;
-        return (
-          <button key={it.key} onClick={() => onChange(it.key)}
-            className={`flex flex-col items-center justify-center min-w-[80px] py-2 px-2 ${isActive ? 'text-[#4A1F66] dark:text-purple-300 font-bold' : 'text-gray-400 dark:text-slate-500'}`}>
-            <Icon className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px]">{it.label}</span>
-          </button>
-        );
-      })}
-    </nav>
+    <div className="fixed bottom-0 left-0 w-full bg-[#050505] border-t border-gray-800 md:hidden flex justify-around p-2 z-40 pb-safe shadow-[0_-5px_15px_rgba(0,0,0,0.5)]">
+      <button onClick={() => onChange('HOME')} className={`p-2 flex flex-col items-center gap-1 rounded-lg transition-colors ${active === 'HOME' ? 'text-[#a871f7] bg-[#1a0f2e]' : 'text-gray-500 hover:text-white'}`}><Home className="w-5 h-5" /><span className="text-[9px] font-bold">الرئيسية</span></button>
+      <button onClick={() => onChange('PROJECTS_LIST')} className={`p-2 flex flex-col items-center gap-1 rounded-lg transition-colors ${active === 'PROJECTS_LIST' ? 'text-[#a871f7] bg-[#1a0f2e]' : 'text-gray-500 hover:text-white'}`}><Briefcase className="w-5 h-5" /><span className="text-[9px] font-bold">المشاريع</span></button>
+      {isAdmin && <button onClick={() => onChange('ADMIN')} className={`p-2 flex flex-col items-center gap-1 rounded-lg transition-colors ${active === 'ADMIN' ? 'text-[#a871f7] bg-[#1a0f2e]' : 'text-gray-500 hover:text-white'}`}><Users className="w-5 h-5" /><span className="text-[9px] font-bold">المستخدمين</span></button>}
+    </div>
   );
 };
 
+const DepartmentPortalTemplate: React.FC<{ deptKey: DepartmentKey; user: UserProfile; api: FormsApi; onOpenForm: (id: string) => void; onCreateForm?: (code?: FormCode) => void; }> = ({ deptKey, user, api, onOpenForm }) => {
+  const deptDef = DEPARTMENTS.find(d => d.key === deptKey)!;
+  const [tab, setTab] = useState<'myQueue' | 'deptAlerts' | 'sops'>('myQueue');
+  const [sopModal, setSopModal] = useState<string | null>(null);
+
+  // Fix #7 — guard `bridgesTo` everywhere it's read on the record.
+  const myQueue = api.forms.filter(f => (f.ownerDept === deptKey || (f.bridgesTo || []).includes(deptKey)) && formAwaitsUser(f, user));
+  const deptAlerts = api.forms.filter(f => f.status === 'pending' && (f.ownerDept === deptKey || (f.bridgesTo || []).includes(deptKey)));
+  const myFormsDef = FORMS.filter(f => f.ownerDept === deptKey || (f.bridgesTo || []).includes(deptKey));
+
+  return (
+    <div className="space-y-6 animate-fade-in" dir="rtl">
+      <div className="bg-[#0a0a0a] border border-gray-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-64 h-64 rounded-full blur-[100px] opacity-10 pointer-events-none" style={{ backgroundColor: deptDef.color }} />
+        <div className="relative z-10">
+           <h1 className="text-2xl font-black text-white mb-2">{deptDef.name}</h1>
+           <p className="text-sm text-gray-400">{deptDef.description}</p>
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row bg-[#050505] p-1.5 rounded-xl border border-gray-800 shadow-md gap-1">
+         <button onClick={() => setTab('myQueue')} className={`flex-1 py-3 text-sm font-bold rounded-lg transition flex items-center justify-center gap-2 ${tab === 'myQueue' ? 'bg-[#4A1F66] text-white shadow' : 'text-gray-500 hover:text-white hover:bg-[#111]'}`}>
+            <CheckCircle2 size={18}/> مهامي ({myQueue.length})
+         </button>
+         <button onClick={() => setTab('deptAlerts')} className={`flex-1 py-3 text-sm font-bold rounded-lg transition flex items-center justify-center gap-2 ${tab === 'deptAlerts' ? 'bg-[#4A1F66] text-white shadow' : 'text-gray-500 hover:text-white hover:bg-[#111]'}`}>
+            <Bell size={18}/> تنبيهات القسم ({deptAlerts.length})
+         </button>
+         <button onClick={() => setTab('sops')} className={`flex-1 py-3 text-sm font-bold rounded-lg transition flex items-center justify-center gap-2 ${tab === 'sops' ? 'bg-[#4A1F66] text-white shadow' : 'text-gray-500 hover:text-white hover:bg-[#111]'}`}>
+            <FileText size={18}/> نماذج القسم (SOP)
+         </button>
+      </div>
+
+      <div className="min-h-[400px]">
+        {tab === 'myQueue' && (
+           <div className="space-y-3">
+             {myQueue.length === 0 ? <div className="text-center py-20 text-gray-500"><CheckCircle2 className="w-12 h-12 mx-auto mb-3 opacity-20"/>لا توجد مهام بانتظارك حالياً في هذا القسم.</div> : myQueue.map(f => <FormCard key={f.id} rec={f} onOpen={() => onOpenForm(f.id)} highlight />)}
+           </div>
+        )}
+
+        {tab === 'deptAlerts' && (
+           <div className="space-y-3">
+             <div className="bg-blue-900/20 border border-blue-500/30 p-4 rounded-xl text-xs text-blue-300 leading-relaxed mb-4">هذه القائمة تعرض جميع المهام النشطة المتعلقة بالقسم لغرض الاطلاع. لا يمكنك تعديل أو اعتماد المهمة إلا إذا كانت مطابقة لصلاحيتك في "مهامي". النقر على المهمة سيأخذك للنموذج المخصص.</div>
+             {deptAlerts.length === 0 ? <div className="text-center py-20 text-gray-500"><Bell className="w-12 h-12 mx-auto mb-3 opacity-20"/>القسم خالي من التنبيهات والمهام المعلقة.</div> : deptAlerts.map(f => <FormCard key={f.id} rec={f} onOpen={() => onOpenForm(f.id)} />)}
+           </div>
+        )}
+
+        {tab === 'sops' && (
+           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+             {myFormsDef.map(f => (
+               <button key={f.code} onClick={() => setSopModal(f.code)} className="text-right bg-[#0a0a0a] border border-gray-800 rounded-xl p-5 hover:border-[#a871f7] hover:shadow-[0_0_20px_rgba(168,113,247,0.15)] transition group">
+                 <div className="flex items-center gap-2 mb-3">
+                    <span className="bg-[#111] text-[#a871f7] font-bold text-[10px] px-2 py-1 rounded border border-gray-800">{f.code}</span>
+                    <h3 className="font-bold text-gray-200 group-hover:text-white">{f.title}</h3>
+                 </div>
+                 <p className="text-xs text-gray-500 line-clamp-2">{f.description}</p>
+                 <div className="mt-4 pt-3 border-t border-gray-800 flex items-center text-[10px] text-[#43bba1] font-bold gap-1"><Info size={12}/> عرض الدليل الإجرائي</div>
+               </button>
+             ))}
+           </div>
+        )}
+      </div>
+
+      {sopModal && (() => {
+         const def = FORMS.find(f => f.code === sopModal)!;
+         return (
+           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+             <div className="bg-[#0a0a0a] border border-gray-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl relative">
+                <div className="p-5 border-b border-gray-800 flex justify-between items-center bg-[#111]">
+                   <h2 className="text-lg font-black text-white flex items-center gap-2"><FileText className="text-[#a871f7]"/> دليل إجراءات: {def.title}</h2>
+                   <button onClick={() => setSopModal(null)} className="text-gray-500 hover:text-white p-1"><X size={20}/></button>
+                </div>
+                <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+                   <div><h4 className="text-xs font-bold text-gray-500 mb-2 uppercase">الهدف من النموذج</h4><p className="text-sm text-gray-200 leading-relaxed bg-[#111] p-4 rounded-xl border border-gray-800">{def.description}</p></div>
+                   <div className="grid grid-cols-2 gap-4">
+                      <div><h4 className="text-xs font-bold text-gray-500 mb-2 uppercase">منشئ النموذج</h4><div className="flex flex-wrap gap-2">{def.originRoles.map(r => <Pill key={r} tone="blue">{roleName(r)}</Pill>)}</div></div>
+                      <div><h4 className="text-xs font-bold text-gray-500 mb-2 uppercase">المدة الزمنية (SLA)</h4><Pill tone="amber">{def.slaDays ? `خلال ${def.slaDays} أيام` : 'غير محدد'}</Pill></div>
+                   </div>
+                   <div>
+                      <h4 className="text-xs font-bold text-gray-500 mb-3 uppercase">سلسلة الاعتماد والمسار (Workflow)</h4>
+                      <div className="bg-[#111] p-4 rounded-xl border border-gray-800 space-y-3">
+                         {def.approvalChain.map((r, i) => (
+                           <div key={i} className="flex items-center gap-3">
+                              <span className="w-6 h-6 rounded-full bg-[#2D124C] text-[#a871f7] font-bold text-xs flex items-center justify-center border border-[#502b79]">{i+1}</span>
+                              <span className="text-sm text-gray-300 font-bold">{roleName(r)}</span>
+                           </div>
+                         ))}
+                      </div>
+                   </div>
+                </div>
+             </div>
+           </div>
+         );
+      })()}
+    </div>
+  );
+};
+
+export const DEPT_PORTALS: Record<DepartmentKey, React.FC<any>> = DEPARTMENTS.reduce((acc, dept) => {
+  acc[dept.key] = (props: any) => <DepartmentPortalTemplate deptKey={dept.key} {...props} />;
+  return acc;
+}, {} as Record<DepartmentKey, React.FC<any>>);

@@ -14,6 +14,7 @@ interface ThemeCtxValue { theme: Theme; toggle: () => void; }
 export const ThemeContext = React.createContext<ThemeCtxValue>({ theme: 'light', toggle: () => {} });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  // Fix #9 — dark is the default; only opt out if the user has explicitly toggled to light.
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('tarmeem_theme') as Theme | null;
     if (saved === 'light' || saved === 'dark') return saved;
@@ -41,78 +42,157 @@ export function ThemeToggle({ className = '' }: { className?: string }) {
     <button
       onClick={toggle}
       title={theme === 'dark' ? 'الوضع النهاري' : 'الوضع الليلي'}
-      className={`p-1.5 rounded-lg transition-colors hover:bg-white/15 text-white ${className}`}>
+      className={`p-1.5 rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/15 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white ${className}`}>
       {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
     </button>
   );
 }
 
 /* ──────────────────────────────────────────────────────────────────
-   Tarmeem Logo & Splash (UNCHANGED — branded motion preserved)
+   Tarmeem Logo, Loader & Splash (Kinetic SVG Engine)
    ────────────────────────────────────────────────────────────────── */
+
+const BRAND = {
+  purple: '#582E7A', teal: '#34B390',
+  purpleDark: '#7C41AB', tealDark: '#3CD0A7'
+};
+
+const TarmeemStyles = () => (
+  <style>{`
+    @keyframes kineticFlyIn { 0% { transform: translate(var(--startX), var(--startY)) scale(0) rotate(var(--startRot)); opacity: 0; filter: blur(10px); } 60% { transform: translate(0, 0) scale(1.1) rotate(0deg); opacity: 1; filter: blur(0px); } 100% { transform: translate(0, 0) scale(1) rotate(0deg); opacity: 1; } }
+    @keyframes dustRing { 0%, 80% { opacity: 0; transform: scale(0.5); stroke-width: 8px; } 85% { opacity: 0.5; transform: scale(1.2); stroke-width: 4px; } 100% { opacity: 0; transform: scale(1.8); stroke-width: 0px; } }
+    @keyframes trowelWave { 0%, 100% { opacity: 0.5; transform: scale(0.95); filter: brightness(1); } 50% { opacity: 1; transform: scale(1.05); filter: brightness(1.3); } }
+
+    .brick-r3-1 { --startX: -80px; --startY: 50px; --startRot: -45deg; animation: kineticFlyIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.1s; opacity: 0; }
+    .brick-r3-2 { --startX: -30px; --startY: 80px; --startRot: -20deg; animation: kineticFlyIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.15s; opacity: 0; }
+    .brick-r3-3 { --startX: 30px; --startY: 80px; --startRot: 20deg; animation: kineticFlyIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.2s; opacity: 0; }
+    .brick-r3-4 { --startX: 80px; --startY: 50px; --startRot: 45deg; animation: kineticFlyIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.25s; opacity: 0; }
+    .brick-r2-1 { --startX: -100px; --startY: 0px; --startRot: -90deg; animation: kineticFlyIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.3s; opacity: 0; }
+    .brick-r2-2 { --startX: 0px; --startY: 100px; --startRot: 0deg; animation: kineticFlyIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.35s; opacity: 0; }
+    .brick-r2-3 { --startX: 100px; --startY: 0px; --startRot: 90deg; animation: kineticFlyIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.4s; opacity: 0; }
+    .brick-r1-1 { --startX: -80px; --startY: -50px; --startRot: -45deg; animation: kineticFlyIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.45s; opacity: 0; }
+    .brick-r1-2 { --startX: -30px; --startY: -80px; --startRot: -20deg; animation: kineticFlyIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.5s; opacity: 0; }
+    .brick-r1-3 { --startX: 30px; --startY: -80px; --startRot: 20deg; animation: kineticFlyIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.55s; opacity: 0; }
+    .brick-r1-4 { --startX: 80px; --startY: -50px; --startRot: 45deg; animation: kineticFlyIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.6s; opacity: 0; }
+    .brick-diamond-l { --startX: 0px; --startY: -100px; --startRot: 0deg; animation: kineticFlyIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.9s; opacity: 0; transform-origin: center; }
+    .brick-diamond-r { --startX: 0px; --startY: -100px; --startRot: 0deg; animation: kineticFlyIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; animation-delay: 0.9s; opacity: 0; transform-origin: center; }
+
+    .wave-1 { animation: trowelWave 1.5s infinite ease-in-out; transform-origin: center; }
+    .wave-2 { animation: trowelWave 1.5s infinite ease-in-out 0.15s; transform-origin: center; }
+    .wave-3 { animation: trowelWave 1.5s infinite ease-in-out 0.3s; transform-origin: center; }
+    .wave-4 { animation: trowelWave 1.5s infinite ease-in-out 0.45s; transform-origin: center; }
+    .wave-5 { animation: trowelWave 1.5s infinite ease-in-out 0.6s; transform-origin: center; }
+  `}</style>
+);
 
 export const TarmeemLogo = ({ variant = 'icon', size = 32, color = 'auto', className = '', animated = false }: {
   variant?: 'icon' | 'horizontal' | 'stacked'; size?: number; color?: string; className?: string; animated?: boolean;
 }) => {
-  const purple = color === 'white' ? '#FFFFFF' : color === 'mono-teal' ? '#56B894' : '#4A1F66';
-  const teal = color === 'white' ? '#FFFFFF' : color === 'mono-purple' ? '#4A1F66' : '#56B894';
-  const brickClass = animated ? 'brick' : '';
-  const diamondClass = animated ? 'diamond' : '';
+  const { theme } = useTheme();
+  const isWhite = color === 'white';
+  const pColor = isWhite ? '#FFFFFF' : (theme === 'dark' ? BRAND.purpleDark : BRAND.purple);
+  const tColor = isWhite ? '#FFFFFF' : (theme === 'dark' ? BRAND.tealDark : BRAND.teal);
 
   const Mark = () => (
-    <svg viewBox="0 0 200 175" width={size * 1.14} height={size} className={className} aria-label="Tarmeem">
-      <rect className={diamondClass} data-i="1" x="65" y="5" width="32" height="32" rx="3" fill={purple} transform="rotate(45 81 21)" />
-      <rect className={diamondClass} data-i="2" x="103" y="5" width="32" height="32" rx="3" fill={purple} transform="rotate(45 119 21)" />
-      <rect className={brickClass} data-i="8" x="10" y="65" width="28" height="26" rx="3" fill={purple} />
-      <rect className={brickClass} data-i="9" x="44" y="65" width="34" height="26" rx="3" fill={teal} />
-      <rect className={brickClass} data-i="10" x="84" y="65" width="32" height="26" rx="3" fill={teal} />
-      <rect className={brickClass} data-i="11" x="122" y="65" width="32" height="26" rx="3" fill={teal} />
-      <rect className={brickClass} data-i="12" x="160" y="65" width="30" height="26" rx="3" fill={purple} />
-      <rect className={brickClass} data-i="5" x="10" y="97" width="34" height="26" rx="3" fill={purple} />
-      <rect className={brickClass} data-i="6" x="50" y="97" width="100" height="26" rx="3" fill={teal} />
-      <rect className={brickClass} data-i="7" x="156" y="97" width="34" height="26" rx="3" fill={purple} />
-      <rect className={brickClass} data-i="1" x="10" y="129" width="32" height="26" rx="3" fill={teal} />
-      <rect className={brickClass} data-i="2" x="48" y="129" width="46" height="26" rx="3" fill={purple} />
-      <rect className={brickClass} data-i="3" x="100" y="129" width="60" height="26" rx="3" fill={purple} />
-      <rect className={brickClass} data-i="4" x="166" y="129" width="24" height="26" rx="3" fill={teal} />
-    </svg>
+    <>
+      {animated && <TarmeemStyles />}
+      <svg viewBox="0 0 120 120" width={size} height={size} className={`overflow-visible ${className}`} aria-label="Tarmeem">
+        {/* ROW 3 */}
+        <rect x="8" y="80" width="14" height="20" rx="2.5" fill={tColor} className={animated ? 'wave-1' : ''} />
+        <rect x="26" y="80" width="32" height="20" rx="2.5" fill={pColor} className={animated ? 'wave-2' : ''} />
+        <rect x="62" y="80" width="32" height="20" rx="2.5" fill={pColor} className={animated ? 'wave-3' : ''} />
+        <rect x="98" y="80" width="14" height="20" rx="2.5" fill={tColor} className={animated ? 'wave-4' : ''} />
+        {/* ROW 2 */}
+        <rect x="8" y="56" width="32" height="20" rx="2.5" fill={pColor} className={animated ? 'wave-2' : ''} />
+        <rect x="44" y="56" width="32" height="20" rx="2.5" fill={tColor} className={animated ? 'wave-3' : ''} />
+        <rect x="80" y="56" width="32" height="20" rx="2.5" fill={pColor} className={animated ? 'wave-4' : ''} />
+        {/* ROW 1 */}
+        <rect x="8" y="32" width="14" height="20" rx="2.5" fill={pColor} className={animated ? 'wave-3' : ''} />
+        <rect x="26" y="32" width="32" height="20" rx="2.5" fill={tColor} className={animated ? 'wave-4' : ''} />
+        <rect x="62" y="32" width="32" height="20" rx="2.5" fill={tColor} className={animated ? 'wave-4' : ''} />
+        <rect x="98" y="32" width="14" height="20" rx="2.5" fill={pColor} className={animated ? 'wave-5' : ''} />
+        {/* DIAMONDS */}
+        <g className={animated ? 'wave-5' : ''}><rect x="40.5" y="8" width="16" height="16" rx="2" transform="rotate(45 48.5 16)" fill={pColor} /></g>
+        <g className={animated ? 'wave-5' : ''}><rect x="63.5" y="8" width="16" height="16" rx="2" transform="rotate(45 71.5 16)" fill={pColor} /></g>
+      </svg>
+    </>
   );
 
   const Wordmark = () => (
-    <div className="flex flex-col items-start leading-none" dir="rtl">
-      <span className="font-bold text-[1.1em]" style={{ color: purple, fontFamily: 'Tajawal, sans-serif' }}>ترميم</span>
-      <span className="text-[0.7em] tracking-wide" style={{ color: purple, fontFamily: 'Tajawal, sans-serif', marginTop: '0.1em' }}>Tarmeem</span>
+    <div className="flex flex-col items-center leading-none select-none" dir="rtl">
+      <span className="font-extrabold text-[1.2em]" style={{ color: pColor, fontFamily: 'Cairo, sans-serif' }}>ترميم</span>
+      <span className="text-[0.6em] font-bold tracking-[0.25em] uppercase" style={{ color: tColor, marginTop: '0.2em' }}>Tarmēem</span>
     </div>
   );
 
   if (variant === 'icon') return <Mark />;
-  if (variant === 'horizontal') return <div className="flex items-center gap-2"><Mark /><Wordmark /></div>;
-  if (variant === 'stacked') return <div className="flex flex-col items-center gap-2"><Mark /><Wordmark /></div>;
+  if (variant === 'horizontal') return <div className="flex items-center gap-3"><Mark /><Wordmark /></div>;
+  if (variant === 'stacked') return <div className="flex flex-col items-center gap-3"><Mark /><Wordmark /></div>;
   return <Mark />;
 };
 
-export const TarmeemSplash = ({ onComplete }: { onComplete: () => void }) => {
+export const TarmeemLoader = ({ size = 48 }: { size?: number }) => {
+  const { theme } = useTheme();
+  return (
+    <div className="flex items-center justify-center">
+      <TarmeemStyles />
+      <svg width={size} height={size} viewBox="0 0 120 120" className="overflow-visible drop-shadow-md">
+        <rect x="8" y="80" width="14" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.tealDark : BRAND.teal} className="wave-1" />
+        <rect x="26" y="80" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} className="wave-2" />
+        <rect x="62" y="80" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} className="wave-3" />
+        <rect x="98" y="80" width="14" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.tealDark : BRAND.teal} className="wave-4" />
+        <rect x="8" y="56" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} className="wave-2" />
+        <rect x="44" y="56" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.tealDark : BRAND.teal} className="wave-3" />
+        <rect x="80" y="56" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} className="wave-4" />
+        <rect x="8" y="32" width="14" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} className="wave-3" />
+        <rect x="26" y="32" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.tealDark : BRAND.teal} className="wave-4" />
+        <rect x="62" y="32" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.tealDark : BRAND.teal} className="wave-4" />
+        <rect x="98" y="32" width="14" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} className="wave-5" />
+        <g className="wave-5"><rect x="40.5" y="8" width="16" height="16" rx="2" transform="rotate(45 48.5 16)" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} /></g>
+        <g className="wave-5"><rect x="63.5" y="8" width="16" height="16" rx="2" transform="rotate(45 71.5 16)" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} /></g>
+      </svg>
+    </div>
+  );
+};
+
+export const TarmeemSplash = ({ onComplete }: { onComplete?: () => void }) => {
+  const { theme } = useTheme();
   const [exiting, setExiting] = useState(false);
+
   useEffect(() => {
-    const exitTimer = setTimeout(() => setExiting(true), 2700);
-    const completeTimer = setTimeout(() => onComplete(), 3300);
+    if (!onComplete) return;
+    const exitTimer = setTimeout(() => setExiting(true), 2500);
+    const completeTimer = setTimeout(() => onComplete(), 3000);
     return () => { clearTimeout(exitTimer); clearTimeout(completeTimer); };
   }, [onComplete]);
 
   return (
-    <div dir="ltr" className={`splash-overlay ${exiting ? 'exiting' : ''}`} style={{
-      position: 'fixed', inset: 0, background: 'white', zIndex: 9999,
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
-      justifyContent: 'center', textAlign: 'center', gap: '24px',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-        <TarmeemLogo variant="icon" size={200} animated={true} />
+    <div className={`fixed inset-0 z-[9999] flex flex-col items-center justify-center transition-all duration-500 ${exiting ? 'opacity-0 scale-105 pointer-events-none' : 'opacity-100'} ${theme === 'dark' ? 'bg-[#050505]' : 'bg-gray-50'}`} dir="rtl">
+      <TarmeemStyles />
+      <svg width="220" height="220" viewBox="0 0 120 120" className="overflow-visible drop-shadow-xl">
+        <circle cx="60" cy="60" r="50" fill="none" stroke={theme === 'dark' ? BRAND.tealDark : BRAND.teal} style={{ animation: 'dustRing 2.5s ease-out forwards' }} />
+        <rect x="8" y="80" width="14" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.tealDark : BRAND.teal} className="brick-r3-1" />
+        <rect x="26" y="80" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} className="brick-r3-2" />
+        <rect x="62" y="80" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} className="brick-r3-3" />
+        <rect x="98" y="80" width="14" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.tealDark : BRAND.teal} className="brick-r3-4" />
+        <rect x="8" y="56" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} className="brick-r2-1" />
+        <rect x="44" y="56" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.tealDark : BRAND.teal} className="brick-r2-2" />
+        <rect x="80" y="56" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} className="brick-r2-3" />
+        <rect x="8" y="32" width="14" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} className="brick-r1-1" />
+        <rect x="26" y="32" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.tealDark : BRAND.teal} className="brick-r1-2" />
+        <rect x="62" y="32" width="32" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.tealDark : BRAND.teal} className="brick-r1-3" />
+        <rect x="98" y="32" width="14" height="20" rx="2.5" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} className="brick-r1-4" />
+        <g className="brick-diamond-l"><rect x="40.5" y="8" width="16" height="16" rx="2" transform="rotate(45 48.5 16)" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} /></g>
+        <g className="brick-diamond-r"><rect x="63.5" y="8" width="16" height="16" rx="2" transform="rotate(45 71.5 16)" fill={theme === 'dark' ? BRAND.purpleDark : BRAND.purple} /></g>
+      </svg>
+      <div className="mt-6 text-center select-none flex flex-col items-center" style={{ opacity: 0, animation: 'kineticFlyIn 1s ease-out 1.3s forwards', '--startX': '0px', '--startY': '20px', '--startRot': '0deg' } as any}>
+        <h1 className={`text-5xl font-extrabold tracking-wide mb-1 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`} style={{ fontFamily: 'Cairo, sans-serif' }}>ترميم</h1>
+        <h2 className={`text-xl font-bold tracking-[0.25em] uppercase ${theme === 'dark' ? BRAND.tealDark : BRAND.teal}`}>Tarmēem</h2>
       </div>
-      <div className="splash-tagline" style={{ fontSize: 'clamp(16px, 3vw, 22px)', fontWeight: 700, color: '#4A1F66', fontFamily: 'Tajawal, sans-serif' }}>جمعية ترميم</div>
-      <div className="splash-tagline-en" style={{ fontSize: 'clamp(11px, 2vw, 14px)', color: '#56B894', fontWeight: 500, letterSpacing: '0.15em', marginTop: '-8px' }}>RENEWING HOMES, RESTORING LIVES</div>
     </div>
   );
 };
+
 
 /* ──────────────────────────────────────────────────────────────────
    Surface primitives (Card, Section, Pill) — dark-mode aware
@@ -161,37 +241,43 @@ export const Pill = ({ tone = 'gray', children, className = '' }: {
    ────────────────────────────────────────────────────────────────── */
 
 export const Input = ({
-  label, type = 'text', value, onChange, placeholder, className = '', readOnly = false, required = false, dir,
+  label, type = 'text', value, onChange, placeholder, className = '', readOnly = false, required = false, dir, disabled = false, min, max, maxLength,
 }: {
   label?: string; type?: string; value?: string | number; onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  placeholder?: string; className?: string; readOnly?: boolean; required?: boolean; dir?: 'ltr' | 'rtl';
-}) => (
-  <div className={`flex flex-col gap-1 ${className}`}>
-    {label && (
-      <label className="text-xs font-semibold text-gray-700 dark:text-slate-300">
-        {label} {required && <span className="text-red-500">*</span>}
-      </label>
-    )}
-    <input
-      type={type} value={value === undefined || value === null ? '' : value as any}
-      onChange={onChange} readOnly={readOnly} placeholder={placeholder} dir={dir}
-      className={`px-3 py-2 border rounded-lg text-sm outline-none transition
-        border-gray-300 dark:border-slate-600
-        focus:ring-2 focus:ring-[#56B894] focus:border-[#56B894]
-        ${readOnly ? 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 cursor-not-allowed'
-          : 'bg-white dark:bg-slate-900 text-gray-900 dark:text-slate-100'}`}
-    />
-  </div>
-);
+  placeholder?: string; className?: string; readOnly?: boolean; required?: boolean; dir?: 'ltr' | 'rtl'; disabled?: boolean;
+  min?: number | string; max?: number | string; maxLength?: number;
+}) => {
+  const locked = readOnly || disabled;
+  return (
+    <div className={`flex flex-col gap-1 ${className}`}>
+      {label && (
+        <label className="text-xs font-semibold text-gray-700 dark:text-slate-300">
+          {label} {required && <span className="text-red-500">*</span>}
+        </label>
+      )}
+      <input
+        type={type} value={value === undefined || value === null ? '' : value as any}
+        onChange={onChange} readOnly={readOnly} disabled={disabled} placeholder={placeholder} dir={dir}
+        min={min} max={max} maxLength={maxLength}
+        className={`px-3 py-2 border rounded-lg text-sm outline-none transition
+          border-gray-300 dark:border-slate-600
+          focus:ring-2 focus:ring-[#56B894] focus:border-[#56B894]
+          ${locked ? 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 cursor-not-allowed'
+            : 'bg-white dark:bg-slate-900 text-gray-900 dark:text-slate-100'}`}
+      />
+    </div>
+  );
+};
 
 export const Select = ({
-  label, value, onChange, options, placeholder = 'اختر...', className = '', required = false, readOnly = false,
+  label, value, onChange, options, placeholder = 'اختر...', className = '', required = false, readOnly = false, disabled = false,
 }: {
   label?: string; value?: string; onChange?: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   options: { value: string; label: string }[] | string[];
-  placeholder?: string; className?: string; required?: boolean; readOnly?: boolean;
+  placeholder?: string; className?: string; required?: boolean; readOnly?: boolean; disabled?: boolean;
 }) => {
   const opts = options.map(o => typeof o === 'string' ? { value: o, label: o } : o);
+  const locked = readOnly || disabled;
   return (
     <div className={`flex flex-col gap-1 ${className}`}>
       {label && (
@@ -200,11 +286,11 @@ export const Select = ({
         </label>
       )}
       <div className="relative">
-        <select value={value || ''} onChange={onChange} disabled={readOnly}
+        <select value={value || ''} onChange={onChange} disabled={locked}
           className={`w-full appearance-none px-3 py-2 pl-8 border rounded-lg text-sm outline-none transition
             border-gray-300 dark:border-slate-600
             focus:ring-2 focus:ring-[#56B894] focus:border-[#56B894]
-            ${readOnly ? 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 cursor-not-allowed'
+            ${locked ? 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 cursor-not-allowed'
               : 'bg-white dark:bg-slate-900 text-gray-900 dark:text-slate-100'}`}>
           <option value="">{placeholder}</option>
           {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -216,10 +302,10 @@ export const Select = ({
 };
 
 export const TextArea = ({
-  label, value, onChange, placeholder, rows = 3, className = '', required = false, readOnly = false,
+  label, value, onChange, placeholder, rows = 3, className = '', required = false, readOnly = false, disabled = false,
 }: {
   label?: string; value?: string; onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-  placeholder?: string; rows?: number; className?: string; required?: boolean; readOnly?: boolean;
+  placeholder?: string; rows?: number; className?: string; required?: boolean; readOnly?: boolean; disabled?: boolean;
 }) => (
   <div className={`flex flex-col gap-1 ${className}`}>
     {label && (
@@ -227,11 +313,11 @@ export const TextArea = ({
         {label} {required && <span className="text-red-500">*</span>}
       </label>
     )}
-    <textarea value={value || ''} onChange={onChange} placeholder={placeholder} rows={rows} readOnly={readOnly}
+    <textarea value={value || ''} onChange={onChange} placeholder={placeholder} rows={rows} readOnly={readOnly} disabled={disabled}
       className={`px-3 py-2 border rounded-lg text-sm outline-none transition resize-y
         border-gray-300 dark:border-slate-600
         focus:ring-2 focus:ring-[#56B894] focus:border-[#56B894]
-        ${readOnly ? 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 cursor-not-allowed'
+        ${readOnly || disabled ? 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 cursor-not-allowed'
           : 'bg-white dark:bg-slate-900 text-gray-900 dark:text-slate-100'}`} />
   </div>
 );
@@ -245,17 +331,17 @@ export const ReadOnlyField = ({ label, value, className = '' }: { label: string;
   </div>
 );
 
-export const NumberCounter = ({ label, value, onChange, min = 0, className = '' }: {
-  label?: string; value?: number; onChange: (v: number) => void; min?: number; className?: string;
+export const NumberCounter = ({ label, value, onChange, min = 0, className = '', disabled = false }: {
+  label?: string; value?: number; onChange: (v: number) => void; min?: number; className?: string; disabled?: boolean;
 }) => (
   <div className={`flex items-center justify-between p-2 bg-gray-50 dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-lg ${className}`}>
     {label && <span className="text-xs font-semibold text-gray-700 dark:text-slate-200 flex-1 truncate">{label}</span>}
     <div className="flex items-center gap-3">
-      <button type="button" onClick={() => onChange(Math.max(min, (value || 0) - 1))}
-        className="w-7 h-7 rounded-full bg-white dark:bg-slate-900 border border-gray-300 dark:border-slate-600 text-gray-600 dark:text-slate-300 flex items-center justify-center font-bold shadow-sm hover:bg-gray-100 dark:hover:bg-slate-800">-</button>
+      <button type="button" disabled={disabled} onClick={() => onChange(Math.max(min, (value || 0) - 1))}
+        className="w-7 h-7 rounded-full bg-white dark:bg-slate-900 border border-gray-300 dark:border-slate-600 text-gray-600 dark:text-slate-300 flex items-center justify-center font-bold shadow-sm hover:bg-gray-100 dark:hover:bg-slate-800 disabled:opacity-50">-</button>
       <span className="w-6 text-center font-bold text-sm">{value || 0}</span>
-      <button type="button" onClick={() => onChange((value || 0) + 1)}
-        className="w-7 h-7 rounded-full bg-purple-100 dark:bg-purple-900/50 border border-purple-200 dark:border-purple-700 text-[#4A1F66] dark:text-purple-200 flex items-center justify-center font-bold shadow-sm hover:bg-purple-200">+</button>
+      <button type="button" disabled={disabled} onClick={() => onChange((value || 0) + 1)}
+        className="w-7 h-7 rounded-full bg-purple-100 dark:bg-purple-900/50 border border-purple-200 dark:border-purple-700 text-[#4A1F66] dark:text-purple-200 flex items-center justify-center font-bold shadow-sm hover:bg-purple-200 disabled:opacity-50">+</button>
     </div>
   </div>
 );
@@ -383,8 +469,10 @@ export const BarChart = ({ data, label }: { data: Record<string, number>; label?
   );
 };
 
-export const ProgressBar = ({ value, total = 100, label }: { value: number; total?: number; label?: string }) => {
-  const pct = Math.min(Math.max(Math.round((value / total) * 100) || 0, 0), 100);
+// Fix #12 — accept either `value` or `progress` so existing callsites keep working.
+export const ProgressBar = ({ value, progress, total = 100, label }: { value?: number; progress?: number; total?: number; label?: string }) => {
+  const v = value ?? progress ?? 0;
+  const pct = Math.min(Math.max(Math.round((v / total) * 100) || 0, 0), 100);
   return (
     <div className="w-full">
       {label && <div className="flex items-center justify-between text-[11px] text-gray-600 dark:text-slate-300 mb-1"><span>{label}</span><span className="font-bold">{pct}%</span></div>}
@@ -443,192 +531,4 @@ export const EventIcon = ({ type }: { type: string }) => {
   }
 };
 
-/* ──────────────────────────────────────────────────────────────────
-   ProjectCardRing — إطار خارجي مُلوَّن يبدأ وينتهي من جانبَي شارة النسبة
-   ────────────────────────────────────────────────────────────────── */
-
-/**
- * يرسم مسار محيط مستطيل ذي زوايا دائرية يبدأ من الجانب الأيمن للشارة (أسفل المنتصف)
- * يدور باتجاه عقارب الساعة (يميناً ➡️ أعلى ➡️ يساراً ➡️ أسفل) وينتهي من الجانب الأيسر للشارة.
- * عند 0% لا يظهر شيء (بُعد قصير عند الشارة)؛ عند 100% يلتقي الطرفان مع الشارة.
- *
- * نستخدم viewBox ثابت (200×100 وحدة) و preserveAspectRatio='none' حتى يتمدد المسار
- * مع البطاقة مع تطبيع طول المسار (pathLength=100) لتسهيل حساب الـ dasharray بالنسبة المئوية.
- */
-const RING_VB_W = 200;
-const RING_VB_H = 100;
-const RING_R = 8;          // نصف قطر الزوايا
-const RING_GAP = 22;       // نصف الفجوة المخصصة للشارة عند أسفل المنتصف (بوحدات viewBox)
-const RING_INSET = 1.5;    // إبعاد بسيط داخل البطاقة حتى لا يُقَص الإطار
-
-const ringPathD = (() => {
-  const x0 = RING_INSET, y0 = RING_INSET;
-  const x1 = RING_VB_W - RING_INSET, y1 = RING_VB_H - RING_INSET;
-  const r = RING_R;
-  const cx = RING_VB_W / 2;
-  const startX = cx + RING_GAP;     // الطرف الأيمن للفجوة (بداية المسار)
-  const endX = cx - RING_GAP;       // الطرف الأيسر للفجوة (نهاية المسار)
-  // M start → H bottom-right → A → V → A top-right → H → A top-left → V → A bottom-left → H end
-  return [
-    `M ${startX} ${y1}`,
-    `H ${x1 - r}`,
-    `A ${r} ${r} 0 0 0 ${x1} ${y1 - r}`,
-    `V ${y0 + r}`,
-    `A ${r} ${r} 0 0 0 ${x1 - r} ${y0}`,
-    `H ${x0 + r}`,
-    `A ${r} ${r} 0 0 0 ${x0} ${y0 + r}`,
-    `V ${y1 - r}`,
-    `A ${r} ${r} 0 0 0 ${x0 + r} ${y1}`,
-    `H ${endX}`,
-  ].join(' ');
-})();
-
-export const ProjectCardRing = ({
-  pct, children, className = '',
-}: {
-  pct: number;
-  children: React.ReactNode;
-  className?: string;
-}) => {
-  const clamped = Math.max(0, Math.min(100, Math.round(pct || 0)));
-  return (
-    <div className={`relative ${className}`}>
-      <svg
-        className="pointer-events-none absolute inset-0 w-full h-full overflow-visible"
-        preserveAspectRatio="none"
-        viewBox={`0 0 ${RING_VB_W} ${RING_VB_H}`}
-        aria-hidden="true">
-        {/* track */}
-        <path
-          d={ringPathD}
-          fill="none"
-          className="stroke-gray-200 dark:stroke-slate-700"
-          strokeWidth="2"
-          strokeLinecap="round"
-          vectorEffect="non-scaling-stroke"
-          pathLength={100} />
-        {/* progress */}
-        <path
-          d={ringPathD}
-          fill="none"
-          stroke="#3F9B7A"
-          strokeWidth="3"
-          strokeLinecap="round"
-          vectorEffect="non-scaling-stroke"
-          pathLength={100}
-          strokeDasharray={`${clamped} ${100 - clamped}`}
-          strokeDashoffset="0"
-          style={{ transition: 'stroke-dasharray 600ms ease' }} />
-      </svg>
-      {children}
-    </div>
-  );
-};
-
-/* ──────────────────────────────────────────────────────────────────
-   PhaseBrickWall — جدار بِركس أفقي للمراحل الرئيسية + المراحل الفرعية
-   تصميم: 5 طوب رئيسية + 4 مثلثات (مقلوبة، رأسها للأسفل) بين كل زوج.
-   التفعيل بالنقر؛ تظهر العناوين فقط عند توسيع اللوحة.
-   ────────────────────────────────────────────────────────────────── */
-
-export type BrickStatus = 'completed' | 'pending' | 'notStarted' | 'rejected';
-export type SubBrickStatus = 'inactive' | 'pending' | 'completed';
-
-export const BRICK_COLORS: Record<BrickStatus, string> = {
-  completed:  '#3F9B7A', // logo teal-dark
-  pending:    '#92400E', // dark brown (amber-800)
-  notStarted: '#4A1F66', // logo purple
-  rejected:   '#B91C1C',
-};
-
-export const SUB_BRICK_COLORS: Record<SubBrickStatus, string> = {
-  inactive:  '#374151', // dark grey
-  pending:   '#92400E',
-  completed: '#3F9B7A',
-};
-
-export interface PhaseBrickItem {
-  key: string;
-  name: string;
-  index: number;
-  status: BrickStatus;
-}
-
-export interface SubPhaseSlot {
-  key: string;
-  name: string;
-  status: SubBrickStatus;
-}
-
-/** نمط طوبٍ خفيف: خطّان أفقيّان شبه شفّافَين يُحاكيان خطوط الملاط. */
-const BRICK_TEXTURE = `
-  linear-gradient(to bottom,
-    transparent 0%,
-    transparent 32%,
-    rgba(255,255,255,0.18) 32%,
-    rgba(255,255,255,0.18) 33%,
-    transparent 33%,
-    transparent 65%,
-    rgba(255,255,255,0.18) 65%,
-    rgba(255,255,255,0.18) 66%,
-    transparent 66%,
-    transparent 100%)
-`;
-
-export const PhaseBrickWall = ({
-  phases, subPhases, expandedKey, onExpand, className = '',
-}: {
-  phases: PhaseBrickItem[];
-  subPhases: SubPhaseSlot[];
-  expandedKey: string | null;
-  onExpand: (key: string) => void;
-  className?: string;
-}) => (
-  <div dir="rtl" className={`flex items-stretch gap-0.5 w-full ${className}`}>
-    {phases.map((p, i) => {
-      const isExpanded = expandedKey === p.key;
-      const bg = BRICK_COLORS[p.status];
-      const sub = subPhases[i]; // المثلث الذي بعد الطوبة (i بين الطوبة i و i+1)
-      const isLast = i === phases.length - 1;
-      return (
-        <React.Fragment key={p.key}>
-          <button
-            type="button"
-            onClick={() => onExpand(p.key)}
-            title={p.name}
-            className={`group relative flex-1 min-w-[36px] h-[52px] rounded-md flex items-center justify-center font-bold text-white transition-all
-              ${p.status === 'pending' ? 'shadow-[0_0_0_2px_rgba(146,64,14,0.4)]' : ''}
-              ${isExpanded ? 'ring-2 ring-white/80 dark:ring-slate-100/60 ring-offset-1 ring-offset-transparent scale-[1.02]' : 'hover:brightness-110'}`}
-            style={{
-              background: bg,
-              backgroundImage: BRICK_TEXTURE,
-            }}
-            aria-pressed={isExpanded}>
-            <span className="text-base font-extrabold drop-shadow-sm">{p.index + 1}</span>
-          </button>
-          {!isLast && sub && (
-            <button
-              type="button"
-              disabled={sub.status === 'inactive'}
-              onClick={() => sub.status !== 'inactive' && onExpand(sub.key)}
-              title={sub.status === 'inactive' ? 'مرحلة فرعية غير مُفعَّلة' : sub.name}
-              className={`relative w-7 h-[52px] flex items-start justify-center pt-1 transition-all
-                ${sub.status === 'inactive' ? 'cursor-not-allowed opacity-80' : 'hover:brightness-110'}
-                ${expandedKey === sub.key ? 'scale-110' : ''}`}
-              style={{
-                background: SUB_BRICK_COLORS[sub.status],
-                backgroundImage: sub.status === 'inactive' ? 'none' : BRICK_TEXTURE,
-                clipPath: 'polygon(0 0, 100% 0, 50% 100%)',
-              }}
-              aria-pressed={expandedKey === sub.key}>
-              <span className="text-[10px] font-bold text-white/90 leading-none">{i + 1}.{i + 2}</span>
-            </button>
-          )}
-        </React.Fragment>
-      );
-    })}
-  </div>
-);
-
-/* Note: THEME re-export to satisfy any legacy imports */
 export const __THEME_REF = THEME;

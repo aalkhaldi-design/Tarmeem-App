@@ -1,276 +1,138 @@
 import React, { useMemo } from 'react';
-import {
-  Home as HomeIcon, Activity, Inbox, FileText, ArrowLeft, CheckCircle, Building2,
-  Target, TrendingUp, AlertTriangle, MapPin,
-} from 'lucide-react';
-import {
-  DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, regionLabel, FORM_STATUS_LABELS,
-  FORM_STATUS_COLORS, roleName,
-} from '../lib/data';
-import { Card, TarmeemLogo, ProgressBar, Pill, DonutChart, BarChart, Sparkline, EmptyState } from './ui';
-import { FormsApi, formAwaitsUser } from './Forms';
-import type { ProjectRecord } from './forms/FormRenderers';
-import type { UserProfile } from './Auth';
+// Fix #3 — Building2 is used in the stat tile below; add it to the lucide import.
+import { LayoutDashboard, Users, UserCheck, AlertTriangle, ArrowLeft, LogOut, CheckCircle2, ShieldCheck, Activity, Award, Trophy, Building2 } from 'lucide-react';
+import { UserProfile } from './Auth';
+import { FormsApi } from './Forms';
+import { DepartmentKey, DEPARTMENTS, roleName } from '../lib/data';
+import { ProjectRecord } from './forms/FormRenderers';
+import { Card, Pill } from './ui';
 
-const ARABIC_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
-const ARABIC_DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+export const DashboardHome: React.FC<{ user: UserProfile; api: FormsApi; projects: ProjectRecord[]; goToPortal: (dept: string) => void; goToProjects: () => void; goToProject: (id: string) => void; allowedDepts: DepartmentKey[]; }> = ({ user, api, projects, goToPortal, goToProjects, goToProject, allowedDepts }) => {
+  const pendingForms = useMemo(() => api.forms.filter(f => f.status === 'pending'), [api.forms]);
+  const activeProjects = useMemo(() => projects.filter(p => p.phase !== 'CLOSED'), [projects]);
+  const myPending = useMemo(() => {
+      return pendingForms.filter(f => {
+         const nextRole = f.approvalChain[f.approvalIndex];
+         return nextRole === user.role && (!f.assigneeId || f.assigneeId === user.id);
+      });
+  }, [pendingForms, user]);
 
-const formatArabicDate = () => {
-  const now = new Date();
-  return `${ARABIC_DAYS[now.getDay()]} ${now.getDate()} ${ARABIC_MONTHS[now.getMonth()]} ${now.getFullYear()}`;
-};
+  const globalActivities = useMemo(() => {
+     let activities: any[] = [];
+     api.forms.forEach(f => {
+        f.approvals.forEach(a => {
+           activities.push({ id: `${f.id}_${a.at}`, actorName: a.actorName, action: a.decision === 'approved' ? 'اعتمد' : 'تفاعل مع', formTitle: f.title, projectRef: f.projectRefId, at: new Date(a.at), role: a.role });
+        });
+     });
+     return activities.sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, 15);
+  }, [api.forms]);
 
-interface HomeProps {
-  user: UserProfile;
-  api: FormsApi;
-  projects: ProjectRecord[];
-  goToPortal: (dept: DepartmentKey) => void;
-  goToProjects: () => void;
-  goToProject: (projectRefId: string) => void;
-  allowedDepts: DepartmentKey[];
-}
-
-export const DashboardHome: React.FC<HomeProps> = ({ user, api, projects, goToPortal, goToProjects, goToProject, allowedDepts }) => {
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'صباح الخير' : hour < 18 ? 'مساء الخير' : 'مساء النور';
-  const inbox = useMemo(() => api.forms.filter(f => formAwaitsUser(f, user)), [api.forms, user]);
-  const myCreated = useMemo(() => api.forms.filter(f => f.createdBy === user.id), [api.forms, user.id]);
-
-  const dept = DEPT_BY_KEY[user.department as DepartmentKey];
-
-  const stats = useMemo(() => {
-    const completed = projects.filter(p => p.phase === 'CLOSED').length;
-    const active = projects.filter(p => p.phase !== 'CLOSED').length;
-    return { total: projects.length, completed, active };
-  }, [projects]);
-
-  const target500Pct = Math.min(Math.round((stats.completed / 500) * 100) || 0, 100);
-
-  const phaseSegments = useMemo(() => {
-    const counts: Record<string, number> = {};
-    projects.forEach(p => { counts[p.phase] = (counts[p.phase] || 0) + 1; });
-    const colors: Record<string, string> = {
-      RESEARCH: '#0EA5E9', DIAGNOSIS: '#7C3AED', EVACUATION: '#F59E0B',
-      TENDERING: '#EAB308', EXECUTION: '#56B894', HANDOVER: '#16A34A', CLOSED: '#6B7280',
-    };
-    const labels: Record<string, string> = {
-      RESEARCH: 'البحث', DIAGNOSIS: 'التشخيص', EVACUATION: 'الإخلاء',
-      TENDERING: 'الترسية', EXECUTION: 'التنفيذ', HANDOVER: 'التسليم', CLOSED: 'مغلق',
-    };
-    return Object.entries(counts).map(([k, v]) => ({ label: labels[k] || k, value: v, color: colors[k] || '#888' }));
-  }, [projects]);
-
-  const regionCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    projects.forEach(p => { const r = regionLabel(p.region || 'DAM'); counts[r] = (counts[r] || 0) + 1; });
-    return counts;
-  }, [projects]);
-
-  // 6-month sparkline of new projects
-  const monthlyTrend = useMemo(() => {
-    const arr: number[] = [];
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(); d.setMonth(d.getMonth() - i);
-      const m = d.getMonth(), y = d.getFullYear();
-      arr.push(projects.filter(p => {
-        const c = new Date(p.createdAt);
-        return c.getMonth() === m && c.getFullYear() === y;
-      }).length);
-    }
-    return arr;
-  }, [projects]);
+  const leaderboard = useMemo(() => {
+      const counts: Record<string, number> = {};
+      const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      api.forms.forEach(f => {
+         f.approvals.forEach(a => {
+            if (new Date(a.at) >= sevenDaysAgo && a.actorName && a.actorName !== 'النظام') {
+               counts[a.actorName] = (counts[a.actorName] || 0) + 1;
+            }
+         });
+      });
+      return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [api.forms]);
 
   return (
-    <div dir="rtl" className="space-y-6">
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-l from-[#4A1F66] via-[#6B3D87] to-[#56B894] p-6 md:p-8 text-white shadow-lg">
-        <div className="absolute top-0 left-0 w-64 h-64 bg-white/5 rounded-full -translate-x-1/2 -translate-y-1/2" />
-        <div className="absolute bottom-0 right-0 w-48 h-48 bg-white/5 rounded-full translate-x-1/4 translate-y-1/4" />
-        <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-xl bg-white/15 flex items-center justify-center backdrop-blur-sm">
-              <HomeIcon className="w-7 h-7 text-white" />
-            </div>
-            <div>
-              <h1 className="text-2xl md:text-3xl font-bold">{greeting}، {user.fullName}</h1>
-              <p className="text-white/80 text-sm mt-1">
-                {roleName(user.role)} {dept && <>· {dept.name}</>} · {regionLabel(user.region)}
-              </p>
-            </div>
-          </div>
-          <div className="text-sm text-white/70 whitespace-nowrap">{formatArabicDate()}</div>
+    <div className="space-y-6 max-w-[1400px] mx-auto animate-fade-in" dir="rtl">
+      <div className="bg-[#0c0c0c] border border-[#2D124C] rounded-3xl p-8 relative overflow-hidden shadow-2xl">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-[#4A1F66] rounded-full blur-[100px] opacity-20" />
+        <div className="relative z-10">
+          <h1 className="text-3xl font-black text-white mb-2">مرحباً بك، {user.fullName.split(' ')[0]} 👋</h1>
+          <p className="text-[#a871f7] text-sm font-bold flex items-center gap-2">
+             <ShieldCheck className="w-4 h-4" /> {roleName(user.role)}
+          </p>
         </div>
       </div>
 
-      {/* Tarmeem 500 hero card */}
-      <Card title="هدف ترميم 500 منزل" icon={Target} accent="gradient">
-        <div className="flex flex-col md:flex-row items-center gap-6">
-          <div className="relative w-36 h-36 flex items-center justify-center shrink-0">
-            <svg width={144} height={144} viewBox="0 0 144 144">
-              <circle cx={72} cy={72} r={60} fill="none" stroke="#F3F4F6" strokeWidth="12" />
-              <circle cx={72} cy={72} r={60} fill="none" stroke="#4A1F66" strokeWidth="12"
-                strokeDasharray={`${(target500Pct / 100) * 2 * Math.PI * 60} ${2 * Math.PI * 60 * 2}`}
-                transform="rotate(-90 72 72)" strokeLinecap="round" className="transition-all duration-1000" />
-            </svg>
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-3xl font-bold text-[#4A1F66] dark:text-purple-300">{stats.completed}</span>
-              <span className="text-xs text-gray-500 dark:text-slate-400">من 500</span>
-            </div>
-          </div>
-          <div className="flex-1">
-            <p className="text-lg font-bold text-gray-800 dark:text-slate-100">اكتمل {target500Pct}% من الهدف</p>
-            <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">
-              متبقّي <span className="font-bold text-[#4A1F66] dark:text-purple-300">{Math.max(500 - stats.completed, 0)}</span> منزل لتحقيق الهدف.
-            </p>
-            <div className="mt-3"><ProgressBar value={target500Pct} /></div>
-          </div>
-          <div className="text-center">
-            <Sparkline values={monthlyTrend} color="#4A1F66" />
-            <p className="text-[10px] text-gray-400 mt-1">آخر 6 أشهر</p>
-          </div>
-        </div>
-      </Card>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
+           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+             <div onClick={goToProjects} className="bg-[#111] border border-gray-800 p-4 rounded-2xl cursor-pointer hover:border-[#4A1F66] transition group">
+               <Building2 className="w-6 h-6 text-[#a871f7] mb-2 group-hover:scale-110 transition-transform" />
+               <p className="text-3xl font-black text-white">{activeProjects.length}</p>
+               <p className="text-[10px] text-gray-500 font-bold mt-1">مشاريع نشطة</p>
+             </div>
+             <div className="bg-[#05110e] border border-[#43bba1]/30 p-4 rounded-2xl">
+               <CheckCircle2 className="w-6 h-6 text-[#43bba1] mb-2" />
+               <p className="text-3xl font-black text-[#43bba1]">{myPending.length}</p>
+               <p className="text-[10px] text-[#43bba1]/70 font-bold mt-1">مهام بانتظارك</p>
+             </div>
+             <div className="bg-[#111] border border-gray-800 p-4 rounded-2xl">
+               <Activity className="w-6 h-6 text-blue-500 mb-2" />
+               <p className="text-3xl font-black text-white">{pendingForms.length}</p>
+               <p className="text-[10px] text-gray-500 font-bold mt-1">إجمالي المهام الجارية</p>
+             </div>
+             <div className="bg-[#111] border border-gray-800 p-4 rounded-2xl">
+               <Award className="w-6 h-6 text-amber-500 mb-2" />
+               <p className="text-3xl font-black text-white">{projects.filter(p => p.phase === 'HANDOVER' || p.phase === 'CLOSED').length}</p>
+               <p className="text-[10px] text-gray-500 font-bold mt-1">مشاريع منجزة</p>
+             </div>
+           </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatPill icon={Building2} label="إجمالي المشاريع" value={stats.total} tone="bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200" />
-        <StatPill icon={Activity} label="مشاريع نشطة" value={stats.active} tone="bg-teal-50 text-teal-700 dark:bg-teal-900/30 dark:text-teal-200" />
-        <StatPill icon={CheckCircle} label="منازل مسلّمة" value={stats.completed} tone="bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-200" />
-        <StatPill icon={Inbox} label="بانتظار اعتمادي" value={inbox.length} tone="bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200" />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card title="توزيع المشاريع حسب المرحلة" icon={TrendingUp} className="lg:col-span-2">
-          {phaseSegments.length === 0 ? <EmptyState icon={Building2} title="لا توجد مشاريع بعد" /> : (
-            <div className="flex flex-col md:flex-row gap-6 items-center">
-              <DonutChart segments={phaseSegments} size={200} />
-              <div className="flex-1 w-full">
-                <BarChart data={regionCounts} label="حسب المنطقة" />
+           <Card title="بوابات الأقسام (مشاركة المعرفة)" icon={LayoutDashboard}>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                 {DEPARTMENTS.sort((a,b) => (a.key === user.department ? -1 : b.key === user.department ? 1 : 0)).map(dept => {
+                    const isMyDept = dept.key === user.department;
+                    const hasAccess = allowedDepts.includes(dept.key);
+                    return (
+                      <button key={dept.key} onClick={() => goToPortal(dept.key)} className={`p-4 rounded-xl text-right transition-all border ${isMyDept ? 'bg-gradient-to-l from-[#1a0f2e] to-[#0c0c0c] border-[#3c1d5d] shadow-[0_0_15px_rgba(74,31,102,0.3)]' : 'bg-[#0a0a0a] border-gray-800 hover:border-gray-600'}`}>
+                         <h3 className={`font-bold text-sm mb-1 ${isMyDept ? 'text-[#a871f7]' : 'text-gray-300'}`}>{dept.shortName}</h3>
+                         <p className="text-[9px] text-gray-500 leading-tight line-clamp-2">{dept.description}</p>
+                      </button>
+                    );
+                 })}
               </div>
-            </div>
-          )}
-        </Card>
-        <Card title={`صندوق الوارد (${inbox.length})`} icon={Inbox} accent="teal">
-          {inbox.length === 0 ? (
-            <EmptyState icon={CheckCircle} title="لا توجد طلبات معلّقة" />
-          ) : (
-            <div className="space-y-2 max-h-72 overflow-y-auto">
-              {inbox.slice(0, 6).map(f => (
-                <button key={f.id} onClick={() => f.projectRefId ? goToProject(f.projectRefId) : goToPortal(f.ownerDept)}
-                  className="w-full text-right p-2 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 transition flex items-start gap-2">
-                  <Pill tone="purple">{f.code}</Pill>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-gray-800 dark:text-slate-100 truncate">{f.title}</p>
-                    <p className="text-[10px] text-gray-500 dark:text-slate-400">{f.beneficiaryName || f.projectId || '—'}</p>
-                  </div>
-                  <ArrowLeft className="w-4 h-4 text-gray-400" />
-                </button>
-              ))}
-            </div>
-          )}
-        </Card>
-      </div>
-
-      <Card title="بوابات المؤسسة" icon={Building2}>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-          {DEPARTMENTS.filter(d => allowedDepts.includes(d.key)).map(d => {
-            const count = api.forms.filter(f => f.ownerDept === d.key || (f.bridgesTo || []).includes(d.key)).length;
-            return (
-              <button key={d.key} onClick={() => goToPortal(d.key)}
-                className="text-right p-4 rounded-xl border border-gray-200 dark:border-slate-700 hover:shadow-lg hover:-translate-y-0.5 transition-all bg-white dark:bg-slate-800 group">
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center mb-2" style={{ background: d.color + '25' }}>
-                  <Building2 className="w-5 h-5" style={{ color: d.color }} />
-                </div>
-                <p className="text-sm font-bold text-gray-800 dark:text-slate-100 leading-tight">{d.name}</p>
-                <p className="text-[11px] text-gray-500 dark:text-slate-400 mt-1">{count} نموذج</p>
-              </button>
-            );
-          })}
+           </Card>
         </div>
-      </Card>
 
-      <Card title={`أحدث المشاريع (${projects.length})`} icon={Building2} accent="purple">
-        {projects.length === 0 ? (
-          <EmptyState icon={Building2} title="لا توجد مشاريع بعد" hint="ينشأ المشروع تلقائياً عند اعتماد F-03 وتحويله للمشاريع." />
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {projects.slice(0, 6).map(p => (
-              <button key={p.id} onClick={() => goToProject(p.id)}
-                className="text-right p-3 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:shadow transition">
-                <div className="flex items-center justify-between mb-1">
-                  <Pill tone="purple">{p.projectId}</Pill>
-                  <Pill tone="teal">{p.phase}</Pill>
-                </div>
-                <p className="text-sm font-bold text-gray-800 dark:text-slate-100 truncate">{p.beneficiaryName}</p>
-                <p className="text-[10px] text-gray-500 dark:text-slate-400 flex items-center gap-1 mt-1"><MapPin className="w-3 h-3" />{p.city}</p>
-                <ProgressBar value={p.progressPct} />
-              </button>
-            ))}
-          </div>
-        )}
-        <button onClick={goToProjects} className="mt-3 text-xs font-bold text-[#4A1F66] dark:text-purple-300 hover:underline">عرض كل المشاريع ←</button>
-      </Card>
-
-      <Card title={`نماذجي الأخيرة (${myCreated.length})`} icon={FileText}>
-        {myCreated.length === 0 ? (
-          <EmptyState icon={FileText} title="لم تُنشِئ أي نموذج بعد" />
-        ) : (
-          <div className="space-y-2">
-            {myCreated.slice(0, 6).map(f => (
-              <div key={f.id} className="flex items-center gap-3 p-2 rounded-lg border border-gray-200 dark:border-slate-700">
-                <Pill tone="purple">{f.code}</Pill>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-gray-800 dark:text-slate-100 truncate">{f.title}</p>
-                  <p className="text-[10px] text-gray-500 dark:text-slate-400">{new Date(f.createdAt).toLocaleString('ar-SA')}</p>
-                </div>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${FORM_STATUS_COLORS[f.status]}`}>{FORM_STATUS_LABELS[f.status]}</span>
+        <div className="space-y-6">
+           <Card title="نجوم الأسبوع (إنجاز المهام)" icon={Trophy}>
+              <div className="space-y-3">
+                 {leaderboard.length === 0 ? <p className="text-xs text-gray-500">لا يوجد نشاط هذا الأسبوع</p> : leaderboard.map(([name, count], i) => (
+                    <div key={name} className="flex items-center justify-between p-2 rounded-lg bg-[#0a0a0a] border border-gray-800">
+                       <div className="flex items-center gap-2">
+                         <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${i === 0 ? 'bg-amber-500/20 text-amber-500 border border-amber-500/50' : i === 1 ? 'bg-gray-400/20 text-gray-300 border border-gray-400/50' : i === 2 ? 'bg-amber-800/30 text-amber-700 border border-amber-800/50' : 'bg-[#111] text-gray-500'}`}>{i + 1}</span>
+                         <span className="text-xs font-bold text-gray-200">{name.split(' ')[0]}</span>
+                       </div>
+                       <span className="text-[10px] text-[#43bba1] font-bold">{count} مهمة</span>
+                    </div>
+                 ))}
               </div>
-            ))}
-          </div>
-        )}
-      </Card>
+           </Card>
 
-      <div className="flex items-center justify-between px-4 py-3 mt-4 border-t border-gray-200 dark:border-slate-700">
-        <div className="flex items-center gap-2">
-          <TarmeemLogo variant="icon" size={18} />
-          <span className="text-xs text-gray-400 dark:text-slate-500 font-semibold">جمعية ترميم</span>
+           <div className="bg-[#050505] border border-gray-800 rounded-2xl p-5 shadow-lg flex flex-col h-[400px]">
+              <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Activity className="w-5 h-5 text-blue-500"/> النشاطات المباشرة</h3>
+              <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
+                 {globalActivities.length === 0 ? <p className="text-xs text-gray-500 text-center mt-10">لا يوجد نشاط حديث</p> : globalActivities.map((act, i) => (
+                    <div key={act.id} className="relative pl-4 border-r-2 border-gray-800 last:border-0 pb-4 last:pb-0">
+                       <div className="absolute -right-[5px] top-0 w-2 h-2 rounded-full bg-[#4A1F66]"></div>
+                       <p className="text-[11px] text-gray-300 leading-relaxed"><span className="font-bold text-[#a871f7]">{act.actorName}</span> {act.action} <span className="font-bold text-white">{act.formTitle}</span></p>
+                       <div className="flex items-center justify-between mt-1">
+                          <span className="text-[9px] text-gray-500">{roleName(act.role)}</span>
+                          <span className="text-[9px] text-gray-500">{act.at.toLocaleTimeString('ar-SA', {hour: '2-digit', minute:'2-digit'})}</span>
+                       </div>
+                    </div>
+                 ))}
+              </div>
+           </div>
         </div>
-        <span className="text-xs text-gray-400 dark:text-slate-500">v3.0</span>
       </div>
     </div>
   );
 };
 
-const StatPill: React.FC<{ icon: React.ElementType; label: string; value: any; tone: string }> = ({ icon: Icon, label, value, tone }) => (
-  <div className={`rounded-xl p-4 flex items-center gap-3 ${tone}`}>
-    <div className="w-10 h-10 rounded-lg bg-white/40 dark:bg-white/5 flex items-center justify-center">
-      <Icon className="w-5 h-5" />
-    </div>
-    <div>
-      <p className="text-2xl font-bold leading-none">{value}</p>
-      <p className="text-xs font-semibold opacity-80 mt-0.5">{label}</p>
-    </div>
-  </div>
+export const PendingAccountScreen: React.FC<{ email: string | null; onSignOut: () => void; }> = ({ email, onSignOut }) => (
+  <div className="min-h-screen bg-[#050505] flex items-center justify-center p-4" dir="rtl"><div className="w-full max-w-md bg-[#0a0a0a] rounded-3xl shadow-2xl p-8 text-center border border-gray-800"><div className="w-20 h-20 bg-amber-500/10 rounded-full flex items-center justify-center mx-auto mb-6"><UserCheck className="w-10 h-10 text-amber-500" /></div><h1 className="text-2xl font-black text-white mb-3">حسابك قيد المراجعة</h1><p className="text-gray-400 text-sm mb-6 leading-relaxed">أهلاً بك. تم تسجيل حسابك بنجاح ({email}). يرجى الانتظار حتى يقوم مدير النظام بتفعيل حسابك وتعيين صلاحياتك.</p><button onClick={onSignOut} className="w-full bg-[#111] hover:bg-[#1a1a1a] text-white py-3 rounded-xl font-bold text-sm transition-colors border border-gray-800 flex items-center justify-center gap-2"><LogOut className="w-4 h-4" /> تسجيل الخروج</button></div></div>
 );
 
-export const PendingAccountScreen: React.FC<{ email: string; onSignOut: () => void }> = ({ email, onSignOut }) => (
-  <div className="min-h-screen bg-gray-50 dark:bg-slate-950 flex items-center justify-center p-4" dir="rtl">
-    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-8 max-w-md text-center">
-      <TarmeemLogo variant="stacked" size={50} color="auto" animated={false} />
-      <h2 className="text-xl font-bold text-[#4A1F66] dark:text-purple-300 mt-6 mb-2">حسابك بانتظار الموافقة</h2>
-      <p className="text-sm text-gray-500 dark:text-slate-400 mb-6">سيراجع مدير النظام طلبك ويعيّن الإدارة والدور المناسبين قبل التفعيل.</p>
-      <p className="text-xs text-gray-400 dark:text-slate-500 mb-4" dir="ltr">{email}</p>
-      <button onClick={onSignOut} className="bg-gray-200 dark:bg-slate-700 text-gray-700 dark:text-slate-200 px-6 py-2 rounded-lg font-bold hover:bg-gray-300">تسجيل الخروج</button>
-    </div>
-  </div>
+export const DeactivatedAccountScreen: React.FC<{ onSignOut: () => void; }> = ({ onSignOut }) => (
+  <div className="min-h-screen bg-[#050505] flex items-center justify-center p-4" dir="rtl"><div className="w-full max-w-md bg-[#0a0a0a] rounded-3xl shadow-2xl p-8 text-center border border-red-900/30"><div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6"><AlertTriangle className="w-10 h-10 text-red-500" /></div><h1 className="text-2xl font-black text-red-500 mb-3">الحساب موقوف</h1><p className="text-gray-400 text-sm mb-6 leading-relaxed">عذراً، تم إيقاف حسابك من قبل الإدارة. يرجى مراجعة مدير النظام لمزيد من التفاصيل.</p><button onClick={onSignOut} className="w-full bg-red-500/10 hover:bg-red-500/20 text-red-500 py-3 rounded-xl font-bold text-sm transition-colors border border-red-500/20 flex items-center justify-center gap-2"><LogOut className="w-4 h-4" /> تسجيل الخروج</button></div></div>
 );
-
-export const DeactivatedAccountScreen: React.FC<{ onSignOut: () => void }> = ({ onSignOut }) => (
-  <div className="min-h-screen bg-gray-50 dark:bg-slate-950 flex items-center justify-center p-4" dir="rtl">
-    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-8 max-w-md text-center">
-      <AlertTriangle className="w-16 h-16 text-red-300 mx-auto mb-4" />
-      <h2 className="text-xl font-bold text-gray-700 dark:text-slate-200 mb-2">الحساب معطّل</h2>
-      <p className="text-sm text-gray-500 dark:text-slate-400 mb-6">تم تعطيل حسابك من قبل مدير النظام. تواصل مع الإدارة للمزيد من المعلومات.</p>
-      <button onClick={onSignOut} className="bg-gray-200 dark:bg-slate-700 text-gray-700 dark:text-slate-200 px-6 py-2 rounded-lg font-bold hover:bg-gray-300">تسجيل الخروج</button>
-    </div>
-  </div>
-);
-

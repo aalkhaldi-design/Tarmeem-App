@@ -100,7 +100,7 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
 
     if (safetyHazard) {
       if (f18) result.activate!.push({ formId: f18.id, assigneeId: project?.createdBy || null });
-      if (f22) result.activate!.push({ formId: f22.id, assigneeId: project?.createdBy || null });
+      if (f22) result.activate!.push({ formId: f22.id, assigneeId: project?.createdBy || null, data: { city: project?.city || '' } });
       result.projectPatch = { phase: 'EVACUATION' as ProjectPhase, progressPct: 30 };
     } else {
       result.autoComplete = [

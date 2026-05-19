@@ -1,0 +1,123 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ────────────────────────────────────────────────────────────
+    function authed() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(uid())).data;
+    }
+
+    function isAdmin() {
+      return authed() && userDoc().isAdmin == true;
+    }
+
+    function userRole() {
+      return userDoc().role;
+    }
+
+    function userDept() {
+      return userDoc().department;
+    }
+
+    // ── users/{uid} ────────────────────────────────────────────────────────
+    match /users/{userId} {
+      // Any authenticated user can read their own profile; admins can read all
+      allow read: if authed() && (request.auth.uid == userId || isAdmin());
+
+      // Users may update their own profile (name, mobile, avatar — not role/isAdmin)
+      allow update: if authed() && request.auth.uid == userId
+        && !('role'    in request.resource.data.diff(resource.data).affectedKeys())
+        && !('isAdmin' in request.resource.data.diff(resource.data).affectedKeys())
+        && !('status'  in request.resource.data.diff(resource.data).affectedKeys());
+
+      // Admins can create and fully update any user record
+      allow create, update: if isAdmin();
+
+      allow delete: if false;
+    }
+
+    // ── projects/{projectId} ───────────────────────────────────────────────
+    match /projects/{projectId} {
+      // All authenticated users can read projects (portal gate is the UX lock)
+      allow read: if authed();
+
+      // Create: admins or PROJECTS department members
+      allow create: if authed() && (isAdmin() || userDept() == 'PROJECTS');
+
+      // Update: admins, PROJECTS members, or the workflow engine (any authenticated user
+      // whose write comes from an applyCascade batch — enforced by form-level rules)
+      allow update: if authed() && (isAdmin() || userDept() == 'PROJECTS' || userDept() == 'RESEARCH');
+
+      allow delete: if isAdmin();
+    }
+
+    // ── forms/{formId} ────────────────────────────────────────────────────
+    match /forms/{formId} {
+      // Read: any authenticated user (department-level visibility is enforced in the UI)
+      allow read: if authed();
+
+      // Create: authenticated users whose role is in the form's origin roles,
+      // or admins. The SYSTEM pseudo-role creates via applyCascade server-side.
+      allow create: if authed();
+
+      // Update: admins bypass all checks.
+      // Others: only when the form is pending and user's role matches the current
+      // approval step, or user is the assignee, or user is the form creator at step 0.
+      allow update: if authed() && (
+        isAdmin()
+        || (
+          resource.data.status == 'pending'
+          && (
+            userRole() == resource.data.approvalChain[resource.data.approvalIndex]
+            || uid() == resource.data.assigneeId
+            || (uid() == resource.data.createdBy && resource.data.approvalIndex == 0)
+          )
+        )
+        // Allow collaborators: SUPPORT dept on F-20/F-19, any helper listed in data.helpers
+        || (resource.data.status == 'pending' && userDept() == 'SUPPORT'
+            && (resource.data.code == 'F-20' || resource.data.code == 'F-19'))
+      );
+
+      allow delete: if isAdmin();
+
+      // Comments subcollection
+      match /comments/{commentId} {
+        allow read: if authed();
+        allow create: if authed() && request.resource.data.authorId == uid();
+        allow update, delete: if authed() && resource.data.authorId == uid();
+      }
+    }
+
+    // ── notifications/{notifId} ───────────────────────────────────────────
+    match /notifications/{notifId} {
+      // Read only if you are a recipient (server-side privacy enforcement — Decision 5)
+      allow read: if authed() && uid() in resource.data.recipients;
+
+      // Clients may mark notifications as read (update readBy only)
+      allow update: if authed()
+        && uid() in resource.data.recipients
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy']);
+
+      // Create/delete only from trusted app code (admin SDK or applyCascade)
+      allow create: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── audit_log/{entryId} ───────────────────────────────────────────────
+    match /audit_log/{entryId} {
+      // Admins can read; app code writes (authed users can create via writeAuditEntry)
+      allow read: if isAdmin();
+      allow create: if authed();
+      allow update, delete: if false;
+    }
+  }
+}

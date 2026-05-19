@@ -52,7 +52,7 @@ export interface ProjectRecord {
   region?: string;
   caseRef?: string;        // CS-XXXX
   /** المرحلة الحالية: تتغيّر مع كل F-XX يكتمل */
-  phase: 'RESEARCH' | 'DIAGNOSIS' | 'EVACUATION' | 'TENDERING' | 'EXECUTION' | 'HANDOVER' | 'CLOSED';
+  phase: 'RESEARCH' | 'DIAGNOSIS' | 'EVACUATION' | 'TENDERING' | 'EXECUTION' | 'HANDOVER' | 'CLOSED' | 'REJECTED' | 'CANCELLED';
   /** نسبة التقدم */
   progressPct: number;
   /** المهندس المسند للتشخيص (إن وُجد) */
@@ -66,8 +66,8 @@ export interface ProjectRecord {
   createdAt: string;
   updatedAt: string;
   createdBy: string;
-  /** بيانات إضافية مفتوحة */
-  data?: Record<string, any>;
+  /** بيانات إضافية — مفتوحة لكنها مصنّفة */
+  extraData?: Record<string, unknown>;
 }
 
 /* ──────────────────────────────────────────────────────────────────
@@ -1005,9 +1005,8 @@ export const F14Creator: FormCreator = ({ user, api, context, onClose }) => {
     p.supervisingEngineerId === user.id || p.diagnosisEngineerId === user.id);
   const [projectRefId, setProjectRefId] = useState<string>(myProjects[0]?.id || '');
   const [visitDate, setVisitDate] = useState('');
-  const [progressPct, setProgressPct] = useState<number>(0);
-  const [milestone, setMilestone] = useState<'' | '30%' | '60%' | '90%' | '100%'>('');
-  const [scopeChange, setScopeChange] = useState(false);
+  const [overallProgress, setOverallProgress] = useState<number>(0);
+  const [requestScopeChange, setRequestScopeChange] = useState(false);
   const [notes, setNotes] = useState('');
   const [photos, setPhotos] = useState<{ name: string; url?: string }[]>([]);
   const [busy, setBusy] = useState(false);
@@ -1020,12 +1019,17 @@ export const F14Creator: FormCreator = ({ user, api, context, onClose }) => {
       await api.createForm({
         code: 'F-14', user, projectId: p.projectId, projectRefId: p.id,
         beneficiaryName: p.beneficiaryName,
-        data: { visitDate, progressPct, milestone, scopeChange, notes },
+        data: { visitDate, overallProgress, requestScopeChange, notes },
         files: photos,
       });
       onClose();
     } finally { setBusy(false); }
   };
+
+  const paymentHint =
+    overallProgress >= 100 ? 'الدفعة الأخيرة (10%)' :
+    overallProgress >= 90  ? 'الدفعة الثالثة (30%)' :
+    overallProgress >= 60  ? 'الدفعة الثانية (30%)' : null;
 
   return (
     <CreatorShell title="F-14 · تقرير الزيارة الميدانية" onClose={onClose}
@@ -1035,15 +1039,14 @@ export const F14Creator: FormCreator = ({ user, api, context, onClose }) => {
           value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
       </Card>
       <Card title="تقدم الإنجاز" icon={Activity}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <Input type="date" label="تاريخ الزيارة" value={visitDate} onChange={e => setVisitDate(e.target.value)} />
-          <Input type="number" label="نسبة الإنجاز %" value={progressPct} onChange={e => setProgressPct(Number(e.target.value || 0))} />
-          <Select label="محطة دفعة" options={['', '30%', '60%', '90%', '100%']} placeholder="بدون"
-            value={milestone} onChange={e => setMilestone(e.target.value as any)} />
+          <Input type="number" label="نسبة الإنجاز الكلية %" value={overallProgress}
+            onChange={e => setOverallProgress(Math.min(100, Math.max(0, Number(e.target.value || 0))))} />
         </div>
-        <div className="mt-3"><ProgressBar value={progressPct} /></div>
+        <div className="mt-3"><ProgressBar value={overallProgress} /></div>
         <label className="mt-3 flex items-center gap-2 text-sm cursor-pointer">
-          <input type="checkbox" checked={scopeChange} onChange={e => setScopeChange(e.target.checked)} className="rounded border-gray-300 text-[#4A1F66]" />
+          <input type="checkbox" checked={requestScopeChange} onChange={e => setRequestScopeChange(e.target.checked)} className="rounded border-gray-300 text-[#4A1F66]" />
           <span>تغيير في نطاق العمل (سيُفتح F-23 آلياً)</span>
         </label>
       </Card>
@@ -1054,9 +1057,9 @@ export const F14Creator: FormCreator = ({ user, api, context, onClose }) => {
           label="ارفع صور التقدم" accept="image/*" />
         <TextArea className="mt-3" label="ملاحظات" rows={3} value={notes} onChange={e => setNotes(e.target.value)} />
       </Card>
-      {milestone && (
+      {paymentHint && (
         <Card title="إشعار المالية" icon={DollarSign} accent="teal">
-          <p className="text-xs text-teal-800 dark:text-teal-200">عند اعتماد التقرير سيتم فتح F-15 (طلب صرف دفعة) تلقائياً للمحطة <strong>{milestone}</strong>.</p>
+          <p className="text-xs text-teal-800 dark:text-teal-200">عند اعتماد التقرير سيتم فتح F-15 (طلب صرف دفعة) تلقائياً — <strong>{paymentHint}</strong>.</p>
         </Card>
       )}
     </CreatorShell>
@@ -1065,17 +1068,18 @@ export const F14Creator: FormCreator = ({ user, api, context, onClose }) => {
 
 export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
+  const overall = Number(d.overallProgress ?? 0);
   return (
     <FormShell rec={rec} user={user} api={api}>
       <Card title="ملخص التقرير" icon={Activity}>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <ReadOnlyField label="تاريخ الزيارة" value={d.visitDate} />
-          <ReadOnlyField label="النسبة" value={`${d.progressPct || 0}%`} />
-          <ReadOnlyField label="محطة الدفعة" value={d.milestone || '—'} />
+          <ReadOnlyField label="تاريخ الزيارة" value={d.visitDate as string} />
+          <ReadOnlyField label="نسبة الإنجاز الكلية" value={`${overall}%`} />
+          <ReadOnlyField label="رقم الزيارة" value={String(d.visitNumber ?? '—')} />
         </div>
-        <div className="mt-3"><ProgressBar value={d.progressPct || 0} /></div>
-        <ReadOnlyField className="mt-3" label="ملاحظات" value={d.notes} />
-        {d.scopeChange && <Pill tone="amber" className="mt-2">تغيير نطاق — يستلزم F-23</Pill>}
+        <div className="mt-3"><ProgressBar value={overall} /></div>
+        <ReadOnlyField className="mt-3" label="ملاحظات" value={d.notes as string} />
+        {d.requestScopeChange && <Pill tone="amber" className="mt-2">تغيير نطاق — يستلزم F-23</Pill>}
       </Card>
       {(rec.files || []).length > 0 && (
         <Card title="الصور" icon={Camera}>
@@ -1421,19 +1425,383 @@ export const RENDERERS: Record<string, FormRenderer | undefined> = {
   'F-52': F52Renderer,
 };
 
+/* ──────────────────────────────────────────────────────────────────
+   F-04 Creator — تعيين مهندس التشخيص (HEAD_DIAGNOSIS originates)
+   Data written: { engineerId } per RENDERER_CONTRACT
+   ────────────────────────────────────────────────────────────────── */
+
+export const F04Creator: FormCreator = ({ user, api, context, onClose }) => {
+  const [projectRefId, setProjectRefId] = useState('');
+  const [engineerId, setEngineerId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const eligibleProjects = context.projects.filter(
+    (p: ProjectRecord) => p.phase === 'DIAGNOSIS' && !p.diagnosisEngineerId
+  );
+  const engineers = context.projects.length > 0
+    ? [] // populated from users prop — injected via context.userById scan
+    : [];
+
+  const submit = async () => {
+    const p = context.projects.find((x: ProjectRecord) => x.id === projectRefId);
+    if (!p || !engineerId) return;
+    setBusy(true);
+    try {
+      await api.createForm({
+        code: 'F-04', user,
+        projectId: p.projectId, projectRefId: p.id,
+        beneficiaryName: p.beneficiaryName,
+        notes,
+        data: { engineerId },
+      });
+      onClose();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <CreatorShell title="F-04 · تعيين مهندس التشخيص" onClose={onClose}
+      footer={<button onClick={submit} disabled={busy || !projectRefId || !engineerId}
+        className="px-5 py-2 text-sm font-bold bg-[#4A1F66] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
+        <Send className="w-4 h-4" /> إرسال التعيين
+      </button>}>
+      <Card title="المشروع" icon={Building2}>
+        <Select label="المشروع" options={eligibleProjects.map((p: ProjectRecord) => ({ value: p.id, label: `${p.projectId} — ${p.beneficiaryName}` }))}
+          value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
+      </Card>
+      <Card title="المهندس" icon={UsersIcon}>
+        <Input label="معرّف المهندس (engineerId)" value={engineerId} onChange={e => setEngineerId(e.target.value)}
+          placeholder="أدخل معرّف المستخدم من الإدارة" />
+        <TextArea className="mt-3" label="ملاحظات" rows={2} value={notes} onChange={e => setNotes(e.target.value)} />
+      </Card>
+    </CreatorShell>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   F-03.1 Creator — اعتماد المدير التنفيذي (EXEC_DIRECTOR originates)
+   Data written: { eligibilityVerdict, managerNotes } per ACTIVATE_DATA_PROPAGATIONS
+   ────────────────────────────────────────────────────────────────── */
+
+export const F03_1Creator: FormCreator = ({ user, api, context, onClose }) => {
+  const [projectRefId, setProjectRefId] = useState('');
+  const [eligibilityVerdict, setEligibilityVerdict] = useState<'eligible' | 'ineligible' | ''>('');
+  const [managerNotes, setManagerNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const eligibleProjects = context.projects.filter((p: ProjectRecord) => p.phase === 'RESEARCH');
+
+  const submit = async () => {
+    const p = context.projects.find((x: ProjectRecord) => x.id === projectRefId);
+    if (!p || !eligibilityVerdict) return;
+    setBusy(true);
+    try {
+      await api.createForm({
+        code: 'F-03.1', user,
+        projectId: p.projectId, projectRefId: p.id,
+        beneficiaryName: p.beneficiaryName,
+        data: { eligibilityVerdict, managerNotes },
+      });
+      onClose();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <CreatorShell title="F-03.1 · اعتماد المدير التنفيذي" onClose={onClose}
+      footer={<button onClick={submit} disabled={busy || !projectRefId || !eligibilityVerdict}
+        className="px-5 py-2 text-sm font-bold bg-[#4A1F66] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
+        <Send className="w-4 h-4" /> إرسال للاعتماد
+      </button>}>
+      <Card title="المشروع" icon={Building2}>
+        <Select label="المشروع" options={eligibleProjects.map((p: ProjectRecord) => ({ value: p.id, label: `${p.projectId} — ${p.beneficiaryName}` }))}
+          value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
+      </Card>
+      <Card title="قرار الاستحقاق" icon={ShieldCheck}>
+        <Select label="الحكم" required options={['', 'eligible', 'ineligible']}
+          value={eligibilityVerdict} onChange={e => setEligibilityVerdict(e.target.value as 'eligible' | 'ineligible' | '')} />
+        <TextArea className="mt-3" label="ملاحظات مدير البحث" rows={3} value={managerNotes} onChange={e => setManagerNotes(e.target.value)} />
+      </Card>
+    </CreatorShell>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   F-03.2 Creator — الاعتماد النهائي للإحالة (RESEARCH_MANAGER originates)
+   ────────────────────────────────────────────────────────────────── */
+
+export const F03_2Creator: FormCreator = ({ user, api, context, onClose }) => {
+  const [projectRefId, setProjectRefId] = useState('');
+  const [confirmationNotes, setConfirmationNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const eligibleProjects = context.projects.filter((p: ProjectRecord) => p.phase === 'RESEARCH');
+
+  const submit = async () => {
+    const p = context.projects.find((x: ProjectRecord) => x.id === projectRefId);
+    if (!p) return;
+    setBusy(true);
+    try {
+      await api.createForm({
+        code: 'F-03.2', user,
+        projectId: p.projectId, projectRefId: p.id,
+        beneficiaryName: p.beneficiaryName,
+        data: { confirmationNotes },
+      });
+      onClose();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <CreatorShell title="F-03.2 · الاعتماد النهائي للإحالة" onClose={onClose}
+      footer={<button onClick={submit} disabled={busy || !projectRefId}
+        className="px-5 py-2 text-sm font-bold bg-[#4A1F66] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
+        <Send className="w-4 h-4" /> إرسال الإحالة
+      </button>}>
+      <Card title="المشروع" icon={Building2}>
+        <Select label="المشروع" options={eligibleProjects.map((p: ProjectRecord) => ({ value: p.id, label: `${p.projectId} — ${p.beneficiaryName}` }))}
+          value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
+      </Card>
+      <Card title="ملاحظات الإحالة" icon={FileSignature}>
+        <TextArea label="ملاحظات الاعتماد النهائي" rows={3} value={confirmationNotes} onChange={e => setConfirmationNotes(e.target.value)} />
+      </Card>
+    </CreatorShell>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   F-32 Creator — تعيين المهندس المشرف (HEAD_SUPERVISION originates)
+   Data written: { engineerId } per RENDERER_CONTRACT
+   ────────────────────────────────────────────────────────────────── */
+
+export const F32Creator: FormCreator = ({ user, api, context, onClose }) => {
+  const [projectRefId, setProjectRefId] = useState('');
+  const [engineerId, setEngineerId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const eligibleProjects = context.projects.filter(
+    (p: ProjectRecord) => p.phase === 'TENDERING' && !p.supervisingEngineerId
+  );
+
+  const submit = async () => {
+    const p = context.projects.find((x: ProjectRecord) => x.id === projectRefId);
+    if (!p || !engineerId) return;
+    setBusy(true);
+    try {
+      await api.createForm({
+        code: 'F-32', user,
+        projectId: p.projectId, projectRefId: p.id,
+        beneficiaryName: p.beneficiaryName,
+        notes,
+        data: { engineerId },
+      });
+      onClose();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <CreatorShell title="F-32 · تعيين المهندس المشرف" onClose={onClose}
+      footer={<button onClick={submit} disabled={busy || !projectRefId || !engineerId}
+        className="px-5 py-2 text-sm font-bold bg-[#4A1F66] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
+        <Send className="w-4 h-4" /> إرسال التعيين
+      </button>}>
+      <Card title="المشروع" icon={Building2}>
+        <Select label="المشروع" options={eligibleProjects.map((p: ProjectRecord) => ({ value: p.id, label: `${p.projectId} — ${p.beneficiaryName}` }))}
+          value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
+      </Card>
+      <Card title="المهندس المشرف" icon={UsersIcon}>
+        <Input label="معرّف المهندس (engineerId)" value={engineerId} onChange={e => setEngineerId(e.target.value)}
+          placeholder="أدخل معرّف المستخدم من الإدارة" />
+        <TextArea className="mt-3" label="ملاحظات" rows={2} value={notes} onChange={e => setNotes(e.target.value)} />
+      </Card>
+    </CreatorShell>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   F-33 Creator — توثيق البدء (DIAGNOSIS_ENGINEER / assigned supervisor)
+   Data written: seeds f08_works, visitNumber, f20_* for downstream F-14 and F-34
+   ────────────────────────────────────────────────────────────────── */
+
+export const F33Creator: FormCreator = ({ user, api, context, onClose }) => {
+  const [projectRefId, setProjectRefId] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [supervisorNotes, setSupervisorNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const eligibleProjects = context.projects.filter(
+    (p: ProjectRecord) => p.phase === 'TENDERING' && p.supervisingEngineerId
+  );
+
+  const submit = async () => {
+    const p = context.projects.find((x: ProjectRecord) => x.id === projectRefId);
+    if (!p || !startDate) return;
+    setBusy(true);
+    try {
+      const f08 = context.findProjectForm(p.id, 'F-08');
+      const f08Works = (f08?.data?.f08_works as unknown[] | undefined) ||
+        ((f08?.data as Record<string, unknown>)?.works as unknown[] | undefined) || [];
+      const f20 = context.findProjectForm(p.id, 'F-20');
+      const f20data = (f20?.data || {}) as Record<string, unknown>;
+
+      await api.createForm({
+        code: 'F-33', user,
+        projectId: p.projectId, projectRefId: p.id,
+        beneficiaryName: p.beneficiaryName,
+        assigneeId: p.supervisingEngineerId,
+        data: {
+          startDate,
+          supervisorNotes,
+          f08_works: f08Works,
+          visitNumber: 1,
+          f20_items:           f20data.items || [],
+          f20_directNotes:     f20data.directNotes as string || '',
+          f20_inkindNotes:     f20data.inkindNotes as string || '',
+          f20_partnershipNotes: f20data.partnershipNotes as string || '',
+        },
+      });
+      onClose();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <CreatorShell title="F-33 · توثيق البدء" onClose={onClose}
+      footer={<button onClick={submit} disabled={busy || !projectRefId || !startDate}
+        className="px-5 py-2 text-sm font-bold bg-[#4A1F66] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
+        <Send className="w-4 h-4" /> إرسال توثيق البدء
+      </button>}>
+      <Card title="المشروع" icon={Building2}>
+        <Select label="المشروع" options={eligibleProjects.map((p: ProjectRecord) => ({ value: p.id, label: `${p.projectId} — ${p.beneficiaryName}` }))}
+          value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
+      </Card>
+      <Card title="تفاصيل البدء" icon={Calendar}>
+        <Input type="date" label="تاريخ البدء الفعلي" value={startDate} onChange={e => setStartDate(e.target.value)} />
+        <TextArea className="mt-3" label="ملاحظات المشرف" rows={3} value={supervisorNotes} onChange={e => setSupervisorNotes(e.target.value)} />
+      </Card>
+    </CreatorShell>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   F-34 Creator — إحالة حصر المواد (DIAGNOSIS_ENGINEER / HEAD_SUPERVISION)
+   ────────────────────────────────────────────────────────────────── */
+
+export const F34Creator: FormCreator = ({ user, api, context, onClose }) => {
+  const [projectRefId, setProjectRefId] = useState('');
+  const [materialSummary, setMaterialSummary] = useState('');
+  const [totalCost, setTotalCost] = useState<number>(0);
+  const [busy, setBusy] = useState(false);
+
+  const eligibleProjects = context.projects.filter((p: ProjectRecord) => p.phase === 'EXECUTION');
+
+  const submit = async () => {
+    const p = context.projects.find((x: ProjectRecord) => x.id === projectRefId);
+    if (!p) return;
+    setBusy(true);
+    try {
+      const f20 = context.findProjectForm(p.id, 'F-20');
+      const f20data = (f20?.data || {}) as Record<string, unknown>;
+      await api.createForm({
+        code: 'F-34', user,
+        projectId: p.projectId, projectRefId: p.id,
+        beneficiaryName: p.beneficiaryName,
+        data: {
+          materialSummary,
+          totalCost,
+          f20_items:            f20data.items || [],
+          f20_directNotes:      f20data.directNotes as string || '',
+          f20_inkindNotes:      f20data.inkindNotes as string || '',
+          f20_partnershipNotes: f20data.partnershipNotes as string || '',
+        },
+      });
+      onClose();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <CreatorShell title="F-34 · إحالة حصر المواد" onClose={onClose}
+      footer={<button onClick={submit} disabled={busy || !projectRefId}
+        className="px-5 py-2 text-sm font-bold bg-[#4A1F66] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
+        <Send className="w-4 h-4" /> إرسال الإحالة
+      </button>}>
+      <Card title="المشروع" icon={Building2}>
+        <Select label="المشروع" options={eligibleProjects.map((p: ProjectRecord) => ({ value: p.id, label: `${p.projectId} — ${p.beneficiaryName}` }))}
+          value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
+      </Card>
+      <Card title="ملخص المواد" icon={ShoppingCart}>
+        <TextArea label="وصف المواد المطلوبة" rows={4} value={materialSummary} onChange={e => setMaterialSummary(e.target.value)} />
+        <Input className="mt-3" type="number" label="التكلفة التقديرية (ر.س)" value={totalCost}
+          onChange={e => setTotalCost(Number(e.target.value || 0))} />
+      </Card>
+    </CreatorShell>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   F-84 Creator — تسعيرات المقاولين (HEAD_DIAGNOSIS / DIAGNOSIS_ENGINEER)
+   Data written: { f84_bids, f84_pricingNotes } per ACTIVATE_DATA_PROPAGATIONS
+   ────────────────────────────────────────────────────────────────── */
+
+export const F84Creator: FormCreator = ({ user, api, context, onClose }) => {
+  const [projectRefId, setProjectRefId] = useState('');
+  const [f84_pricingNotes, setF84PricingNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const eligibleProjects = context.projects.filter((p: ProjectRecord) => p.phase === 'TENDERING');
+
+  const submit = async () => {
+    const p = context.projects.find((x: ProjectRecord) => x.id === projectRefId);
+    if (!p) return;
+    setBusy(true);
+    try {
+      await api.createForm({
+        code: 'F-84', user,
+        projectId: p.projectId, projectRefId: p.id,
+        beneficiaryName: p.beneficiaryName,
+        data: { f84_bids: [], f84_pricingNotes },
+      });
+      onClose();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <CreatorShell title="F-84 · تسعيرات المقاولين" onClose={onClose}
+      footer={<button onClick={submit} disabled={busy || !projectRefId}
+        className="px-5 py-2 text-sm font-bold bg-[#4A1F66] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5">
+        <Send className="w-4 h-4" /> فتح جدول التسعير
+      </button>}>
+      <Card title="المشروع" icon={Building2}>
+        <Select label="المشروع" options={eligibleProjects.map((p: ProjectRecord) => ({ value: p.id, label: `${p.projectId} — ${p.beneficiaryName}` }))}
+          value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
+      </Card>
+      <Card title="ملاحظات التسعير" icon={Calculator}>
+        <TextArea label="ملاحظات أولية (يُكمّل المهندس الجدول لاحقاً)" rows={3}
+          value={f84_pricingNotes} onChange={e => setF84PricingNotes(e.target.value)} />
+      </Card>
+    </CreatorShell>
+  );
+};
+
 export const CREATORS: Record<string, FormCreator | undefined> = {
-  'F-02': F02Creator,
-  'F-03': F03Creator,
-  'F-08': F08Creator,
-  'F-18': F18Creator,
-  'F-21': F21Creator,
-  'F-20': F20Creator,
-  'F-19': F19Creator,
-  'F-85': F85Creator,
-  'F-14': F14Creator,
-  'F-23': F23Creator,
-  'F-15': F15Creator,
-  'F-07': F07Creator,
-  'F-52': F52Creator,
+  'F-02':   F02Creator,
+  'F-03':   F03Creator,
+  'F-03.1': F03_1Creator,
+  'F-03.2': F03_2Creator,
+  'F-04':   F04Creator,
+  'F-08':   F08Creator,
+  'F-18':   F18Creator,
+  'F-21':   F21Creator,
+  'F-20':   F20Creator,
+  'F-19':   F19Creator,
+  'F-32':   F32Creator,
+  'F-33':   F33Creator,
+  'F-34':   F34Creator,
+  'F-84':   F84Creator,
+  'F-85':   F85Creator,
+  'F-14':   F14Creator,
+  'F-23':   F23Creator,
+  'F-15':   F15Creator,
+  'F-07':   F07Creator,
+  'F-52':   F52Creator,
   // F-22 ينشأ تلقائياً مع F-18 — لا يحتاج Creator يدوي
 };

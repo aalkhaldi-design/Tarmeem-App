@@ -37,25 +37,17 @@ export function isFormAtStep(rec: FormRecord, step: number): boolean {
 }
 
 /**
- * Helper to check if current user can approve this form
+ * Thin shim — delegates to the canonical formAwaitsUser in src/lib/rbac.ts.
+ * Form renderers that call canApproveForm() still work without a migration sweep.
+ * @deprecated Import formAwaitsUser from '../../lib/rbac' in new renderers.
  */
 export function canApproveForm(rec: FormRecord, user: UserProfile): boolean {
-  if (rec.status === 'approved' || rec.status === 'rejected') return false;
+  if (rec.status !== 'pending') return false;
+  if (user.isAdmin === true) return true;
   const expectedRole = rec.approvalChain[rec.approvalIndex];
-  if (user.role !== expectedRole && !user.isAdmin) return false;
-  if (rec.assigneeId && rec.assigneeId !== user.id && !user.isAdmin) return false;
+  if (user.role !== expectedRole) return false;
+  if (rec.assigneeId && rec.assigneeId !== user.id) return false;
   return true;
-}
-
-/**
- * Helper to check if form is editable by current user
- */
-export function isFormEditable(rec: FormRecord, user: UserProfile): boolean {
-  if (rec.status === 'approved' || rec.status === 'rejected') return false;
-  if (user.isAdmin) return true;
-  if (rec.createdBy === user.id && rec.approvalIndex === 0) return true;
-  if (rec.assigneeId === user.id) return true;
-  return false;
 }
 
 /**

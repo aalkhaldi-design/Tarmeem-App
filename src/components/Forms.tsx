@@ -15,6 +15,33 @@ import type { UserProfile } from './Auth';
    Data Types
    ────────────────────────────────────────────────────────────────── */
 
+/**
+ * Typed base for form.data — covers every key in RENDERER_CONTRACT and
+ * ACTIVATE_DATA_PROPAGATIONS. Renderers must write these at the top level.
+ */
+export interface FormDataBase {
+  // RENDERER_CONTRACT
+  engineerId?: string;
+  safetyHazard?: boolean;
+  winnerContractor?: string;
+  winnerPrice?: number;
+  overallProgress?: number;
+  requestScopeChange?: boolean;
+  mediaRequested?: boolean;
+  // ACTIVATE_DATA_PROPAGATIONS source fields
+  managerNotes?: string;
+  eligibilityVerdict?: string;
+  f84_bids?: unknown[];
+  f84_pricingNotes?: string;
+  f08_works?: unknown[];
+  visitNumber?: number;
+  previousVisitProgress?: number;
+  f20_items?: unknown[];
+  f20_directNotes?: string;
+  f20_inkindNotes?: string;
+  f20_partnershipNotes?: string;
+}
+
 export interface FormApproval {
   role: RoleKey;
   actorId: string;
@@ -43,7 +70,7 @@ export interface FormRecord {
   ownerDept: DepartmentKey;
   bridgesTo: DepartmentKey[];
   notes?: string;
-  data?: Record<string, any>;
+  data?: FormDataBase & Record<string, unknown>;
   triggeredBy?: string | null;
   /** أحياناً نُسند النموذج لمستخدم محدد (مثل F-08 عند إسناد المهندس) */
   assigneeId?: string | null;

@@ -1,0 +1,3027 @@
+Claude Plan
+
+Claude Project Plan:
+
+Batch 6 is clean. All seven opening fixes folded correctly, both cross-form propagations follow the locked Batch-4 pattern, three new entries land in ACTIVATE_DATA_PROPAGATIONS. The six renderers are uniform with the established shape. No bugs to chase.
+One real flag, then F-14 design confirmation for Batch 7.
+
+🟡 Should fix in Batch 7
+1. F-19 SLA must be silenced (confirmed)
+You flagged this yourself. F-19 is a permanent tracker that lives the full EXECUTION phase. With a normal slaDaysvalue the row will show "متأخر X يوم" within days and stay screaming red until handover. Patch in data.ts at the top of Batch 7:
+// FormDef for F-19:
+{ code: 'F-19', /* ... */, slaDays: null }
+And update slaStatus to handle null cleanly (it already returns 'بدون SLA' / tone: 'neutral' when slaDays is falsy — verified). One-line change in data.ts, no SLA refactor needed.
+2. F-32 supervisor pool doesn't exclude the diagnosis engineer
+Minor: the supervisor <Select> lists every active DIAGNOSIS_ENGINEER, including the engineer who did F-08 on this same project. Same person doing both diagnosis and supervision is a conflict of interest in renovation work — they may rubber-stamp their own diagnosis.
+Soft fix — don't block, but visually mark and reorder:
+const supervisorOptions = useMemo(() => {
+  const diagnosisId = project?.diagnosisEngineerId;
+  return users
+    .filter(u => u.status === 'active' && u.role === 'DIAGNOSIS_ENGINEER')
+    .sort((a, b) => (a.id === diagnosisId ? 1 : 0) - (b.id === diagnosisId ? 1 : 0))  // diagnosis engineer last
+    .map(u => ({
+      value: u.id,
+      label: u.id === diagnosisId
+        ? `${u.fullName} · ⚠ مهندس التشخيص (تعارض)`
+        : u.fullName,
+    }));
+}, [users, project?.diagnosisEngineerId]);
+The HEAD_SUPERVISION sees the warning and consciously chooses if they really need that person. Doesn't block legitimate cases (small charity, one engineer available).
+3. Propagation key naming consistency — leave for now
+F-03 → F-03.1 uses plain keys (managerNotes). F-84 → F-85 and F-33 → F-34 use prefixed keys (f84_bids, f20_items). The prefix makes origin obvious in the audit trail but is inconsistent with the first propagation. Not worth fixing now — both work — but if a fourth propagation lands in a future batch, use prefixes. Once the codebase has more prefixed than unprefixed propagations, normalize F-03 → F-03.1 in a one-line cleanup batch.
+
+🎯 F-14 design — answering both open questions
+Question 1: per-work checklist vs single overall slider
+Option B: per-work checklist with computed (overridable) overall.
+The cascade only needs overallProgress — but the field engineer needs per-room granularity to write a useful report and the audit log needs to capture which rooms hit which milestones. Single slider gives the cascade what it needs but loses every byte of information the supervisor saw.
+Concrete shape:
+interface F14WorkProgress {
+  workId: string;        // FK to F-08 works[].id
+  workName: string;      // denormalized for display when F-08 isn't loaded
+  progressPct: number;   // 0-100, per-work
+  notes?: string;        // per-work field notes
+  photos?: UploadedFile[]; // per-work photos (optional — wire FileUploader later)
+}
+
+interface F14Data {
+  // Section 1 (HEAD_SUPERVISION)
+  inspectingEngineerId?: string;
+  visitDate?: string;
+  visitInstructions?: string;
+
+  // Section 2 (DIAGNOSIS_ENGINEER) — propagated from F-08
+  f08_works?: Array<{ id: string; name: string }>;
+  workProgress?: F14WorkProgress[];
+
+  // Computed (or overridden)
+  overallProgress?: number;
+  overallOverridden?: boolean;
+  requestScopeChange?: boolean;
+  scopeChangeNotes?: string;
+
+  generalNotes?: string;
+}
+Auto-compute the overall as a simple average of per-work progress when overallOverridden === false. Show a "تعديل يدوي" toggle next to the computed number; when enabled, the engineer types the number directly and a small lock icon appears.
+const computedOverall = workProgress.length
+  ? Math.round(workProgress.reduce((s, w) => s + (w.progressPct || 0), 0) / workProgress.length)
+  : 0;
+const overallProgress = overallOverridden ? manualOverride : computedOverall;
+The cascade reads overallProgress either way — engineer's override or computed average. Per RENDERER_CONTRACT, write it top-level on data.
+Question 2: repeatable mechanism
+You haven't asked but the workflow demands an answer. F-14 is "repeatable" (multiple supervision visits per project). Three options:
+Option A — UI button on ProjectDetail: "أنشئ تقرير زيارة جديدة" (HEAD_SUPERVISION can create new F-14 instances ad hoc). Comes with ProjectActionsMenu later.
+Option B — Auto-create the next F-14 from F-14's own trigger when overallProgress < 100:
+'F-14': (ctx) => {
+  // ... existing F-15 / F-23 logic
+  if (overall < 100 && overall > 0) {
+    createForms.push({
+      code: 'F-14',
+      data: { f08_works: workSnapshot, previousVisitProgress: overall },
+      title: `تقرير إشراف — الزيارة التالية`,
+    });
+  }
+  return result;
+},
+Option C — Hybrid: F-14's trigger auto-creates the next only when overallProgress >= 60 (i.e., a payment milestone hit, more visits expected); otherwise leave it to manual.
+Pick B for Batch 7. It's the cleanest: every supervision visit is its own form record (clear audit trail), the chain is self-driving (no manual intervention needed), and the F-08 works snapshot at the time of each spawn captures any scope changes. The auto-creation stops naturally when overall hits 100 (handover triggers).
+The downside — if the project is held mid-execution, an F-14 might sit in draft. That's fine; it just gets activated whenever the next visit happens.
+Propagating F-08 works to F-14 — add to F-33 cascade
+The first F-14 needs F-08 works at activation. F-33 already activates F-14 — extend it to also propagate F-08 works:
+'F-33': (ctx) => {
+  const projectRefId = ctx.approvedRecord.projectRefId!;
+  const f14 = ctx.forms.find(f => f.code === 'F-14' && f.projectRefId === projectRefId);
+  const f19 = ctx.forms.find(f => f.code === 'F-19' && f.projectRefId === projectRefId);
+  const f34 = ctx.forms.find(f => f.code === 'F-34' && f.projectRefId === projectRefId);
+  const f20 = ctx.forms.find(f => f.code === 'F-20' && f.projectRefId === projectRefId);
+  const f08 = ctx.forms.find(f => f.code === 'F-08' && f.projectRefId === projectRefId);
+  
+  const f08works = ((f08?.data as { works?: Array<{ id: string; name: string }> })?.works || [])
+    .map(w => ({ id: w.id, name: w.name })); // denormalize only what F-14 needs
+  
+  const f20src = (f20?.data || {}) as { /* ... existing ... */ };
+  
+  return {
+    projectPatch: { phase: 'EXECUTION' as ProjectPhase, progressPct: 60 },
+    activate: [
+      ...(f14 ? [{ formId: f14.id, data: { f08_works: f08works } }] : []),
+      ...(f19 ? [{ formId: f19.id }] : []),
+      ...(f34 ? [{ formId: f34.id, data: { /* ... existing f20_ propagation ... */ } }] : []),
+    ],
+  };
+},
+Add the new propagation to ACTIVATE_DATA_PROPAGATIONS:
+'F-33 → F-14': ['f08_works'],
+For subsequent F-14 instances (Option B auto-create), pass f08_works in the createForms data directly — F-14's trigger already has access to ctx.forms to find the F-08.
+
+Honored from Batch 5 review ✅
+Item	Status
+F-08 not_renovable blocks Approve with explicit error	✅
+Amber callout under diagnosisResult when not_renovable is selected	✅
+Fixture onPointerDown stopPropagation + <title> tooltip	✅
+WorksTab unused props purged (formId/projectRefId/user/files removed, WorkFiles alias deleted)	✅
+F-22 trigger landed (PARTNERSHIP notify on approval)	✅ from Batch 4, persists
+F-08 cascade notifies SUPPORT when F-20 activates	✅
+F-84 → F-85 propagates bids via activate.data	✅
+F-33 → F-34 propagates F-20 buckets via activate.data	✅
+ACTIVATE_DATA_PROPAGATIONS keeps the contract authoritative	✅
+RENDERER_CONTRACT honored: F-85 writes winnerContractor/winnerPrice top-level	✅
+F-19 uses additionalEditAccess for SUPPORT helpers (mirrors F-20)	✅
+All six renderers use standard action bar (no customActions premature ship)	✅
+Batch 7 — F-14 greenlit with these locks
+	1.	Per-work checklist with computed-or-overridden overallProgress (Option B above).
+	2.	Auto-create next F-14 in F-14's own trigger when overallProgress < 100 (Option B above).
+	3.	F-08 works propagation via F-33 cascade + auto-create cascade. New entry in ACTIVATE_DATA_PROPAGATIONS.
+	4.	F-19 SLA silenced (slaDays: null in data.ts).
+	5.	F-32 conflict-of-interest warning on the supervisor pool.
+Section 1 (HEAD_SUPERVISION) = inspecting engineer picker + visit date + visit instructions. Section 2 (DIAGNOSIS_ENGINEER) = per-work checklist over f08_works + override + scope-change checkbox + general notes. Auto-save 600ms. Standard action bar.
+Per-work photos (FileUploader per F14WorkProgress) — defer to a polish batch. For now a single FileUploader at the form level is enough.
+Ship Batch 7. Still on plan, no drift.
+
+
+Claude Code Response:
+
+Five locks honored, F-14 design confirmed (Option B per-work checklist + Option B auto-create next visit). Opening fixes first, then F-14 in one shot.
+
+---
+
+## Opening fixes
+
+### `src/lib/data.ts` — silence F-19's SLA
+
+```ts
+// REPLACE the F-19 FormDef entry. The only change is removing slaDays — sla.ts
+// already returns 'بدون SLA' / 'neutral' when slaDays is falsy, no refactor needed.
+{ code: 'F-19', phase: 4, title: 'طلب توريد داخلي',         titleEn: 'Internal Supply Tracker',   category: 'SUPPLY',      ownerDept: 'SUPPORT',  originRoles: ['PROCUREMENT_OFFICER'], approvalChain: ['PROCUREMENT_OFFICER'], description: 'ساحة تتبع مستمرة لإنجاز التوريد عبر الخدمات المساندة. تتبع دائم حتى إغلاق المشروع.' },
+```
+
+### `src/lib/workflow.ts` — F-33 and F-14 trigger updates
+
+```ts
+// (1) REPLACE the F-33 trigger to propagate F-08 works snapshot + visitNumber=1
+//     to F-14, in addition to the existing F-20 propagation to F-34:
+'F-33': (ctx) => {
+  const projectRefId = ctx.approvedRecord.projectRefId!;
+  const f14 = ctx.forms.find(f => f.code === 'F-14' && f.projectRefId === projectRefId);
+  const f19 = ctx.forms.find(f => f.code === 'F-19' && f.projectRefId === projectRefId);
+  const f34 = ctx.forms.find(f => f.code === 'F-34' && f.projectRefId === projectRefId);
+  const f20 = ctx.forms.find(f => f.code === 'F-20' && f.projectRefId === projectRefId);
+  const f08 = ctx.forms.find(f => f.code === 'F-08' && f.projectRefId === projectRefId);
+
+  const f08works = ((f08?.data as { works?: Array<{ id: string; name: string }> })?.works || [])
+    .map(w => ({ id: w.id, name: w.name })); // denormalize only what F-14 needs
+
+  const f20src = (f20?.data || {}) as {
+    items?: unknown[]; directNotes?: string; inkindNotes?: string; partnershipNotes?: string;
+  };
+
+  return {
+    projectPatch: { phase: 'EXECUTION' as ProjectPhase, progressPct: 60 },
+    activate: [
+      ...(f14 ? [{ formId: f14.id, data: { f08_works: f08works, visitNumber: 1 } }] : []),
+      ...(f19 ? [{ formId: f19.id }] : []),
+      ...(f34 ? [{
+        formId: f34.id,
+        data: {
+          f20_items: f20src.items || [],
+          f20_directNotes: f20src.directNotes,
+          f20_inkindNotes: f20src.inkindNotes,
+          f20_partnershipNotes: f20src.partnershipNotes,
+        },
+      }] : []),
+    ],
+  };
+},
+
+// (2) REPLACE the F-14 trigger to also auto-create the next F-14 when
+//     execution is ongoing (0 < overall < 100). Stops naturally at 100
+//     (handover triggers) and at 0 (no actual visit was reported).
+'F-14': (ctx) => {
+  const projectRefId = ctx.approvedRecord.projectRefId!;
+  const overall = Number(
+    ctx.dataPatch?.overallProgress
+    ?? (ctx.approvedRecord.data as { overallProgress?: number })?.overallProgress
+    ?? 0
+  );
+  const existingF15 = ctx.forms.filter(f => f.code === 'F-15' && f.projectRefId === projectRefId);
+  const createForms: NonNullable<CascadeResult['createForms']> = [];
+
+  // Payment milestones
+  if (overall >= 60  && !existingF15.some(f => (f.data as { paymentIndex?: number })?.paymentIndex === 2))
+    createForms.push({ code: 'F-15', data: { paymentIndex: 2 }, title: 'طلب صرف الدفعة الثانية (30%)' });
+  if (overall >= 90  && !existingF15.some(f => (f.data as { paymentIndex?: number })?.paymentIndex === 3))
+    createForms.push({ code: 'F-15', data: { paymentIndex: 3 }, title: 'طلب صرف الدفعة الثالثة (30%)' });
+  if (overall >= 100 && !existingF15.some(f => (f.data as { paymentIndex?: number })?.paymentIndex === 4))
+    createForms.push({ code: 'F-15', data: { paymentIndex: 4 }, title: 'طلب صرف الدفعة الأخيرة (10%)' });
+
+  // Scope change → spawn F-23
+  if (ctx.dataPatch?.requestScopeChange || (ctx.approvedRecord.data as { requestScopeChange?: boolean })?.requestScopeChange) {
+    createForms.push({
+      code: 'F-23',
+      data: { triggeredByF14: ctx.approvedRecord.id },
+      title: 'اعتماد بنود أعمال إضافية (مولّد آلياً)',
+    });
+  }
+
+  // Auto-create next supervision visit when execution is ongoing
+  if (overall > 0 && overall < 100) {
+    const f08 = ctx.forms.find(f => f.code === 'F-08' && f.projectRefId === projectRefId);
+    const f08works = ((f08?.data as { works?: Array<{ id: string; name: string }> })?.works || [])
+      .map(w => ({ id: w.id, name: w.name }));
+    const currentVisit = Number((ctx.approvedRecord.data as { visitNumber?: number })?.visitNumber || 1);
+    const nextVisit = currentVisit + 1;
+    createForms.push({
+      code: 'F-14',
+      data: {
+        f08_works: f08works,
+        visitNumber: nextVisit,
+        previousVisitProgress: overall,
+      },
+      title: `تقرير الإشراف — الزيارة ${nextVisit}`,
+    });
+  }
+
+  return {
+    projectPatch: { progressPct: Math.max(60, Math.min(99, overall)) },
+    createForms,
+  };
+},
+```
+
+### `src/components/forms/_shared.tsx` — ACTIVATE_DATA_PROPAGATIONS update
+
+```ts
+// UPDATE the constant to list the new F-33 → F-14 propagation:
+export const ACTIVATE_DATA_PROPAGATIONS = {
+  'F-03 → F-03.1': ['managerNotes', 'eligibilityVerdict'],
+  'F-84 → F-85':   ['f84_bids', 'f84_pricingNotes'],
+  'F-33 → F-14':   ['f08_works', 'visitNumber'],
+  'F-33 → F-34':   ['f20_items', 'f20_directNotes', 'f20_inkindNotes', 'f20_partnershipNotes'],
+  // Subsequent F-14 instances are auto-created by F-14's own trigger (createForms),
+  // which passes f08_works + visitNumber + previousVisitProgress at creation time.
+} as const;
+```
+
+### `src/components/forms/F32_AssignSupervisor.tsx` — conflict-of-interest warning
+
+```tsx
+// REPLACE the supervisorOptions useMemo with this version. Diagnosis engineer
+// goes to the bottom of the list and gets a warning label, doesn't get blocked.
+const supervisorOptions = useMemo(() => {
+  const diagnosisId = project?.diagnosisEngineerId;
+  return users
+    .filter(u => u.status === 'active' && u.role === 'DIAGNOSIS_ENGINEER')
+    .sort((a, b) => (a.id === diagnosisId ? 1 : 0) - (b.id === diagnosisId ? 1 : 0))
+    .map(u => ({
+      value: u.id,
+      label: u.id === diagnosisId
+        ? `${u.fullName} · ⚠ مهندس التشخيص (تعارض)`
+        : u.fullName,
+    }));
+}, [users, project?.diagnosisEngineerId]);
+```
+
+---
+
+## `src/components/forms/F14_SupervisionReport.tsx`
+
+```tsx
+import React, { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, Lock } from 'lucide-react';
+import { FormShell, type RendererProps } from './_shared';
+import { FormComments } from '../ui/FormComments';
+import { FileUploader } from '../ui/FileUploader';
+import { Input, ProgressBar, Select, TextArea } from '../ui';
+
+interface F08WorkRef { id: string; name: string; }
+interface F14WorkProgress {
+  workId: string;
+  workName: string;
+  progressPct: number;
+  notes?: string;
+}
+interface F14Data {
+  // Visit metadata (set by F-33 cascade or F-14 auto-create trigger)
+  visitNumber?: number;
+  previousVisitProgress?: number;
+  // Propagated from F-33 / prior F-14
+  f08_works?: F08WorkRef[];
+  // Section 1 — HEAD_SUPERVISION
+  inspectingEngineerId?: string;
+  visitDate?: string;
+  visitInstructions?: string;
+  // Section 2 — DIAGNOSIS_ENGINEER
+  workProgress?: F14WorkProgress[];
+  overallOverridden?: boolean;
+  manualOverallProgress?: number;
+  overallProgress?: number;        // top-level per RENDERER_CONTRACT
+  requestScopeChange?: boolean;    // top-level per RENDERER_CONTRACT
+  scopeChangeNotes?: string;
+  generalNotes?: string;
+}
+
+export const F14Renderer: React.FC<RendererProps> = ({ rec, project, user, users, api }) => {
+  const data = (rec.data || {}) as F14Data;
+  const works = useMemo(() => data.f08_works || [], [data.f08_works]);
+  const visitNumber = data.visitNumber || 1;
+
+  // Section 1 state
+  const [inspectingEngineerId, setInspectingEngineerId] = useState(data.inspectingEngineerId || '');
+  const [visitDate,            setVisitDate]            = useState(data.visitDate || '');
+  const [visitInstructions,    setVisitInstructions]    = useState(data.visitInstructions || '');
+
+  // Section 2 state
+  const [workProgress, setWorkProgress] = useState<F14WorkProgress[]>(() => {
+    if (data.workProgress && data.workProgress.length > 0) return data.workProgress;
+    return works.map(w => ({ workId: w.id, workName: w.name, progressPct: 0, notes: '' }));
+  });
+  const [overallOverridden, setOverallOverridden] = useState(!!data.overallOverridden);
+  const [manualOverall,     setManualOverall]     = useState((data.manualOverallProgress ?? 0).toString());
+  const [requestScopeChange, setRequestScopeChange] = useState(!!data.requestScopeChange);
+  const [scopeChangeNotes,   setScopeChangeNotes]   = useState(data.scopeChangeNotes || '');
+  const [generalNotes,       setGeneralNotes]       = useState(data.generalNotes || '');
+
+  // Backfill workProgress when f08_works arrives after mount (e.g. form opened in draft state
+  // before F-33 cascade fired). Only triggers when state is empty, never overwrites user edits.
+  useEffect(() => {
+    if (workProgress.length === 0 && works.length > 0) {
+      setWorkProgress(works.map(w => ({ workId: w.id, workName: w.name, progressPct: 0, notes: '' })));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [works.length]);
+
+  const computedOverall = workProgress.length
+    ? Math.round(workProgress.reduce((s, w) => s + (w.progressPct || 0), 0) / workProgress.length)
+    : 0;
+  const effectiveOverall = overallOverridden ? (Number(manualOverall) || 0) : computedOverall;
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      api.updateFormData(rec.id, {
+        inspectingEngineerId,
+        visitDate,
+        visitInstructions,
+        workProgress,
+        overallOverridden,
+        manualOverallProgress: Number(manualOverall) || 0,
+        overallProgress: effectiveOverall,
+        requestScopeChange,
+        scopeChangeNotes,
+        generalNotes,
+      });
+    }, 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inspectingEngineerId, visitDate, visitInstructions, workProgress, overallOverridden, manualOverall, requestScopeChange, scopeChangeNotes, generalNotes, effectiveOverall]);
+
+  const updateWorkProgress = (workId: string, patch: Partial<F14WorkProgress>) =>
+    setWorkProgress(wp => wp.map(w => w.workId === workId ? { ...w, ...patch } : w));
+
+  // Engineer pool — sorted with the supervising engineer first (the natural pick).
+  const engineerOptions = useMemo(() => {
+    const supervisorId = project?.supervisingEngineerId;
+    return users
+      .filter(u => u.status === 'active' && u.role === 'DIAGNOSIS_ENGINEER')
+      .sort((a, b) => (a.id === supervisorId ? 0 : 1) - (b.id === supervisorId ? 0 : 1))
+      .map(u => ({
+        value: u.id,
+        label: u.id === supervisorId ? `${u.fullName} · المهندس المشرف` : u.fullName,
+      }));
+  }, [users, project?.supervisingEngineerId]);
+
+  const stageOne = rec.approvalIndex === 0;
+  const stageTwo = rec.approvalIndex === 1;
+
+  const milestoneHint = (pct: number): string => {
+    if (pct >= 100) return 'الإنجاز مكتمل — عند الاعتماد سيتم توليد الدفعة الأخيرة وتفعيل التسليم.';
+    if (pct >= 90)  return 'تجاوزت 90% — عند الاعتماد ستُنشأ الدفعة الثالثة آلياً.';
+    if (pct >= 60)  return 'تجاوزت 60% — عند الاعتماد ستُنشأ الدفعة الثانية آلياً.';
+    return 'تتم متابعة الإنجاز دون توليد دفعات حتى تتجاوز 60%.';
+  };
+
+  return (
+    <FormShell
+      rec={rec} project={project} user={user} api={api}
+      approvalPayload={{
+        inspectingEngineerId,
+        visitDate,
+        visitInstructions,
+        workProgress,
+        overallOverridden,
+        manualOverallProgress: Number(manualOverall) || 0,
+        overallProgress: effectiveOverall,
+        requestScopeChange,
+        scopeChangeNotes,
+        generalNotes,
+      }}
+      canApprove={() => {
+        if (stageOne) {
+          if (!inspectingEngineerId) return 'يجب اختيار المهندس المنفّذ للزيارة';
+          if (!visitDate)             return 'يجب تحديد تاريخ الزيارة';
+        }
+        if (stageTwo) {
+          if (workProgress.length === 0) return 'لا توجد عناصر للمتابعة — تحقق من بيانات F-08';
+          const anyUpdated = workProgress.some(w => w.progressPct > 0);
+          if (!anyUpdated) return 'يجب تحديث تقدم العمل قبل الاعتماد';
+          if (requestScopeChange && !scopeChangeNotes.trim())
+            return 'يجب توضيح طلب تغيير نطاق العمل في الملاحظات';
+        }
+        return null;
+      }}
+    >
+      <div className="space-y-5">
+
+        {/* Visit metadata header */}
+        <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg bg-surface-down text-xs">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-fg">الزيارة #{visitNumber}</span>
+            {data.previousVisitProgress != null && (
+              <span className="text-fg-faint">
+                · إنجاز سابق: <span className="font-medium text-fg">{data.previousVisitProgress}%</span>
+              </span>
+            )}
+          </div>
+          <span className="text-fg-faint">
+            المرحلة {rec.approvalIndex + 1} من {rec.approvalChain.length}
+            {' '}({stageOne ? 'تعيين الزيارة' : 'تقرير ميداني'})
+          </span>
+        </div>
+
+        {/* ─────────────── Section 1: Visit Assignment ─────────────── */}
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <h3 className="font-semibold text-fg">القسم 1: تعيين زيارة الإشراف</h3>
+            {!stageOne && <Lock className="w-3.5 h-3.5 text-fg-faint" aria-label="مقفل" />}
+          </div>
+          <fieldset disabled={!stageOne} className="border-0 p-0 m-0 min-w-0 space-y-3">
+            <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
+              يعيّن رئيس قسم الإشراف المهندس الذي سينفّذ زيارة الإشراف الميدانية وتاريخها.
+            </div>
+
+            <Select
+              label="المهندس المنفّذ للزيارة"
+              value={inspectingEngineerId}
+              onChange={(e) => setInspectingEngineerId(e.target.value)}
+              options={engineerOptions}
+              placeholder={engineerOptions.length ? 'اختر المهندس' : 'لا يوجد مهندسون نشطون'}
+            />
+
+            <Input
+              label="تاريخ الزيارة"
+              type="date"
+              value={visitDate}
+              onChange={(e) => setVisitDate(e.target.value)}
+            />
+
+            <TextArea
+              label="تعليمات الزيارة (اختياري)"
+              value={visitInstructions}
+              onChange={(e) => setVisitInstructions(e.target.value)}
+              rows={3}
+              hint="بنود محددة للتحقق منها، صور مطلوبة، أسئلة للمقاول."
+            />
+          </fieldset>
+        </section>
+
+        {/* ─────────────── Section 2: Field Report ─────────────── */}
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <h3 className="font-semibold text-fg">القسم 2: تقرير الزيارة الميدانية</h3>
+            {!stageTwo && <Lock className="w-3.5 h-3.5 text-fg-faint" aria-label="مقفل" />}
+          </div>
+          <fieldset disabled={!stageTwo} className="border-0 p-0 m-0 min-w-0 space-y-4">
+            {workProgress.length === 0 ? (
+              <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>لم يتم استلام عناصر F-08. لا يمكن المتابعة دون قائمة الأعمال.</span>
+              </div>
+            ) : (
+              <>
+                {/* Per-work cards */}
+                <div className="space-y-2">
+                  <h4 className="text-xs font-semibold text-fg-muted">تقدّم العمل في كل عنصر ({workProgress.length})</h4>
+                  {workProgress.map(wp => (
+                    <div key={wp.workId} className="p-3 rounded-lg bg-surface-down space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium text-fg">{wp.workName}</span>
+                        <span className="text-sm font-bold text-fg shrink-0">{wp.progressPct}%</span>
+                      </div>
+                      <input
+                        type="range" min="0" max="100" step="5"
+                        value={wp.progressPct}
+                        onChange={(e) => updateWorkProgress(wp.workId, { progressPct: Number(e.target.value) })}
+                        className="w-full accent-brand-teal"
+                      />
+                      <input
+                        type="text"
+                        value={wp.notes || ''}
+                        onChange={(e) => updateWorkProgress(wp.workId, { notes: e.target.value })}
+                        placeholder="ملاحظات الموقع لهذا العنصر"
+                        className="w-full px-3 py-1.5 rounded border border-border-subtle bg-input-bg text-fg text-xs focus:outline-none focus:ring-1 focus:ring-brand-teal"
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* Overall progress */}
+                <div className="p-3 rounded-lg border border-border-default bg-surface-up space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="text-sm font-medium text-fg">الإنجاز الإجمالي</h4>
+                    <label className="text-xs text-fg-muted flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={overallOverridden}
+                        onChange={(e) => {
+                          setOverallOverridden(e.target.checked);
+                          if (e.target.checked) setManualOverall(computedOverall.toString());
+                        }}
+                        className="w-3.5 h-3.5 accent-brand-teal"
+                      />
+                      <span>تعديل يدوي</span>
+                    </label>
+                  </div>
+                  {overallOverridden ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number" min="0" max="100" step="1"
+                        value={manualOverall}
+                        onChange={(e) => setManualOverall(e.target.value)}
+                        className="w-24 px-3 py-2 rounded-lg border border-border-default bg-input-bg text-fg text-sm text-center focus:outline-none focus:ring-2 focus:ring-brand-teal"
+                      />
+                      <span className="text-fg-muted text-sm">%</span>
+                      <span className="text-xs text-fg-faint">(محسوب: {computedOverall}%)</span>
+                    </div>
+                  ) : (
+                    <ProgressBar value={computedOverall} tone={computedOverall >= 90 ? 'success' : 'teal'} />
+                  )}
+                  <p className="text-[11px] text-fg-faint">{milestoneHint(effectiveOverall)}</p>
+                </div>
+
+                {/* Scope change */}
+                <div className="p-3 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 space-y-2">
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={requestScopeChange}
+                      onChange={(e) => setRequestScopeChange(e.target.checked)}
+                      className="mt-1 w-4 h-4 accent-amber-600"
+                    />
+                    <div className="text-sm">
+                      <div className="text-fg font-medium">طلب تغيير نطاق العمل</div>
+                      <div className="text-fg-faint text-xs mt-0.5">
+                        تفعيل هذا الخيار سيُنشئ نموذج اعتماد بنود إضافية (F-23) آلياً عند اعتماد التقرير.
+                      </div>
+                    </div>
+                  </label>
+                  {requestScopeChange && (
+                    <TextArea
+                      label="وصف التغيير المطلوب"
+                      value={scopeChangeNotes}
+                      onChange={(e) => setScopeChangeNotes(e.target.value)}
+                      rows={3}
+                      hint="البنود الإضافية، التكلفة التقديرية، السبب الفني."
+                    />
+                  )}
+                </div>
+
+                <TextArea
+                  label="ملاحظات عامة على الزيارة"
+                  value={generalNotes}
+                  onChange={(e) => setGeneralNotes(e.target.value)}
+                  rows={3}
+                />
+
+                {rec.projectRefId && (
+                  <div>
+                    <div className="text-sm font-medium text-fg-muted mb-2">صور الزيارة (اختياري)</div>
+                    <FileUploader
+                      formId={rec.id}
+                      projectRefId={rec.projectRefId}
+                      user={user}
+                      files={rec.files || []}
+                      accept="image/*"
+                      disabled={!stageTwo}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </fieldset>
+        </section>
+      </div>
+      <FormComments formId={rec.id} user={user} />
+    </FormShell>
+  );
+};
+```
+
+### `src/components/forms/index.ts` — register F-14
+
+```ts
+import type { FormCode } from '../../lib/data';
+import type { Renderer } from './_shared';
+import { F03Renderer }  from './F03_ResearchApproval';
+import { F031Renderer } from './F03_1_ExecApproval';
+import { F032Renderer } from './F03_2_FinalTransfer';
+import { F04Renderer }  from './F04_AssignDiagnosisEngineer';
+import { F08Renderer }  from './F08_DiagnosisBinder';
+import { F14Renderer }  from './F14_SupervisionReport';
+import { F18Renderer }  from './F18_EvacuationPledge';
+import { F19Renderer }  from './F19_InternalSupply';
+import { F20Renderer }  from './F20_MaterialSupply';
+import { F21Renderer }  from './F21_FurnitureInventory';
+import { F22Renderer }  from './F22_AltHousing';
+import { F32Renderer }  from './F32_AssignSupervisor';
+import { F33Renderer }  from './F33_StartDocumentation';
+import { F34Renderer }  from './F34_MaterialTransfer';
+import { F84Renderer }  from './F84_ContractorPricing';
+import { F85Renderer }  from './F85_TenderingAward';
+
+export const RENDERERS: Partial<Record<FormCode, Renderer>> = {
+  'F-03':   F03Renderer,
+  'F-03.1': F031Renderer,
+  'F-03.2': F032Renderer,
+  'F-04':   F04Renderer,
+  'F-08':   F08Renderer,
+  'F-14':   F14Renderer,
+  'F-18':   F18Renderer,
+  'F-19':   F19Renderer,
+  'F-20':   F20Renderer,
+  'F-21':   F21Renderer,
+  'F-22':   F22Renderer,
+  'F-32':   F32Renderer,
+  'F-33':   F33Renderer,
+  'F-34':   F34Renderer,
+  'F-84':   F84Renderer,
+  'F-85':   F85Renderer,
+  // Remaining: F-02 (wizard), F-07, F-15, F-23, F-35, F-52
+};
+
+export { GenericFallback } from './_shared';
+export type { Renderer } from './_shared';
+```
+
+---
+
+## Notes worth flagging
+
+1. **`workProgress` is keyed by `workId` from F-08's snapshot at activation time.** If the engineer later renames a work item in F-08, the F-14 snapshot still shows the old name (denormalized via `workName`). That's audit-correct — the report reflects what the engineer actually saw on visit day. Same applies to subsequent F-14s: each gets its own F-08 snapshot at auto-create time.
+
+2. **`overallProgress=0` deliberately doesn't auto-create the next F-14.** If the engineer reports "0% progress" (e.g., contractor was absent), it's effectively a non-visit; the next visit is created the next time someone moves the needle. Edge case the spec didn't pin down — flag if you'd rather have it always create a successor.
+
+3. **The override toggle pre-fills `manualOverall` with `computedOverall`.** Makes the override path one-click instead of having to re-type the current value. If the engineer wants to type a fresh number they just edit the input.
+
+4. **`FileUploader.disabled={!stageTwo}` explicitly added.** The `<fieldset disabled>` wrapper doesn't catch the FileUploader's drag-drop handler (it's on the label, not the input), so the explicit prop is needed to prevent SectionTwo uploads during Section 1.
+
+## Batch 8 preview — `<MultiStageActionBar>` first
+
+Per your Batch 7 note, Batch 8 opens with `<MultiStageActionBar>` extracted to `_shared.tsx`:
+
+```ts
+interface StageDef {
+  index: number;
+  label: string;               // "إعداد المحاسب" / "اعتماد المدير التنفيذي" / "صرف الدفعة"
+  role: RoleKey;
+  field: string;               // path in form.data the stage's notes/refs live at
+  fieldLabel: string;
+  inputType: 'text' | 'textarea' | 'transfer_ref';
+}
+
+interface MultiStageActionBarProps {
+  rec: FormRecord;
+  user: UserProfile;
+  api: FormsApiLike;
+  stages: StageDef[];
+  additionalApprovalGate?: () => string | null;
+}
+```
+
+F-15, F-35, and F-23 each declare a `stages` array and call into the shared component. The bar shows the stage chip strip, the current stage's input, and the standard Approve/Reject/Decline/Defer buttons gated on `formAwaitsUser` for the current stage's role. Then F-15 and F-35 are basically configuration files; F-23 too with `customActions={true}` on FormShell.
+
+Order in Batch 8: shared helper first, then F-35 (simplest of the three — first payment, no paymentIndex variants), then F-15 (paymentIndex 2/3/4 variants for label/copy), then F-23 (variation pricing list + 2-stage). All three in one batch since the heavy lifting is in the shared helper.
+
+Confirm Batch 8 scope or shuffle.
+
+Claude Project Plan:
+
+Batch 7 is clean. All five opening fixes folded, F-14 renderer hits both Option B locks (per-work checklist + auto-create next visit), two-section UI with proper stage gating, visit metadata header tracks the chain across visits.
+One real workflow gap, one validation issue, then Batch 8 is greenlit with two design specifics.
+
+🟡 Should fix in Batch 8
+1. anyUpdated validation forces engineers to lie at 0% visits
+if (stageTwo) {
+  // ...
+  const anyUpdated = workProgress.some(w => w.progressPct > 0);
+  if (!anyUpdated) return 'يجب تحديث تقدم العمل قبل الاعتماد';
+This blocks approval when ALL works are at 0%. But the legitimate "contractor didn't show up" case is exactly that — every work stays at 0%. The engineer's choices become: (a) lie and bump one to 5%, or (b) defer the form and create a phantom backlog. Neither is good.
+Worse: it contradicts the trigger's own logic. The F-14 trigger gracefully handles overall === 0 (skips next-visit creation, skips F-15 milestones). The validation blocks a state the trigger was designed to accept.
+Fix — replace anyUpdated with a "no progress reason" requirement:
+if (stageTwo) {
+  if (workProgress.length === 0) return 'لا توجد عناصر للمتابعة — تحقق من بيانات F-08';
+  
+  const allZero = workProgress.every(w => w.progressPct === 0);
+  if (allZero && !generalNotes.trim()) {
+    return 'تقرير بصفر إنجاز يتطلب توضيح السبب في «ملاحظات عامة»';
+  }
+  
+  if (requestScopeChange && !scopeChangeNotes.trim())
+    return 'يجب توضيح طلب تغيير نطاق العمل في الملاحظات';
+}
+Now the engineer can truthfully report "0% — contractor absent, see general notes" and the audit trail captures why.
+2. Workflow gap: zero-progress visit closes without next-visit successor
+Related to the above: when F-14 is approved at overall === 0, the trigger correctly doesn't auto-create the next F-14. But that means once this visit is closed, there is no F-14 in pending or draft state for the project. HEAD_SUPERVISION can't initiate a follow-up visit through the workflow — they'd need admin override.
+Two options:
+	•	(a) Relax the trigger to always create the next F-14 when overall < 100 (regardless of whether overall > 0). One-line change in workflow.ts.
+	•	(b) Defer to ProjectActionsMenu — add a "أنشئ زيارة إشراف جديدة" button on the project page (HEAD_SUPERVISION + admin gated).
+Pick (a) for now. The 0%-progress visit producing a successor doesn't cost anything (it's just a draft form), and it removes the dead-end. Patch:
+// F-14 trigger — change the gate
+if (overall < 100) {  // was: if (overall > 0 && overall < 100)
+  // ... auto-create next F-14
+}
+Drop the overall > 0 check. Update the Batch-7 note's caveat #2 to reflect the new behavior.
+
+Honored from Batch 6 review ✅
+Item	Status
+F-19 slaDays omitted in data.ts (sla.ts returns 'بدون SLA' for falsy slaDays)	✅
+F-32 supervisor pool sorts diagnosis engineer to bottom with conflict label	✅
+F-33 → F-14 propagation: f08_works + visitNumber=1	✅
+ACTIVATE_DATA_PROPAGATIONS updated with F-33 → F-14 entry + comment on auto-create	✅
+Option B: per-work checklist with computed-or-overridden overall	✅
+Option B: F-14 trigger auto-creates next visit	✅ (gate needs the fix above)
+Two-section UI with <fieldset disabled> per stage + Lock icon	✅
+effectiveOverall written top-level on data.overallProgress per RENDERER_CONTRACT	✅
+Per-work workId stable + denormalized workName for audit-correct snapshots	✅
+FileUploader disabled={!stageTwo} (explicit, since drag-drop bypasses <fieldset>)	✅
+Visit metadata header (visit#, previousVisitProgress, stage indicator)	✅
+Backfill effect for workProgress when f08_works arrives after mount	✅
+Engineer pool sorted with project.supervisingEngineerId first	✅
+Batch 8 — greenlit, two locks on the shared helper
+The <MultiStageActionBar> shape Claude Code proposed is fine for F-35/F-15 (homogeneous single-field stages) but it's too narrow for F-23, and likely too narrow for some F-15 / F-35 stages too. Two adjustments before drafting:
+Lock 1: stages take a Content component, not a single field path
+interface StageDef {
+  index: number;
+  label: string;             // "إعداد المحاسب" / "اعتماد المدير التنفيذي" / "صرف الدفعة"
+  role: RoleKey;
+  /** Stage-specific input panel. Receives the form record + a draft setter
+   *  that updates the form's `data` via api.updateFormData (debounced). */
+  StageContent: React.FC<{
+    rec: FormRecord;
+    user: UserProfile;
+    api: FormsApiLike;
+    readOnly: boolean;
+  }>;
+  /** Optional gate that must return null for Approve to fire from this stage. */
+  canApprove?: () => string | null;
+}
+Reason: F-35 stage 0 (accountant prep) needs bank name + IBAN + amount + maybe a receipt upload — that's three fields plus a file uploader. A single field won't carry it. Component-per-stage stays flexible and lets the multi-stage forms each compose their own UI per stage. The shared component owns the chip strip, the role/awaitsMe gate, and the action buttons.
+Lock 2: Decline button passes through per DECLINE_ELIGIBLE_FORMS
+F-23 is decline-eligible. The MultiStageActionBar must render a Decline button at any stage if DECLINE_ELIGIBLE_FORMS.includes(rec.code) (same check FormShell uses). F-35 and F-15 are not decline-eligible — the same logic naturally suppresses Decline for them. No additional flag needed; just respect the existing registry.
+Order within Batch 8
+Claude Code's order is right:
+	1.	<MultiStageActionBar> in _shared.tsx (with the two locks above)
+	2.	F-35 first (simplest 3-stage, single instance per project)
+	3.	F-15 next (3-stage × paymentIndex 2/3/4 variants — copy/title differ by index, structure shared)
+	4.	F-23 last (2-stage, with Decline, customActions={true} on FormShell)
+For F-15 specifically: paymentIndex determines the title and the percentage shown ("الدفعة الثانية 30%" vs "الدفعة الأخيرة 10%"). Pull a small F15_LABELS[paymentIndex] constant at the top of the file — don't repeat strings.
+For F-23: the "Decline" semantic is "deny this variation, work continues without it". The decline cascade (already in DECLINE_MAP) handles notifications — no project state change. The renderer just needs the Decline button visible, and a clear UI hint to the manager about what Decline means ("سيستمر العمل بدون البنود الإضافية").
+Ship Batch 8 with the two F-14 fixes (canApprove relaxed + trigger gate relaxed to < 100) folded into the opening, same pattern as every batch so far.
+Still on plan. 16 of 22 renderers done. Six remaining: F-02 (wizard), F-07, F-15, F-23, F-35, F-52. Batch 8 brings us to 19. Then F-02 alone, then F-07 + F-52. Trajectory is clean.
+
+Claude Code Response
+
+Both Batch 7 fixes folded. The relaxed F-14 gates land cleanly because `applyCascade` was already handling `overall === 0` gracefully — so the only changes are in the renderer's validation and the trigger's `< 100` gate.
+
+While drafting `<MultiStageActionBar>` I uncovered a real gap that affects more than just the new forms — **multi-stage rejection has been silently broken** since Batch 2 for F-02, F-08, F-14, F-21 (and would be broken for F-15/F-23/F-35 the moment they ship). The Batch-2 spec said "each stage rejects back to stage 0" but `rejectForm` in App.tsx unconditionally sets `status='rejected'`. Patch below — flagging it openly because it's behavioral change to forms already in production, but per spec it's the *intended* behavior.
+
+---
+
+## Opening fixes
+
+### `src/components/forms/F14_SupervisionReport.tsx` — relax canApprove
+
+```ts
+// REPLACE the canApprove handler with this version. The zero-progress visit is now
+// a legitimate report path; engineer must explain the cause in generalNotes.
+canApprove={() => {
+  if (stageOne) {
+    if (!inspectingEngineerId) return 'يجب اختيار المهندس المنفّذ للزيارة';
+    if (!visitDate)             return 'يجب تحديد تاريخ الزيارة';
+  }
+  if (stageTwo) {
+    if (workProgress.length === 0) return 'لا توجد عناصر للمتابعة — تحقق من بيانات F-08';
+    const allZero = workProgress.every(w => w.progressPct === 0);
+    if (allZero && !generalNotes.trim()) {
+      return 'تقرير بصفر إنجاز يتطلب توضيح السبب في «ملاحظات عامة»';
+    }
+    if (requestScopeChange && !scopeChangeNotes.trim())
+      return 'يجب توضيح طلب تغيير نطاق العمل في الملاحظات';
+  }
+  return null;
+}}
+```
+
+### `src/lib/workflow.ts` — relax F-14 trigger gate
+
+```ts
+// Inside the F-14 trigger, REPLACE the auto-create gate:
+// OLD: if (overall > 0 && overall < 100) {
+if (overall < 100) {
+  const f08 = ctx.forms.find(f => f.code === 'F-08' && f.projectRefId === projectRefId);
+  const f08works = ((f08?.data as { works?: Array<{ id: string; name: string }> })?.works || [])
+    .map(w => ({ id: w.id, name: w.name }));
+  const currentVisit = Number((ctx.approvedRecord.data as { visitNumber?: number })?.visitNumber || 1);
+  const nextVisit = currentVisit + 1;
+  createForms.push({
+    code: 'F-14',
+    data: { f08_works: f08works, visitNumber: nextVisit, previousVisitProgress: overall },
+    title: `تقرير الإشراف — الزيارة ${nextVisit}`,
+  });
+}
+```
+
+### `src/App.tsx` — `rejectForm` honors multi-stage semantic
+
+```ts
+// REPLACE the rejectForm method on formsApi. Multi-stage forms (chain length > 1)
+// now reset to approvalIndex=0 and stay 'pending' so the first-stage role can re-edit.
+// Single-stage forms keep the existing bounce-to-rejected semantic.
+rejectForm: async (formId, user, note) => {
+  const rec = stateRef.current.forms.find((f) => f.id === formId);
+  if (!rec) throw new Error('Form not found');
+  if (!formAwaitsUser(rec, user)) throw new Error('Not authorized to reject');
+
+  const isMultiStage = rec.approvalChain.length > 1;
+  const approval = {
+    role: rec.approvalChain[rec.approvalIndex],
+    actorId: user.id, actorName: user.fullName,
+    at: new Date().toISOString(), decision: 'rejected' as const, note: note || '',
+  };
+
+  if (isMultiStage) {
+    // Reset to stage 0; preserve form.data (audit-correct re-edit context).
+    await updateDoc(doc(db, 'forms', formId), {
+      status: 'pending',
+      approvalIndex: 0,
+      stepStartedAt: serverTimestamp(),
+      approvals: arrayUnion(approval),
+      updatedAt: serverTimestamp(),
+    });
+
+    const firstStageRole = rec.approvalChain[0];
+    const def = ROLE_BY_KEY[firstStageRole as RoleKey];
+    const recipients = stateRef.current.users
+      .filter(u => u.status === 'active')
+      .filter(u => u.role === firstStageRole || (u.isAdmin && def?.department && u.department === def.department))
+      .map(u => u.id);
+
+    if (recipients.length) {
+      await addDoc(collection(db, 'notifications'), {
+        recipients, readBy: [],
+        text: `نموذج ${rec.code} عاد لمرحلة البداية — مراجعة من ${def?.name || firstStageRole}: ${note || 'بدون سبب محدد'}`,
+        subject: 'مراجعة متعددة المراحل',
+        type: 'multi_stage_rejected',
+        link: rec.id,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  } else {
+    // Single-stage: existing behavior.
+    await updateDoc(doc(db, 'forms', formId), {
+      status: 'rejected',
+      approvals: arrayUnion(approval),
+      updatedAt: serverTimestamp(),
+    });
+    if (rec.createdBy && rec.createdBy !== 'system') {
+      await addDoc(collection(db, 'notifications'), {
+        recipients: [rec.createdBy], readBy: [],
+        text: `نموذج ${rec.code} مرفوض للتعديل — السبب: ${note || 'بدون سبب محدد'}`,
+        subject: 'مطلوب تعديل',
+        type: 'form_rejected',
+        link: rec.id,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  }
+},
+```
+
+---
+
+## `src/components/forms/_shared.tsx` — append `<MultiStageActionBar>`
+
+```tsx
+// Add this import alongside the existing lucide imports:
+import { Check } from 'lucide-react';
+
+// Append at the bottom of _shared.tsx (after CroquisEditor + GenericFallback):
+
+export interface StageDef {
+  index: number;
+  label: string;
+  role: RoleKey;
+  /** JSX body for this stage. Parent owns state; closure-captured setters work.
+   *  MultiStageActionBar wraps this in a <fieldset disabled> so inputs lock
+   *  automatically when this stage isn't the active one. */
+  body: React.ReactNode;
+  /** Optional Approve gate for this stage. Return null to allow, string to block. */
+  canApprove?: () => string | null;
+}
+
+export interface MultiStageActionBarProps {
+  rec: FormRecord;
+  user: UserProfile;
+  api: FormsApiLike;
+  stages: StageDef[];
+}
+
+type MSMode = null | 'approve' | 'reject' | 'decline' | 'defer';
+
+export const MultiStageActionBar: React.FC<MultiStageActionBarProps> = ({ rec, user, api, stages }) => {
+  const [mode, setMode] = useState<MSMode>(null);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const awaitsMe    = formAwaitsUser(rec, user);
+  const canDecline  = DECLINE_ELIGIBLE_FORMS.includes(rec.code);
+  const currentIdx  = rec.approvalIndex;
+  const currentStage = stages.find(s => s.index === currentIdx);
+  const isPending   = rec.status === 'pending';
+  const isApproved  = rec.status === 'approved' || rec.status === 'completed';
+
+  const submit = async () => {
+    setError(null);
+    if (mode === 'approve' && currentStage?.canApprove) {
+      const err = currentStage.canApprove();
+      if (err) { setError(err); return; }
+    }
+    if ((mode === 'decline' || mode === 'reject') && !note.trim()) {
+      setError(mode === 'decline' ? 'السبب مطلوب للرفض النهائي' : 'السبب مطلوب');
+      return;
+    }
+    setBusy(true);
+    try {
+      if      (mode === 'approve') await api.approveForm(rec.id, user, note.trim());
+      else if (mode === 'reject')  await api.rejectForm (rec.id, user, note.trim());
+      else if (mode === 'decline') await api.declineForm(rec.id, user, note.trim());
+      else if (mode === 'defer')   await api.deferForm  (rec.id, user, note.trim());
+      setMode(null);
+      setNote('');
+    } catch (err) {
+      setError((err as Error).message || 'تعذّر تنفيذ العملية');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Stage chip strip */}
+      <div className="flex flex-wrap items-center gap-2">
+        {stages.map((stage, i) => {
+          const past    = currentIdx > stage.index || isApproved;
+          const active  = currentIdx === stage.index && isPending;
+          const cls = past
+            ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+            : active
+              ? 'bg-brand text-white shadow-card'
+              : 'bg-surface-down text-fg-faint';
+          return (
+            <React.Fragment key={stage.index}>
+              <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs ${cls}`}>
+                {past && <Check className="w-3 h-3" />}
+                <span className="font-medium">{stage.label}</span>
+                <span className="text-[10px] opacity-70">· {ROLE_BY_KEY[stage.role]?.name || stage.role}</span>
+              </div>
+              {i < stages.length - 1 && <span className="text-fg-faint text-xs">←</span>}
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      {/* Stage bodies — all stacked, only the active one is editable */}
+      <div className="space-y-3">
+        {stages.map(stage => {
+          const past   = currentIdx > stage.index || isApproved;
+          const active = currentIdx === stage.index && isPending;
+          const future = currentIdx < stage.index && isPending;
+          return (
+            <div
+              key={stage.index}
+              className={`rounded-lg border p-3 ${
+                active ? 'border-brand-teal bg-brand-teal/5'
+                       : past ? 'border-border-subtle bg-surface-up'
+                              : 'border-border-subtle bg-surface-up opacity-70'
+              }`}
+            >
+              <div className="flex items-center gap-2 text-sm mb-2">
+                {past && <Check className="w-4 h-4 text-green-600 dark:text-green-400" />}
+                {future && <Lock className="w-4 h-4 text-fg-faint" />}
+                <span className="font-medium text-fg">{stage.label}</span>
+                <span className="text-xs text-fg-faint">· {ROLE_BY_KEY[stage.role]?.name || stage.role}</span>
+              </div>
+              <fieldset
+                disabled={!active || !awaitsMe}
+                className="border-0 p-0 m-0 min-w-0"
+              >
+                {stage.body}
+              </fieldset>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Action buttons (only render when this user actually owns the active stage) */}
+      {isPending && awaitsMe && !mode && (
+        <div className="pt-2 flex flex-wrap gap-2">
+          <button onClick={() => setMode('approve')} className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 flex items-center gap-1.5">
+            <CheckCircle className="w-4 h-4" /> اعتماد
+          </button>
+          <button onClick={() => setMode('reject')} className="px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 flex items-center gap-1.5">
+            <XCircle className="w-4 h-4" /> إعادة لمرحلة البداية
+          </button>
+          {canDecline && (
+            <button onClick={() => setMode('decline')} className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 flex items-center gap-1.5">
+              <Ban className="w-4 h-4" /> رفض نهائي
+            </button>
+          )}
+          <button onClick={() => setMode('defer')} className="px-4 py-2 rounded-lg bg-surface-down text-fg-muted text-sm font-medium hover:bg-border-subtle flex items-center gap-1.5">
+            <Clock className="w-4 h-4" /> تأجيل
+          </button>
+        </div>
+      )}
+
+      {isPending && awaitsMe && mode && (
+        <div className="pt-2 space-y-3">
+          {mode === 'decline' && (
+            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>قرار نهائي. السبب مطلوب وسيُسجَّل في السجل الدائم.</span>
+            </div>
+          )}
+          {mode === 'reject' && (
+            <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-300">
+              عند الإرجاع، يعود النموذج لمرحلة البداية «{stages[0].label}» لإعادة المعالجة. البيانات المعبأة تُحفظ ولا تُمسح.
+            </div>
+          )}
+          <TextArea
+            label={
+              mode === 'approve' ? 'ملاحظة (اختياري)' :
+              mode === 'reject'  ? 'سبب الإرجاع (مطلوب)' :
+              mode === 'decline' ? 'سبب الرفض النهائي (مطلوب)' :
+                                   'سبب التأجيل (اختياري)'
+            }
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={3}
+            disabled={busy}
+          />
+          {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+          <div className="flex gap-2">
+            <button
+              onClick={submit} disabled={busy}
+              className={`px-4 py-2 rounded-lg text-white text-sm font-medium disabled:opacity-50 ${
+                mode === 'approve' ? 'bg-emerald-600 hover:bg-emerald-700' :
+                mode === 'reject'  ? 'bg-amber-600 hover:bg-amber-700' :
+                mode === 'decline' ? 'bg-red-600 hover:bg-red-700' :
+                                     'bg-brand hover:bg-brand-dark'
+              }`}
+            >
+              {busy ? 'جارٍ الحفظ...' : 'تأكيد'}
+            </button>
+            <button onClick={() => { setMode(null); setNote(''); setError(null); }} disabled={busy} className="px-4 py-2 rounded-lg bg-surface-down text-fg-muted text-sm hover:bg-border-subtle">
+              إلغاء
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isPending && !awaitsMe && (
+        <div className="pt-2 border-t border-border-subtle text-xs text-fg-faint flex items-center gap-2">
+          <AlertTriangle className="w-3.5 h-3.5" /> هذا النموذج بانتظار شخص آخر — يمكنك القراءة فقط.
+        </div>
+      )}
+    </div>
+  );
+};
+```
+
+---
+
+## `src/components/forms/F35_FirstPayment.tsx`
+
+```tsx
+import React, { useEffect, useState } from 'react';
+import { FormShell, MultiStageActionBar, type RendererProps, type StageDef } from './_shared';
+import { FormComments } from '../ui/FormComments';
+import { FileUploader } from '../ui/FileUploader';
+import { Input, TextArea } from '../ui';
+
+interface F35Data {
+  // Stage 0 (ACCOUNTANT prep)
+  recipientName?: string;
+  bankName?: string;
+  iban?: string;
+  paymentAmount?: number;
+  accountantNotes?: string;
+  // Stage 1 (EXEC_DIRECTOR approval)
+  execApprovalNotes?: string;
+  // Stage 2 (ACCOUNTANT disbursement)
+  transferRef?: string;
+  transferDate?: string;
+  disbursementNotes?: string;
+}
+
+export const F35Renderer: React.FC<RendererProps> = ({ rec, project, user, api }) => {
+  const data = (rec.data || {}) as F35Data;
+  const defaultAmount = project?.awardedPrice ? Math.round(project.awardedPrice * 0.30) : 0;
+
+  const [recipientName,      setRecipientName]      = useState(data.recipientName || project?.contractorName || '');
+  const [bankName,           setBankName]           = useState(data.bankName || '');
+  const [iban,               setIban]               = useState(data.iban || '');
+  const [paymentAmount,      setPaymentAmount]      = useState((data.paymentAmount ?? defaultAmount).toString());
+  const [accountantNotes,    setAccountantNotes]    = useState(data.accountantNotes || '');
+  const [execApprovalNotes,  setExecApprovalNotes]  = useState(data.execApprovalNotes || '');
+  const [transferRef,        setTransferRef]        = useState(data.transferRef || '');
+  const [transferDate,       setTransferDate]       = useState(data.transferDate || '');
+  const [disbursementNotes,  setDisbursementNotes]  = useState(data.disbursementNotes || '');
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      api.updateFormData(rec.id, {
+        recipientName, bankName, iban,
+        paymentAmount: Number(paymentAmount) || 0,
+        accountantNotes, execApprovalNotes,
+        transferRef, transferDate, disbursementNotes,
+      });
+    }, 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipientName, bankName, iban, paymentAmount, accountantNotes, execApprovalNotes, transferRef, transferDate, disbursementNotes]);
+
+  const numericAmount = Number(paymentAmount) || 0;
+
+  const stages: StageDef[] = [
+    {
+      index: 0,
+      label: 'إعداد بيانات الدفع',
+      role: 'ACCOUNTANT',
+      body: (
+        <div className="space-y-2">
+          <Input label="اسم المستفيد (المقاول)" value={recipientName} onChange={(e) => setRecipientName(e.target.value)} />
+          <Input label="اسم البنك"             value={bankName}      onChange={(e) => setBankName(e.target.value)} />
+          <Input
+            label="رقم الآيبان (IBAN)"
+            value={iban} onChange={(e) => setIban(e.target.value)}
+            dir="ltr"
+          />
+          <Input
+            label="قيمة الدفعة (ر.س)"
+            type="number" min="0"
+            value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)}
+            hint={defaultAmount ? `الافتراضي: ${defaultAmount.toLocaleString()} ر.س (30% من قيمة العقد)` : 'تعذّر حساب القيمة الافتراضية — لم يتم تحديد قيمة الترسية بعد.'}
+          />
+          <TextArea label="ملاحظات المحاسب" value={accountantNotes} onChange={(e) => setAccountantNotes(e.target.value)} rows={2} />
+        </div>
+      ),
+      canApprove: () => {
+        if (!recipientName.trim()) return 'يجب تحديد اسم المستفيد';
+        if (!bankName.trim())      return 'يجب تحديد البنك';
+        if (!iban.trim())          return 'يجب تحديد رقم الآيبان';
+        if (!numericAmount)        return 'يجب تحديد قيمة الدفعة';
+        return null;
+      },
+    },
+    {
+      index: 1,
+      label: 'اعتماد المدير التنفيذي',
+      role: 'EXEC_DIRECTOR',
+      body: (
+        <div className="space-y-2">
+          <PaymentSummary recipient={recipientName} bank={bankName} iban={iban} amount={numericAmount} />
+          <TextArea label="ملاحظات الاعتماد التنفيذي" value={execApprovalNotes} onChange={(e) => setExecApprovalNotes(e.target.value)} rows={3} />
+        </div>
+      ),
+    },
+    {
+      index: 2,
+      label: 'صرف الدفعة وتوثيق التحويل',
+      role: 'ACCOUNTANT',
+      body: (
+        <div className="space-y-2">
+          <PaymentSummary recipient={recipientName} bank={bankName} iban={iban} amount={numericAmount} />
+          <Input
+            label="رقم التحويل البنكي"
+            value={transferRef} onChange={(e) => setTransferRef(e.target.value)}
+            dir="ltr"
+          />
+          <Input label="تاريخ التحويل" type="date" value={transferDate} onChange={(e) => setTransferDate(e.target.value)} />
+          <TextArea label="ملاحظات الصرف" value={disbursementNotes} onChange={(e) => setDisbursementNotes(e.target.value)} rows={2} />
+          {rec.projectRefId && (
+            <div className="mt-2">
+              <div className="text-sm font-medium text-fg-muted mb-2">إيصال التحويل</div>
+              <FileUploader formId={rec.id} projectRefId={rec.projectRefId} user={user} files={rec.files || []} accept="image/*,application/pdf" />
+            </div>
+          )}
+        </div>
+      ),
+      canApprove: () => {
+        if (!transferRef.trim()) return 'يجب تحديد رقم التحويل البنكي';
+        if (!transferDate)       return 'يجب تحديد تاريخ التحويل';
+        return null;
+      },
+    },
+  ];
+
+  return (
+    <FormShell rec={rec} project={project} user={user} api={api} customActions>
+      <div className="space-y-4">
+        <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
+          طلب الدفعة الأولى (30% من قيمة العقد). الدفعة تمرّ بثلاث مراحل: إعداد المحاسب، اعتماد المدير التنفيذي، ثم الصرف وتوثيق التحويل.
+        </div>
+        <MultiStageActionBar rec={rec} user={user} api={api} stages={stages} />
+      </div>
+      <FormComments formId={rec.id} user={user} />
+    </FormShell>
+  );
+};
+
+// Shared inside this file; F-15 has its own copy to avoid extra _shared churn.
+const PaymentSummary: React.FC<{ recipient: string; bank: string; iban: string; amount: number }> = ({
+  recipient, bank, iban, amount,
+}) => (
+  <div className="p-3 rounded-lg bg-surface-down border border-border-subtle space-y-1.5 text-sm">
+    <div className="flex justify-between gap-2"><span className="text-fg-muted">المستفيد:</span><span className="text-fg font-medium truncate">{recipient || '—'}</span></div>
+    <div className="flex justify-between gap-2"><span className="text-fg-muted">البنك:</span><span className="text-fg truncate">{bank || '—'}</span></div>
+    <div className="flex justify-between gap-2"><span className="text-fg-muted">IBAN:</span><span className="text-fg font-mono text-xs truncate" dir="ltr">{iban || '—'}</span></div>
+    <div className="flex justify-between gap-2"><span className="text-fg-muted">القيمة:</span><span className="text-fg font-bold">{amount.toLocaleString()} ر.س</span></div>
+  </div>
+);
+```
+
+## `src/components/forms/F15_InstallmentPayment.tsx`
+
+```tsx
+import React, { useEffect, useState } from 'react';
+import { FormShell, MultiStageActionBar, type RendererProps, type StageDef } from './_shared';
+import { FormComments } from '../ui/FormComments';
+import { FileUploader } from '../ui/FileUploader';
+import { Input, TextArea } from '../ui';
+
+interface F15Data {
+  paymentIndex?: 2 | 3 | 4;
+  // Stage 0
+  recipientName?: string;
+  bankName?: string;
+  iban?: string;
+  paymentAmount?: number;
+  accountantNotes?: string;
+  // Stage 1
+  execApprovalNotes?: string;
+  // Stage 2
+  transferRef?: string;
+  transferDate?: string;
+  disbursementNotes?: string;
+}
+
+const F15_LABELS: Record<number, { title: string; percentText: string; percent: number; tone: string }> = {
+  2: { title: 'طلب الدفعة الثانية',   percentText: '30%', percent: 0.30, tone: 'الثانية' },
+  3: { title: 'طلب الدفعة الثالثة',   percentText: '30%', percent: 0.30, tone: 'الثالثة' },
+  4: { title: 'طلب الدفعة الأخيرة',   percentText: '10%', percent: 0.10, tone: 'الأخيرة' },
+};
+
+export const F15Renderer: React.FC<RendererProps> = ({ rec, project, user, api }) => {
+  const data = (rec.data || {}) as F15Data;
+  const idx = (data.paymentIndex ?? 2) as 2 | 3 | 4;
+  const meta = F15_LABELS[idx] || F15_LABELS[2];
+  const defaultAmount = project?.awardedPrice ? Math.round(project.awardedPrice * meta.percent) : 0;
+
+  const [recipientName,      setRecipientName]      = useState(data.recipientName || project?.contractorName || '');
+  const [bankName,           setBankName]           = useState(data.bankName || '');
+  const [iban,               setIban]               = useState(data.iban || '');
+  const [paymentAmount,      setPaymentAmount]      = useState((data.paymentAmount ?? defaultAmount).toString());
+  const [accountantNotes,    setAccountantNotes]    = useState(data.accountantNotes || '');
+  const [execApprovalNotes,  setExecApprovalNotes]  = useState(data.execApprovalNotes || '');
+  const [transferRef,        setTransferRef]        = useState(data.transferRef || '');
+  const [transferDate,       setTransferDate]       = useState(data.transferDate || '');
+  const [disbursementNotes,  setDisbursementNotes]  = useState(data.disbursementNotes || '');
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      api.updateFormData(rec.id, {
+        recipientName, bankName, iban,
+        paymentAmount: Number(paymentAmount) || 0,
+        accountantNotes, execApprovalNotes,
+        transferRef, transferDate, disbursementNotes,
+      });
+    }, 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipientName, bankName, iban, paymentAmount, accountantNotes, execApprovalNotes, transferRef, transferDate, disbursementNotes]);
+
+  const numericAmount = Number(paymentAmount) || 0;
+
+  const stages: StageDef[] = [
+    {
+      index: 0,
+      label: `إعداد ${meta.tone}`,
+      role: 'ACCOUNTANT',
+      body: (
+        <div className="space-y-2">
+          <Input label="اسم المستفيد (المقاول)" value={recipientName} onChange={(e) => setRecipientName(e.target.value)} />
+          <Input label="اسم البنك"             value={bankName}      onChange={(e) => setBankName(e.target.value)} />
+          <Input label="رقم الآيبان (IBAN)" value={iban} onChange={(e) => setIban(e.target.value)} dir="ltr" />
+          <Input
+            label="قيمة الدفعة (ر.س)" type="number" min="0"
+            value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)}
+            hint={defaultAmount ? `الافتراضي: ${defaultAmount.toLocaleString()} ر.س (${meta.percentText} من قيمة العقد)` : undefined}
+          />
+          <TextArea label="ملاحظات المحاسب" value={accountantNotes} onChange={(e) => setAccountantNotes(e.target.value)} rows={2} />
+        </div>
+      ),
+      canApprove: () => {
+        if (!recipientName.trim()) return 'يجب تحديد اسم المستفيد';
+        if (!bankName.trim())      return 'يجب تحديد البنك';
+        if (!iban.trim())          return 'يجب تحديد رقم الآيبان';
+        if (!numericAmount)        return 'يجب تحديد قيمة الدفعة';
+        return null;
+      },
+    },
+    {
+      index: 1,
+      label: 'اعتماد المدير التنفيذي',
+      role: 'EXEC_DIRECTOR',
+      body: (
+        <div className="space-y-2">
+          <Summary recipient={recipientName} bank={bankName} iban={iban} amount={numericAmount} />
+          <TextArea label="ملاحظات الاعتماد التنفيذي" value={execApprovalNotes} onChange={(e) => setExecApprovalNotes(e.target.value)} rows={3} />
+        </div>
+      ),
+    },
+    {
+      index: 2,
+      label: 'صرف الدفعة',
+      role: 'ACCOUNTANT',
+      body: (
+        <div className="space-y-2">
+          <Summary recipient={recipientName} bank={bankName} iban={iban} amount={numericAmount} />
+          <Input label="رقم التحويل البنكي" value={transferRef} onChange={(e) => setTransferRef(e.target.value)} dir="ltr" />
+          <Input label="تاريخ التحويل" type="date" value={transferDate} onChange={(e) => setTransferDate(e.target.value)} />
+          <TextArea label="ملاحظات الصرف" value={disbursementNotes} onChange={(e) => setDisbursementNotes(e.target.value)} rows={2} />
+          {rec.projectRefId && (
+            <div className="mt-2">
+              <div className="text-sm font-medium text-fg-muted mb-2">إيصال التحويل</div>
+              <FileUploader formId={rec.id} projectRefId={rec.projectRefId} user={user} files={rec.files || []} accept="image/*,application/pdf" />
+            </div>
+          )}
+        </div>
+      ),
+      canApprove: () => {
+        if (!transferRef.trim()) return 'يجب تحديد رقم التحويل البنكي';
+        if (!transferDate)       return 'يجب تحديد تاريخ التحويل';
+        return null;
+      },
+    },
+  ];
+
+  return (
+    <FormShell rec={rec} project={project} user={user} api={api} customActions>
+      <div className="space-y-4">
+        <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-700 dark:text-emerald-300">
+          {meta.title} ({meta.percentText} من قيمة العقد). متولّدة آلياً من تقرير الإشراف عند بلوغ نسبة الإنجاز المطلوبة.
+          {idx === 4 && ' عند اعتماد هذه الدفعة، ينتقل المشروع لمرحلة التسليم آلياً.'}
+        </div>
+        <MultiStageActionBar rec={rec} user={user} api={api} stages={stages} />
+      </div>
+      <FormComments formId={rec.id} user={user} />
+    </FormShell>
+  );
+};
+
+const Summary: React.FC<{ recipient: string; bank: string; iban: string; amount: number }> = ({
+  recipient, bank, iban, amount,
+}) => (
+  <div className="p-3 rounded-lg bg-surface-down border border-border-subtle space-y-1.5 text-sm">
+    <div className="flex justify-between gap-2"><span className="text-fg-muted">المستفيد:</span><span className="text-fg font-medium truncate">{recipient || '—'}</span></div>
+    <div className="flex justify-between gap-2"><span className="text-fg-muted">البنك:</span><span className="text-fg truncate">{bank || '—'}</span></div>
+    <div className="flex justify-between gap-2"><span className="text-fg-muted">IBAN:</span><span className="text-fg font-mono text-xs truncate" dir="ltr">{iban || '—'}</span></div>
+    <div className="flex justify-between gap-2"><span className="text-fg-muted">القيمة:</span><span className="text-fg font-bold">{amount.toLocaleString()} ر.س</span></div>
+  </div>
+);
+```
+
+## `src/components/forms/F23_AdditionalWorks.tsx`
+
+```tsx
+import React, { useEffect, useState } from 'react';
+import { Plus, X } from 'lucide-react';
+import { FormShell, MultiStageActionBar, type RendererProps, type StageDef } from './_shared';
+import { FormComments } from '../ui/FormComments';
+import { TextArea } from '../ui';
+
+interface VariationItem {
+  id: string;
+  name: string;
+  quantity: number;
+  unit?: string;
+  estCost: number;
+}
+
+interface F23Data {
+  itemsList?: VariationItem[];
+  variationReason?: string;
+  triggeredByF14?: string;
+  managerNotes?: string;
+  execNotes?: string;
+}
+
+export const F23Renderer: React.FC<RendererProps> = ({ rec, project, user, api }) => {
+  const data = (rec.data || {}) as F23Data;
+  const [items,            setItems]            = useState<VariationItem[]>(data.itemsList || []);
+  const [variationReason,  setVariationReason]  = useState(data.variationReason || '');
+  const [managerNotes,     setManagerNotes]     = useState(data.managerNotes || '');
+  const [execNotes,        setExecNotes]        = useState(data.execNotes || '');
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      api.updateFormData(rec.id, { itemsList: items, variationReason, managerNotes, execNotes });
+    }, 700);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, variationReason, managerNotes, execNotes]);
+
+  const addItem    = () => setItems(xs => [...xs, { id: `v${Date.now()}`, name: '', quantity: 1, unit: '', estCost: 0 }]);
+  const updateItem = (id: string, patch: Partial<VariationItem>) => setItems(xs => xs.map(x => x.id === id ? { ...x, ...patch } : x));
+  const removeItem = (id: string) => setItems(xs => xs.filter(x => x.id !== id));
+
+  const totalCost = items.reduce((s, x) => s + ((x.estCost || 0) * (x.quantity || 0)), 0);
+  const awardedPrice = project?.awardedPrice || 0;
+  const pctOfContract = awardedPrice ? Math.round((totalCost / awardedPrice) * 100) : 0;
+
+  const stages: StageDef[] = [
+    {
+      index: 0,
+      label: 'إعداد طلب التغيير',
+      role: 'PROJECTS_MANAGER',
+      body: (
+        <div className="space-y-3">
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-medium text-fg">البنود الإضافية المطلوبة</h4>
+              <button onClick={addItem} className="text-xs text-brand-teal hover:underline flex items-center gap-1">
+                <Plus className="w-3 h-3" /> إضافة بند
+              </button>
+            </div>
+            {items.length === 0 ? (
+              <p className="text-xs text-fg-faint p-3 text-center rounded-lg bg-surface-down">لم تتم إضافة بنود بعد.</p>
+            ) : (
+              <div className="space-y-2">
+                {items.map(item => (
+                  <div key={item.id} className="flex flex-wrap items-center gap-2 p-2 rounded-lg bg-surface-down">
+                    <input
+                      type="text" value={item.name}
+                      onChange={(e) => updateItem(item.id, { name: e.target.value })}
+                      placeholder="اسم البند"
+                      className="flex-1 min-w-[120px] px-3 py-1.5 rounded border border-border-default bg-input-bg text-fg text-sm focus:outline-none focus:ring-1 focus:ring-brand-teal"
+                    />
+                    <input
+                      type="number" min="0" value={item.quantity}
+                      onChange={(e) => updateItem(item.id, { quantity: Number(e.target.value) || 0 })}
+                      placeholder="الكمية"
+                      className="w-20 px-3 py-1.5 rounded border border-border-default bg-input-bg text-fg text-sm text-center focus:outline-none focus:ring-1 focus:ring-brand-teal"
+                    />
+                    <input
+                      type="text" value={item.unit || ''}
+                      onChange={(e) => updateItem(item.id, { unit: e.target.value })}
+                      placeholder="وحدة"
+                      className="w-16 px-3 py-1.5 rounded border border-border-default bg-input-bg text-fg text-sm focus:outline-none focus:ring-1 focus:ring-brand-teal"
+                    />
+                    <input
+                      type="number" min="0" value={item.estCost}
+                      onChange={(e) => updateItem(item.id, { estCost: Number(e.target.value) || 0 })}
+                      placeholder="سعر/وحدة (ر.س)"
+                      className="w-28 px-3 py-1.5 rounded border border-border-default bg-input-bg text-fg text-sm text-center focus:outline-none focus:ring-1 focus:ring-brand-teal"
+                    />
+                    <button onClick={() => removeItem(item.id)} aria-label="إزالة" className="p-1.5 rounded text-fg-muted hover:bg-border-subtle">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {items.length > 0 && (
+            <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-xs flex items-center justify-between">
+              <span className="text-amber-700 dark:text-amber-300">إجمالي التكلفة التقديرية</span>
+              <span className="text-amber-900 dark:text-amber-200 font-bold">
+                {totalCost.toLocaleString()} ر.س
+                {awardedPrice > 0 && <span className="text-amber-700 dark:text-amber-400 font-normal text-[11px] mr-1">· {pctOfContract}% من قيمة العقد</span>}
+              </span>
+            </div>
+          )}
+          <TextArea
+            label="سبب طلب التغيير"
+            value={variationReason}
+            onChange={(e) => setVariationReason(e.target.value)}
+            rows={3}
+            hint="السياق الفني، تأثير الإغفال، تقدير المخاطر، ضرورة العاجلة."
+          />
+          <TextArea label="ملاحظات رئيس قسم المشاريع" value={managerNotes} onChange={(e) => setManagerNotes(e.target.value)} rows={2} />
+        </div>
+      ),
+      canApprove: () => {
+        if (items.length === 0)              return 'يجب إضافة بند واحد على الأقل';
+        if (!variationReason.trim())         return 'يجب توضيح سبب التغيير';
+        if (items.some(x => !x.name.trim())) return 'يجب تسمية جميع البنود';
+        return null;
+      },
+    },
+    {
+      index: 1,
+      label: 'اعتماد المدير التنفيذي',
+      role: 'EXEC_DIRECTOR',
+      body: (
+        <div className="space-y-3">
+          <div className="p-3 rounded-lg bg-surface-down border border-border-subtle space-y-2 text-sm">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="font-medium text-fg">قائمة البنود</span>
+              <span className="text-xs text-fg-faint">{items.length} بنود · {totalCost.toLocaleString()} ر.س</span>
+            </div>
+            {items.length === 0 ? (
+              <p className="text-xs text-fg-faint">لا توجد بنود مدرجة.</p>
+            ) : (
+              <ul className="divide-y divide-border-subtle text-xs">
+                {items.map(item => (
+                  <li key={item.id} className="py-1.5 flex items-center justify-between gap-2">
+                    <span className="text-fg truncate">{item.name || '(بدون اسم)'}</span>
+                    <span className="text-fg-muted shrink-0">
+                      {item.quantity}{item.unit ? ` ${item.unit}` : ''} × {item.estCost.toLocaleString()} = {(item.quantity * item.estCost).toLocaleString()} ر.س
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {variationReason && (
+              <div className="pt-2 border-t border-border-subtle">
+                <div className="text-xs font-medium text-fg-muted mb-1">السبب</div>
+                <p className="text-fg whitespace-pre-line">{variationReason}</p>
+              </div>
+            )}
+          </div>
+          <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300 space-y-1">
+            <div><strong>اعتماد</strong> → تُضاف البنود الإضافية رسمياً للمشروع.</div>
+            <div><strong>إعادة لمرحلة البداية</strong> → يعود الطلب لرئيس قسم المشاريع للتعديل (مثلاً: تعديل التسعير).</div>
+            <div><strong>رفض نهائي</strong> → يُرفض طلب التغيير، ويستمر العمل بدون البنود الإضافية. لا يُغلق المشروع.</div>
+          </div>
+          <TextArea label="ملاحظات المدير التنفيذي" value={execNotes} onChange={(e) => setExecNotes(e.target.value)} rows={3} />
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <FormShell rec={rec} project={project} user={user} api={api} customActions>
+      <div className="space-y-4">
+        <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-300">
+          اعتماد بنود أعمال إضافية خارج نطاق كراسة التشخيص الأصلية.
+          {data.triggeredByF14 && ' (مولّد آلياً من تقرير إشراف F-14).'}
+        </div>
+        <MultiStageActionBar rec={rec} user={user} api={api} stages={stages} />
+      </div>
+      <FormComments formId={rec.id} user={user} />
+    </FormShell>
+  );
+};
+```
+
+### `src/components/forms/index.ts` — three new registrations
+
+```ts
+import type { FormCode } from '../../lib/data';
+import type { Renderer } from './_shared';
+import { F03Renderer }  from './F03_ResearchApproval';
+import { F031Renderer } from './F03_1_ExecApproval';
+import { F032Renderer } from './F03_2_FinalTransfer';
+import { F04Renderer }  from './F04_AssignDiagnosisEngineer';
+import { F08Renderer }  from './F08_DiagnosisBinder';
+import { F14Renderer }  from './F14_SupervisionReport';
+import { F15Renderer }  from './F15_InstallmentPayment';
+import { F18Renderer }  from './F18_EvacuationPledge';
+import { F19Renderer }  from './F19_InternalSupply';
+import { F20Renderer }  from './F20_MaterialSupply';
+import { F21Renderer }  from './F21_FurnitureInventory';
+import { F22Renderer }  from './F22_AltHousing';
+import { F23Renderer }  from './F23_AdditionalWorks';
+import { F32Renderer }  from './F32_AssignSupervisor';
+import { F33Renderer }  from './F33_StartDocumentation';
+import { F34Renderer }  from './F34_MaterialTransfer';
+import { F35Renderer }  from './F35_FirstPayment';
+import { F84Renderer }  from './F84_ContractorPricing';
+import { F85Renderer }  from './F85_TenderingAward';
+
+export const RENDERERS: Partial<Record<FormCode, Renderer>> = {
+  'F-03':   F03Renderer,
+  'F-03.1': F031Renderer,
+  'F-03.2': F032Renderer,
+  'F-04':   F04Renderer,
+  'F-08':   F08Renderer,
+  'F-14':   F14Renderer,
+  'F-15':   F15Renderer,
+  'F-18':   F18Renderer,
+  'F-19':   F19Renderer,
+  'F-20':   F20Renderer,
+  'F-21':   F21Renderer,
+  'F-22':   F22Renderer,
+  'F-23':   F23Renderer,
+  'F-32':   F32Renderer,
+  'F-33':   F33Renderer,
+  'F-34':   F34Renderer,
+  'F-35':   F35Renderer,
+  'F-84':   F84Renderer,
+  'F-85':   F85Renderer,
+  // Remaining: F-02 (wizard), F-07, F-52
+};
+
+export { GenericFallback } from './_shared';
+export type { Renderer } from './_shared';
+```
+
+---
+
+## Notes worth flagging
+
+1. **Multi-stage rejection is a behavioral change to live forms.** F-02, F-08, F-14, F-21 already exist with the old "rejection = status:'rejected'" semantic. After the App.tsx patch, any future rejection on those forms goes to "back to stage 0, status:'pending'" instead. Any forms currently sitting in `status:'rejected'` from prior rejections are unaffected — they stay rejected until an admin manually clears them. Worth noting in your release comms.
+
+2. **`<MultiStageActionBar>` `body` is JSX, not an FC.** Closure-captured state from the parent renderer makes autosave and `canApprove()` straightforward — no prop drilling, no re-mount issues. The fieldset wrapping inside the bar gates editability per stage automatically. If you ever need stage-isolated state (rare), wrap that stage's body in its own small component declared at file top.
+
+3. **Decline button only shows on F-23.** The `DECLINE_ELIGIBLE_FORMS` registry already gates it correctly — F-15 and F-35 inherit the right behavior automatically (no Decline button). F-23's decline cascade (notify originator + supervising engineer, no project state change) was wired in Batch 5.
+
+4. **F-15 `paymentIndex` defaults to 2 if missing.** F-14 trigger always sets it on auto-create, but defensive default keeps the renderer from crashing if a record is corrupt. Same defensive pattern as other renderers with required props.
+
+5. **`PaymentSummary` is duplicated between F-15 and F-35.** Intentional — they're the only two consumers, the component is 12 lines, and adding it to `_shared.tsx` would inflate the shared module for negligible gain. If a third payment form ever lands, extract then.
+
+## Batch 9 preview — F-02 wizard alone
+
+The big one. 4-step beneficiary intake (شخصية → دخل وديون → الأسرة والسكن → الباحث والمرفقات), and on submit a single `writeBatch` that creates:
+- 1 project doc (`projects/{newId}`)
+- 1 counter increment (`counters/projectSerial` for the TRM-YYYY-NNN id)
+- 22 form docs (the whole pipeline, all status='draft' except F-02 which is 'pending' at approvalIndex=1 since the researcher already self-completed stage 0)
+
+Risk areas:
+- **Counter increment** needs `runTransaction` so two researchers creating simultaneously don't collide on the same serial.
+- **Field count** — F-02 captures ~60 fields per spec (personal, work, income, debts, family, housing, researcher, manager, documents, pledge). Wizard step navigation + validation + autosave-draft + final commit is non-trivial.
+- **Initial F-08 / etc. drafts** need correct `code`, `approvalChain`, `ownerDept` per FORMS dictionary — pulled from `data.ts`, single source.
+
+Plan: ship `F02_SocialResearch.tsx` (creator + renderer in one) + the project-creation logic in `src/lib/createProject.ts`. Then Batch 10 closes out F-07 + F-52.
+
+Confirm or shuffle.
+
+Claude Project Plan:
+
+Batch 8 is strong — three multi-stage renderers, the shared <MultiStageActionBar> extracted cleanly, both Batch-7 fixes folded, and Claude Code caught a real bug that was lurking since Batch 2.
+One must-fix UX gating issue, two should-fix items, and an honored checklist with a bonus catch.
+
+🟢 The multi-stage rejection fix — confirmed correct
+This was hiding in plain sight for five batches. The spec said "reject sends back to stage 0" but rejectFormunconditionally wrote status='rejected'. Every multi-stage form (F-02, F-08, F-14, F-21, F-23, F-15, F-35) would have silently bounced into a dead-end state on any rejection.
+The patch is the right shape:
+	•	chain.length > 1 → reset to approvalIndex=0, status='pending', preserve data, log the rejection in approvals[], notify the stage-0 role
+	•	chain.length === 1 → keep the old single-stage bounce semantic (the original-author resubmit path)
+One refinement to consider but not block on: when rec.assigneeId is set (F-08, F-14 second stage, etc.), notify the specific assignee rather than broadcasting to every role-holder. The role-fallback only fires when there's no assignee. Two-line change:
+let recipients: string[];
+if (rec.assigneeId) {
+  recipients = [rec.assigneeId];
+} else {
+  recipients = stateRef.current.users.filter(...).map(u => u.id);
+}
+For F-08 specifically — where one engineer was assigned and others shouldn't be pinged for a rejection that isn't theirs — this matters. Add it to Batch 9's opening fixes.
+
+🔴 Must fix in Batch 9 opening: FileUploader bypasses <fieldset disabled> inside stage bodies
+MultiStageActionBar wraps each stage's body in <fieldset disabled={!active || !awaitsMe}>. This correctly locks <input>, <select>, <textarea>, <button> elements via the HTML spec. But FileUploader's drag-and-drop handler is on a <label> — <fieldset disabled> does not propagate to label-level event handlers per the HTML spec. A user viewing F-35 stage 2 as a past stage (or as a non-awaitee) can still drag a receipt into the uploader.
+Three options:
+(a) Add a stageActive context. Create React.createContext<{ active: boolean; awaitsMe: boolean }> in _shared.tsx, provide it from MultiStageActionBar per-stage, and have FileUploader consume it.
+(b) Pass disabled explicitly at every FileUploader call site inside stage bodies. Renderers need to know which stage they're in. The closure-captured pattern doesn't trivially give them that.
+(c) Have FileUploader check its parent <fieldset> via a ref. Hacky.
+Pick (a). It generalizes — any "drag-drop / pointer / portal" component inside future stages gets stage-gating for free. Patch:
+// _shared.tsx — add near the top, alongside other exports:
+export const StageGateContext = React.createContext<{ active: boolean; awaitsMe: boolean }>({
+  active: true,
+  awaitsMe: true,
+});
+
+// Inside MultiStageActionBar, wrap each stage body:
+<StageGateContext.Provider value={{ active, awaitsMe }}>
+  <fieldset disabled={!active || !awaitsMe} className="border-0 p-0 m-0 min-w-0">
+    {stage.body}
+  </fieldset>
+</StageGateContext.Provider>
+Then FileUploader reads the context and ORs into its disabled prop:
+// FileUploader.tsx
+import { StageGateContext } from '../forms/_shared';
+// ...
+const stageGate = useContext(StageGateContext);
+const effectivelyDisabled = disabled || (!stageGate.active || !stageGate.awaitsMe);
+When FileUploader is used outside a multi-stage form (the default context values { active: true, awaitsMe: true }apply), behavior is unchanged. Inside MultiStageActionBar, drag-drop is gated correctly.
+
+🟡 Should fix in Batch 9
+1. F-23 variation cost warning
+Currently displays pctOfContract as plain text. Standard engineering practice flags variation orders > 15–20% of the contract as needing higher scrutiny (sometimes a separate board approval). Add a soft warning when the total crosses a threshold:
+{awardedPrice > 0 && pctOfContract >= 20 && (
+  <div className="p-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-800 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
+    <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+    <span>التغيير يتجاوز 20% من قيمة العقد — قد يستدعي مراجعة إضافية من المدير التنفيذي.</span>
+  </div>
+)}
+Doesn't block, just informs.
+2. The Reject label inconsistency between FormShell and MultiStageActionBar
+FormShell calls it "إعادة للتعديل" (return for editing). MultiStageActionBar calls it "إعادة لمرحلة البداية" (return to start). Both are accurate for their context — single-stage forms genuinely go back to the originator for re-edit, multi-stage forms go back to chain-index-0. But the user sees different labels for the same button on different forms.
+Could be argued either way:
+	•	Keep different labels — they describe genuinely different semantics
+	•	Unify to "إعادة للتعديل" — simpler vocabulary, the destination is implementation detail
+Soft pick: keep different. The multi-stage label is more honest about what happens. Document it in user training.
+3. F-35 / F-15 reuse of PaymentSummary and the bank info
+Both forms duplicate PaymentSummary and basically the same input shape for stages 0 and 2. Acceptable per Claude Code's note (12 lines, two consumers, no third coming). But if a fourth payment form ever shows up — F-23 if you decide variations need separate disbursement, for instance — extract immediately. Add a // TODO: extract if third consumer appears comment at the top of each PaymentSummary so the next dev finds the pattern.
+
+Honored from Batch 7 review ✅
+Item	Status
+F-14 canApprove relaxed (allZero requires generalNotes, no false-update lying)	✅
+F-14 trigger gate < 100 (no zero-progress dead-end)	✅
+<MultiStageActionBar> extracted with StageDef.body as React.ReactNode	✅
+StageDef.canApprove per-stage gate	✅
+DECLINE_ELIGIBLE_FORMS controls Decline visibility (F-23 yes, F-15/F-35 no)	✅
+Each multi-stage renderer uses customActions={true} on FormShell	✅
+F-35 defaults amount to 30% of project.awardedPrice	✅
+F-15 paymentIndex 2/3/4 variants via F15_LABELS dictionary	✅
+F-23 cost rollup with pctOfContract shown contextually	✅
+F-23 explainer in stage 1 differentiates Reject vs Decline	✅
+Bonus: multi-stage rejection bug fix in rejectForm	✅ huge catch
+Batch 9 — F-02 wizard greenlit, three specifics
+This is the single biggest renderer in the app — it's also the only "creator" form (it creates the entire project pipeline, not just itself). Three things to lock in before Claude Code drafts:
+Lock 1: project + counter increment + 22 forms in a single runTransaction
+Not writeBatch. Counter reads must happen in a transaction or two researchers submitting within seconds collide on TRM-2026-007. Single transaction:
+await runTransaction(db, async (tx) => {
+  // 1. Read + increment the counter
+  const counterRef = doc(db, 'counters', 'projectSerial');
+  const counterSnap = await tx.get(counterRef);
+  const nextSerial = (counterSnap.exists() ? counterSnap.data().value : 0) + 1;
+  tx.set(counterRef, { value: nextSerial }, { merge: true });
+
+  // 2. Build the projectId
+  const year = new Date().getFullYear();
+  const projectId = `TRM-${year}-${String(nextSerial).padStart(3, '0')}`;
+
+  // 3. Create the project doc
+  const projectRef = doc(collection(db, 'projects'));
+  tx.set(projectRef, { projectId, /* ...beneficiary fields... */, phase: 'RESEARCH', status: 'active', archived: false, progressPct: 5, createdAt: serverTimestamp() });
+
+  // 4. Create 22 form docs
+  // F-02 is the only one at status='pending', approvalIndex=1 (researcher self-completed stage 0).
+  // All others: status='draft', approvalIndex=0.
+  for (const formCode of ALL_FORM_CODES) {
+    const def = FORM_BY_CODE[formCode];
+    const formRef = doc(collection(db, 'forms'));
+    tx.set(formRef, {
+      code: formCode,
+      title: def.title,
+      projectId, projectRefId: projectRef.id,
+      beneficiaryName: /* from wizard */,
+      status: formCode === 'F-02' ? 'pending' : 'draft',
+      approvalIndex: formCode === 'F-02' ? 1 : 0,
+      approvalChain: def.approvalChain,
+      approvals: [],
+      // ... etc
+    });
+  }
+});
+Firestore transaction limit is 500 writes — 1 counter + 1 project + 22 forms = 24 writes. Fine.
+Put this in src/lib/createProject.ts (new file). The wizard component imports and calls it.
+Lock 2: Draft preservation in localStorage
+tarmeem.draft.f02.{userId} — auto-save every field change. On successful submit, clear the draft. On wizard open, prompt to resume if a draft exists. Mid-wizard navigation away (sidebar tab change, browser back) preserves; deliberate "إلغاء" clears.
+Researcher could be in the field with patchy network, half-fill the wizard, lose connection, come back later. Don't force them to re-enter 60 fields.
+Lock 3: F-02 wizard is launchable from three places
+	•	Home dashboard "إنشاء حالة جديدة" CTA (SOCIAL_RESEARCHER + admin only)
+	•	Projects page floating-action button (mobile)
+	•	Forms page "+ نموذج جديد" → only F-02 is offerable for the wizard path
+All three open the same wizard. Same launcher component. Don't duplicate the trigger UI.
+Implementation order within Batch 9
+	1.	src/lib/createProject.ts — the transaction logic + types
+	2.	src/components/forms/F02_SocialResearch.tsx — 4-step wizard:
+	•	Step 1: شخصية (16 fields)
+	•	Step 2: الدخل والديون (10 fields)
+	•	Step 3: الأسرة والسكن (12 fields)
+	•	Step 4: الباحث والمرفقات + تعهد + إرسال (~10 fields + FileUploader for beneficiary documents) Per-step validation, draft autosave, final submit → createProject → close wizard → navigate to the new project
+	3.	Update forms/index.ts — register F02Renderer (which renders the wizard for status='pending' engineer-stage, and a read-only summary for downstream views)
+	4.	Mount the wizard launcher in Home / Projects / Forms — 3 entry points, single modal
+F-02 is a creator form, so its renderer is fundamentally different from the others. Same <FormShell> chrome when viewing an existing F-02 record post-submit, but the create flow is a wizard, not an inline form. Handle both view modes in the same file.
+
+Trajectory
+19 of 22 renderers shipped. After Batch 9 → 20. Batch 10 (F-07 + F-52) → 22. Then it's:
+	•	ProjectActionsMenu + ReassignFormsModal + BottomSheet primitive
+	•	Dashboard 2.0 (6 MVP widgets)
+	•	Pages rewrites (Home / Projects / Departments / EmployeeProfile / Admin)
+	•	Settings page, Cmd+K palette
+	•	F-07 PDF export (@react-pdf/renderer)
+	•	firestore.rules
+	•	Smoke tests (workflow / rbac / sla)
+Ship Batch 9 with the FileUploader StageGateContext fix folded in alongside the assignee-specific rejection notification. We are roughly 50% through total work. Trajectory is clean. No drift.
+
+
+Claude Code Response:
+
+Both opening fixes folded. The `<StageGateContext>` pattern generalizes — any future drag/portal/gesture primitive inside a multi-stage form gets stage-gating for free without renderer plumbing. While building the F-02 wizard I also caught that F-02 → F-03 was missing the same `managerNotes`/`eligibilityVerdict` propagation that F-03 → F-03.1 has, so adding that too.
+
+---
+
+## Opening fixes
+
+### `src/App.tsx` — `rejectForm` notifies the specific assignee when set
+
+```ts
+// Inside the multi-stage branch of rejectForm, REPLACE the recipient computation:
+const firstStageRole = rec.approvalChain[0];
+const def = ROLE_BY_KEY[firstStageRole as RoleKey];
+
+// Prefer the specific assignee (F-08, F-14 second stage, etc.) over a broadcast.
+let recipients: string[];
+if (rec.assigneeId) {
+  recipients = [rec.assigneeId];
+} else {
+  recipients = stateRef.current.users
+    .filter(u => u.status === 'active')
+    .filter(u => u.role === firstStageRole || (u.isAdmin && def?.department && u.department === def.department))
+    .map(u => u.id);
+}
+
+if (recipients.length) {
+  await addDoc(collection(db, 'notifications'), {
+    recipients, readBy: [],
+    text: `نموذج ${rec.code} عاد لمرحلة البداية — مراجعة من ${def?.name || firstStageRole}: ${note || 'بدون سبب محدد'}`,
+    subject: 'مراجعة متعددة المراحل',
+    type: 'multi_stage_rejected',
+    link: rec.id,
+    createdAt: new Date().toISOString(),
+  });
+}
+```
+
+### `src/components/forms/_shared.tsx` — add `StageGateContext`
+
+```tsx
+// (1) Add this export near the top of _shared.tsx, alongside FormsApiLike etc.:
+export const StageGateContext = React.createContext<{ active: boolean; awaitsMe: boolean }>({
+  active: true,
+  awaitsMe: true,
+});
+
+// (2) Inside MultiStageActionBar's stage-bodies loop, REPLACE the existing
+//     <fieldset> wrapper with a Provider + fieldset:
+{stages.map(stage => {
+  const past   = currentIdx > stage.index || isApproved;
+  const active = currentIdx === stage.index && isPending;
+  const future = currentIdx < stage.index && isPending;
+  return (
+    <div
+      key={stage.index}
+      className={`rounded-lg border p-3 ${
+        active ? 'border-brand-teal bg-brand-teal/5'
+               : past ? 'border-border-subtle bg-surface-up'
+                      : 'border-border-subtle bg-surface-up opacity-70'
+      }`}
+    >
+      <div className="flex items-center gap-2 text-sm mb-2">
+        {past && <Check className="w-4 h-4 text-green-600 dark:text-green-400" />}
+        {future && <Lock className="w-4 h-4 text-fg-faint" />}
+        <span className="font-medium text-fg">{stage.label}</span>
+        <span className="text-xs text-fg-faint">· {ROLE_BY_KEY[stage.role]?.name || stage.role}</span>
+      </div>
+      <StageGateContext.Provider value={{ active, awaitsMe }}>
+        <fieldset disabled={!active || !awaitsMe} className="border-0 p-0 m-0 min-w-0">
+          {stage.body}
+        </fieldset>
+      </StageGateContext.Provider>
+    </div>
+  );
+})}
+```
+
+### `src/components/ui/FileUploader.tsx` — consume `StageGateContext`
+
+```tsx
+// (1) Add this import alongside the existing ones:
+import { useContext } from 'react';
+import { StageGateContext } from '../forms/_shared';
+
+// (2) Inside the FileUploader component, REPLACE the disabled-related logic:
+export const FileUploader: React.FC<Props> = ({
+  formId, projectRefId, user, files, accept, maxSizeMb = 20, disabled,
+}) => {
+  const [progress, setProgress] = useState<Record<string, ProgressEntry>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [dragHot, setDragHot] = useState(false);
+
+  // When mounted inside a MultiStageActionBar stage body, the surrounding stage
+  // may be inactive even though the parent form is "pending" — gate accordingly.
+  // Default context values (active:true, awaitsMe:true) make standalone usage a no-op.
+  const stageGate = useContext(StageGateContext);
+  const effectivelyDisabled = !!disabled || !stageGate.active || !stageGate.awaitsMe;
+
+  // ... rest of the implementation — replace every `disabled` reference in JSX
+  //     with `effectivelyDisabled`, and use it in the onDrop guard.
+```
+
+Use `effectivelyDisabled` everywhere `disabled` was previously checked (label className, the `<input>` element, the `onDrop` guard).
+
+### `src/components/forms/F23_AdditionalWorks.tsx` — soft warning at ≥ 20%
+
+Add this block in the stage 0 body, right under the existing cost rollup:
+
+```tsx
+{awardedPrice > 0 && pctOfContract >= 20 && (
+  <div className="p-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-800 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
+    <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+    <span>التغيير يتجاوز 20% من قيمة العقد — قد يستدعي مراجعة إضافية من المدير التنفيذي.</span>
+  </div>
+)}
+```
+
+(Adds `AlertTriangle` to the lucide import at the top of F23.)
+
+### `src/components/forms/F35_FirstPayment.tsx` + `F15_InstallmentPayment.tsx` — TODO comment
+
+Add this comment above `PaymentSummary` / `Summary` in both files:
+
+```tsx
+// TODO: extract to _shared.tsx if a third consumer appears (e.g. a separate
+// disbursement form for variation orders).
+```
+
+### `src/lib/workflow.ts` — F-02 → F-03 propagation
+
+```ts
+// REPLACE the F-02 trigger to propagate the manager's notes + verdict to F-03,
+// mirroring the F-03 → F-03.1 propagation we already have:
+'F-02': (ctx) => {
+  const f03 = ctx.forms.find(f => f.code === 'F-03' && f.projectRefId === ctx.approvedRecord.projectRefId);
+  const src = (ctx.approvedRecord.data || {}) as { managerNotes?: string; eligibilityVerdict?: string };
+  return {
+    activate: f03 ? [{
+      formId: f03.id,
+      data: {
+        managerNotes: src.managerNotes,
+        eligibilityVerdict: src.eligibilityVerdict,
+      },
+    }] : [],
+  };
+},
+```
+
+### `src/components/forms/_shared.tsx` — `ACTIVATE_DATA_PROPAGATIONS` update
+
+```ts
+export const ACTIVATE_DATA_PROPAGATIONS = {
+  'F-02 → F-03':   ['managerNotes', 'eligibilityVerdict'],
+  'F-03 → F-03.1': ['managerNotes', 'eligibilityVerdict'],
+  'F-84 → F-85':   ['f84_bids', 'f84_pricingNotes'],
+  'F-33 → F-14':   ['f08_works', 'visitNumber'],
+  'F-33 → F-34':   ['f20_items', 'f20_directNotes', 'f20_inkindNotes', 'f20_partnershipNotes'],
+} as const;
+```
+
+---
+
+## `src/lib/createProject.ts`
+
+```ts
+import {
+  addDoc, collection, doc, getDocs, query, runTransaction,
+  serverTimestamp, where,
+} from 'firebase/firestore';
+import { db } from './firebase';
+import { FORMS } from './data';
+import type { FormCode, FormStatus, RoleKey } from './data';
+import type { UserProfile } from '../components/Auth';
+import type { F02Data } from '../components/forms/F02_SocialResearch';
+
+export interface CreateProjectResult {
+  projectRefId: string;
+  projectId: string;
+  formIds: Partial<Record<FormCode, string>>;
+}
+
+/** Atomic project creation: counter increment + project doc + 22 form drafts in one transaction.
+ *  Firestore transaction limit (500 writes) is well above the 24 writes this performs. */
+export async function createProject(formData: F02Data, user: UserProfile): Promise<CreateProjectResult> {
+  if (user.role !== 'SOCIAL_RESEARCHER' && !user.isAdmin) {
+    throw new Error('فقط الباحث الاجتماعي أو مسؤول النظام يستطيع إنشاء حالة جديدة');
+  }
+  const beneficiaryName = formData.fullName?.trim();
+  if (!beneficiaryName) throw new Error('الاسم الكامل للمستفيد مطلوب');
+
+  const result = await runTransaction(db, async (tx) => {
+    // 1. Increment the project serial atomically.
+    const counterRef = doc(db, 'counters', 'projectSerial');
+    const counterSnap = await tx.get(counterRef);
+    const currentSerial = counterSnap.exists() ? ((counterSnap.data() as { value?: number }).value || 0) : 0;
+    const nextSerial = currentSerial + 1;
+    tx.set(counterRef, { value: nextSerial, updatedAt: serverTimestamp() }, { merge: true });
+
+    const year = new Date().getFullYear();
+    const projectId = `TRM-${year}-${String(nextSerial).padStart(3, '0')}`;
+
+    // 2. Project document.
+    const projectRef = doc(collection(db, 'projects'));
+    tx.set(projectRef, {
+      projectId,
+      beneficiaryName,
+      phase: 'RESEARCH',
+      status: 'active',
+      archived: false,
+      progressPct: 5,
+      city: formData.city || null,
+      createdBy: user.id,
+      createdByName: user.fullName,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    // 3. All 22 form drafts. F-02 is special: status='pending', approvalIndex=1,
+    //    with stage 0 (researcher) auto-completed in approvals[] since the wizard
+    //    submission IS the researcher's action.
+    const formIds: Partial<Record<FormCode, string>> = {};
+    for (const def of FORMS) {
+      const formRef = doc(collection(db, 'forms'));
+      formIds[def.code] = formRef.id;
+
+      const isF02 = def.code === 'F-02';
+      const status: FormStatus = isF02 ? 'pending' : 'draft';
+      const approvalIndex = isF02 ? 1 : 0;
+      const approvals = isF02 ? [{
+        role: 'SOCIAL_RESEARCHER' as RoleKey,
+        actorId: user.id,
+        actorName: user.fullName,
+        at: new Date().toISOString(),
+        decision: 'approved' as const,
+        note: 'تم تعبئة الاستمارة وتقديمها عبر معالج إنشاء الحالة',
+      }] : [];
+
+      tx.set(formRef, {
+        code: def.code,
+        title: def.title,
+        projectId,
+        projectRefId: projectRef.id,
+        beneficiaryName,
+        status,
+        approvalIndex,
+        approvalChain: def.approvalChain,
+        approvals,
+        createdBy: user.id,
+        createdByName: user.fullName,
+        createdByRole: user.role,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        ownerDept: def.ownerDept,
+        bridgesTo: def.bridgesTo || [],
+        data: isF02 ? formData : {},
+        assigneeId: null,
+        files: [],
+        stepStartedAt: isF02 ? serverTimestamp() : null,
+      });
+    }
+
+    return { projectRefId: projectRef.id, projectId, formIds };
+  });
+
+  // Fire notification asynchronously — not part of the transaction (notifications
+  // don't need atomicity with the workflow, and a failed notification shouldn't
+  // roll back project creation).
+  notifyResearchManagers(result.projectId, beneficiaryName, result.formIds['F-02'])
+    .catch(err => console.error('[createProject] notification failed:', err));
+
+  return result;
+}
+
+async function notifyResearchManagers(projectId: string, beneficiaryName: string, f02FormId?: string): Promise<void> {
+  if (!f02FormId) return;
+  const snap = await getDocs(query(collection(db, 'users'), where('status', '==', 'active')));
+  const recipients = snap.docs
+    .map(d => ({ id: d.id, ...d.data() } as { id: string; role: string; isAdmin?: boolean; department?: string }))
+    .filter(u => u.role === 'RESEARCH_MANAGER' || (u.isAdmin && u.department === 'RESEARCH'))
+    .map(u => u.id);
+  if (!recipients.length) return;
+  await addDoc(collection(db, 'notifications'), {
+    recipients, readBy: [],
+    text: `حالة جديدة بانتظار مراجعتك: ${beneficiaryName} (${projectId})`,
+    subject: 'استمارة بحث اجتماعي جديدة',
+    type: 'new_f02',
+    link: f02FormId,
+    createdAt: new Date().toISOString(),
+  });
+}
+```
+
+---
+
+## `src/components/forms/F02_SocialResearch.tsx`
+
+```tsx
+import React, { useEffect, useMemo, useState } from 'react';
+import { ChevronRight, ChevronLeft, X, Check, RotateCcw, AlertTriangle } from 'lucide-react';
+import { FormShell, type RendererProps } from './_shared';
+import { FormComments } from '../ui/FormComments';
+import { FileUploader } from '../ui/FileUploader';
+import { Input, Select, TextArea } from '../ui';
+import type { UserProfile } from '../Auth';
+import { createProject } from '../../lib/createProject';
+
+// ============================================================================
+// Data shape — single source for wizard and renderer view modes
+// ============================================================================
+export interface F02Data {
+  // Step 1 — شخصية (16)
+  fullName?: string; idNumber?: string; nationality?: string; gender?: string;
+  dob?: string; mobile1?: string; mobile2?: string;
+  city?: string; neighborhood?: string; gps?: string;
+  socialStatus?: string; education?: string;
+  commercialReg?: string; currentJob?: string; jobStartDate?: string; jobStatus?: string;
+
+  // Step 2 — دخل وديون
+  income?: Record<string, { enabled?: boolean; amount?: number }>;
+  debts?: Record<string, { enabled?: boolean; amount?: number }>;
+
+  // Step 3 — الأسرة والسكن (12)
+  wives?: number; sons?: number; daughters?: number; totalFamily?: number;
+  under15?: number; over64?: number;
+  hasSpecialNeeds?: boolean; healthStatus?: string;
+  housingOwnership?: string; housingType?: string; housingAge?: number;
+  furnitureCondition?: string; needType?: string; socialSecurityStatus?: string;
+
+  // Step 4 — الباحث والمرفقات
+  researcherName?: string; researcherMobile?: string;
+  visitDate?: string; researcherOpinion?: string;
+  managerName?: string; managerTitle?: string; managerMobile?: string;
+  beneficiaryAcceptance?: boolean; documentsCollected?: boolean;
+
+  // Manager review (filled at stage 2)
+  managerNotes?: string;
+  eligibilityVerdict?: 'eligible' | 'not_eligible' | 'review';
+}
+
+// ============================================================================
+// Constants
+// ============================================================================
+const NATIONALITIES = [
+  { value: 'saudi',     label: 'سعودي' },
+  { value: 'other',     label: 'غير سعودي' },
+];
+const GENDERS = [
+  { value: 'male',   label: 'ذكر' },
+  { value: 'female', label: 'أنثى' },
+];
+const CITIES = [
+  { value: 'الدمام',   label: 'الدمام' },
+  { value: 'الخبر',    label: 'الخبر' },
+  { value: 'الظهران',  label: 'الظهران' },
+  { value: 'القطيف',   label: 'القطيف' },
+  { value: 'الجبيل',   label: 'الجبيل' },
+  { value: 'الأحساء',  label: 'الأحساء' },
+  { value: 'بقيق',     label: 'بقيق' },
+  { value: 'الخفجي',   label: 'الخفجي' },
+];
+const SOCIAL_STATUSES = [
+  { value: 'married',  label: 'متزوج/ة' }, { value: 'single', label: 'أعزب/عزباء' },
+  { value: 'divorced', label: 'مطلق/ة'  }, { value: 'widow',  label: 'أرمل/ة'    },
+];
+const EDUCATION_LEVELS = [
+  { value: 'illiterate', label: 'أمي' },     { value: 'primary',   label: 'ابتدائي' },
+  { value: 'middle',     label: 'متوسط' },   { value: 'secondary', label: 'ثانوي'   },
+  { value: 'diploma',    label: 'دبلوم' },   { value: 'bachelors', label: 'بكالوريوس' },
+  { value: 'graduate',   label: 'دراسات عليا' },
+];
+const HOUSING_OWNERSHIPS = [
+  { value: 'owned',   label: 'ملك'   }, { value: 'rented',  label: 'إيجار'  },
+  { value: 'inherit', label: 'ورثة'  }, { value: 'grant',   label: 'منحة'   },
+  { value: 'charity', label: 'سكن خيري' }, { value: 'other',  label: 'أخرى' },
+];
+const HOUSING_TYPES = [
+  { value: 'house',     label: 'منزل مستقل' }, { value: 'villa',  label: 'فلة' },
+  { value: 'apartment', label: 'شقة'         }, { value: 'annex',  label: 'ملحق' },
+  { value: 'popular',   label: 'شعبي'        }, { value: 'other',  label: 'أخرى' },
+];
+const FURNITURE_CONDITIONS = [
+  { value: 'excellent',   label: 'ممتاز'      }, { value: 'good',  label: 'جيد' },
+  { value: 'maintenance', label: 'يحتاج صيانة' }, { value: 'bad',   label: 'سيء' },
+  { value: 'unusable',    label: 'لا يصلح'    },
+];
+const NEED_TYPES = [
+  { value: 'full',     label: 'ترميم كلي' },     { value: 'partial', label: 'ترميم جزئي' },
+  { value: 'maintenance', label: 'صيانة'   },    { value: 'rebuild', label: 'إعادة بناء' },
+];
+const VERDICT_OPTIONS = [
+  { value: 'eligible',     label: 'مستحق' },
+  { value: 'not_eligible', label: 'غير مستحق' },
+  { value: 'review',       label: 'يحتاج لمراجعة إضافية' },
+];
+const INCOME_ITEMS = [
+  { key: 'monthly',        label: 'دخل شهري ثابت' },
+  { key: 'socialSecurity', label: 'ضمان اجتماعي' },
+  { key: 'charity',        label: 'مساعدات خيرية' },
+  { key: 'retirement',     label: 'تقاعد' },
+  { key: 'familyHelp',     label: 'مساعدات عائلية' },
+  { key: 'other',          label: 'دخل آخر' },
+];
+const DEBT_ITEMS = [
+  { key: 'housing',  label: 'دين عقاري' },
+  { key: 'car',      label: 'دين سيارة'  },
+  { key: 'medical',  label: 'دين طبي'    },
+  { key: 'other',    label: 'دين آخر'    },
+];
+
+const STEPS = [
+  { label: 'البيانات الشخصية' },
+  { label: 'الدخل والديون' },
+  { label: 'الأسرة والسكن' },
+  { label: 'الباحث والمرفقات' },
+];
+
+// Declarative field defs — used by both wizard input rendering AND view-mode panels.
+type FieldType = 'text' | 'number' | 'date' | 'tel' | 'select' | 'textarea';
+interface FieldDef {
+  key: keyof F02Data;
+  label: string;
+  type: FieldType;
+  options?: { value: string; label: string }[];
+  required?: boolean;
+  hint?: string;
+  dir?: 'rtl' | 'ltr';
+}
+
+const STEP1_FIELDS: FieldDef[] = [
+  { key: 'fullName',      label: 'الاسم الكامل',     type: 'text',     required: true },
+  { key: 'idNumber',      label: 'رقم الهوية',       type: 'text',     required: true, dir: 'ltr' },
+  { key: 'nationality',   label: 'الجنسية',         type: 'select',   options: NATIONALITIES, required: true },
+  { key: 'gender',        label: 'الجنس',           type: 'select',   options: GENDERS,       required: true },
+  { key: 'dob',           label: 'تاريخ الميلاد',    type: 'date'    },
+  { key: 'mobile1',       label: 'جوال أساسي',      type: 'tel',      required: true, dir: 'ltr' },
+  { key: 'mobile2',       label: 'جوال إضافي',     type: 'tel',      dir: 'ltr' },
+  { key: 'city',          label: 'المدينة',         type: 'select',   options: CITIES, required: true },
+  { key: 'neighborhood',  label: 'الحي / المنطقة',  type: 'text'    },
+  { key: 'gps',           label: 'إحداثيات GPS',    type: 'text',     dir: 'ltr', hint: 'يُسجَّل من تطبيق الخرائط (lat,lng)' },
+  { key: 'socialStatus',  label: 'الحالة الاجتماعية', type: 'select', options: SOCIAL_STATUSES },
+  { key: 'education',     label: 'المستوى التعليمي',  type: 'select', options: EDUCATION_LEVELS },
+  { key: 'commercialReg', label: 'سجل تجاري (إن وُجد)', type: 'text' },
+  { key: 'currentJob',    label: 'الوظيفة الحالية',  type: 'text'    },
+  { key: 'jobStartDate',  label: 'تاريخ بداية العمل', type: 'date'   },
+  { key: 'jobStatus',     label: 'حالة العمل',       type: 'text'    },
+];
+
+const STEP3_FIELDS: FieldDef[] = [
+  { key: 'wives',                label: 'عدد الزوجات',        type: 'number' },
+  { key: 'sons',                 label: 'عدد الأبناء',        type: 'number' },
+  { key: 'daughters',            label: 'عدد البنات',         type: 'number' },
+  { key: 'totalFamily',          label: 'إجمالي أفراد الأسرة', type: 'number' },
+  { key: 'under15',              label: 'الأطفال تحت 15 سنة', type: 'number' },
+  { key: 'over64',               label: 'كبار السن (>64)',    type: 'number' },
+  { key: 'healthStatus',         label: 'الحالة الصحية العامة', type: 'textarea' },
+  { key: 'housingOwnership',     label: 'ملكية السكن',         type: 'select',   options: HOUSING_OWNERSHIPS, required: true },
+  { key: 'housingType',          label: 'نوع السكن',           type: 'select',   options: HOUSING_TYPES,      required: true },
+  { key: 'housingAge',           label: 'عمر السكن (سنوات)',   type: 'number' },
+  { key: 'furnitureCondition',   label: 'حالة الأثاث',         type: 'select',   options: FURNITURE_CONDITIONS },
+  { key: 'needType',             label: 'نوع الحاجة',          type: 'select',   options: NEED_TYPES, required: true },
+  { key: 'socialSecurityStatus', label: 'وضع الضمان الاجتماعي', type: 'text'    },
+];
+
+const STEP4_FIELDS: FieldDef[] = [
+  { key: 'researcherName',    label: 'اسم الباحث الاجتماعي', type: 'text',     required: true },
+  { key: 'researcherMobile',  label: 'جوال الباحث',          type: 'tel',      dir: 'ltr' },
+  { key: 'visitDate',         label: 'تاريخ الزيارة الميدانية', type: 'date'   },
+  { key: 'researcherOpinion', label: 'رأي الباحث وتوصيته',   type: 'textarea', required: true, hint: 'موجز للحالة العامة، الأولوية، الملاحظات الميدانية.' },
+  { key: 'managerName',       label: 'اسم المدير المسؤول',    type: 'text'    },
+  { key: 'managerTitle',      label: 'مسمى المدير',           type: 'text'    },
+  { key: 'managerMobile',     label: 'جوال المدير',           type: 'tel',      dir: 'ltr' },
+];
+
+// ============================================================================
+// Generic field renderer (compact)
+// ============================================================================
+const FieldRenderer: React.FC<{
+  field: FieldDef; value: unknown; onChange: (v: unknown) => void; disabled?: boolean;
+}> = ({ field, value, onChange, disabled }) => {
+  const label = field.label + (field.required ? ' *' : '');
+  if (field.type === 'select') {
+    return <Select label={label} value={(value as string) || ''} onChange={(e) => onChange(e.target.value)} options={field.options || []} placeholder="اختر..." disabled={disabled} />;
+  }
+  if (field.type === 'textarea') {
+    return <TextArea label={label} value={(value as string) || ''} onChange={(e) => onChange(e.target.value)} rows={3} disabled={disabled} hint={field.hint} />;
+  }
+  const htmlType = field.type === 'tel' ? 'tel' : field.type === 'number' ? 'number' : field.type === 'date' ? 'date' : 'text';
+  return (
+    <Input
+      label={label} type={htmlType}
+      value={(value as string | number) ?? ''}
+      onChange={(e) => onChange(field.type === 'number' ? (Number(e.target.value) || 0) : e.target.value)}
+      disabled={disabled} hint={field.hint} dir={field.dir}
+    />
+  );
+};
+
+// ============================================================================
+// Toggle + amount row (for income / debts in step 2)
+// ============================================================================
+const ToggleAmount: React.FC<{
+  label: string;
+  value: { enabled?: boolean; amount?: number };
+  onChange: (v: { enabled: boolean; amount: number }) => void;
+}> = ({ label, value, onChange }) => (
+  <div className="flex items-center gap-2 p-2 rounded-lg bg-surface-down">
+    <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer">
+      <input
+        type="checkbox" checked={!!value.enabled}
+        onChange={(e) => onChange({ enabled: e.target.checked, amount: value.amount || 0 })}
+        className="w-4 h-4 accent-brand-teal shrink-0"
+      />
+      <span className="text-sm text-fg truncate">{label}</span>
+    </label>
+    {value.enabled && (
+      <input
+        type="number" min="0"
+        value={value.amount || 0}
+        onChange={(e) => onChange({ enabled: true, amount: Number(e.target.value) || 0 })}
+        placeholder="ر.س"
+        className="w-32 px-3 py-1.5 rounded border border-border-default bg-input-bg text-fg text-sm text-center focus:outline-none focus:ring-1 focus:ring-brand-teal"
+      />
+    )}
+  </div>
+);
+
+// ============================================================================
+// THE WIZARD — creation flow, launched via NewProjectButton
+// ============================================================================
+export const F02SocialResearchWizard: React.FC<{
+  user: UserProfile;
+  onClose: () => void;
+  onComplete?: (projectRefId: string) => void;
+}> = ({ user, onClose, onComplete }) => {
+  const draftKey = `tarmeem.draft.f02.${user.id}`;
+  const [step, setStep] = useState(1);
+  const [data, setData] = useState<F02Data>(() => {
+    try { const s = localStorage.getItem(draftKey); return s ? JSON.parse(s) : {}; }
+    catch { return {}; }
+  });
+  const [hadDraft] = useState<boolean>(() => {
+    try { return !!localStorage.getItem(draftKey); } catch { return false; }
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    try { localStorage.setItem(draftKey, JSON.stringify(data)); } catch { /* ignore */ }
+  }, [data, draftKey]);
+
+  const update = <K extends keyof F02Data>(k: K, v: F02Data[K]) =>
+    setData(d => ({ ...d, [k]: v }));
+
+  const startOver = () => {
+    if (!window.confirm('سيتم مسح المسودة المحفوظة وبدء استمارة جديدة. هل أنت متأكد؟')) return;
+    setData({});
+    setStep(1);
+    setError(null);
+    try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
+  };
+
+  const validateStep = (s: number): string | null => {
+    if (s === 1) {
+      if (!data.fullName?.trim()) return 'الاسم الكامل مطلوب';
+      if (!data.idNumber?.trim()) return 'رقم الهوية مطلوب';
+      if (!data.nationality)      return 'الجنسية مطلوبة';
+      if (!data.gender)           return 'الجنس مطلوب';
+      if (!data.mobile1?.trim())  return 'جوال أساسي مطلوب';
+      if (!data.city)             return 'المدينة مطلوبة';
+    }
+    if (s === 3) {
+      if (!data.housingOwnership) return 'ملكية السكن مطلوبة';
+      if (!data.housingType)      return 'نوع السكن مطلوب';
+      if (!data.needType)         return 'نوع الحاجة مطلوب';
+    }
+    if (s === 4) {
+      if (!data.researcherName?.trim())    return 'اسم الباحث مطلوب';
+      if (!data.researcherOpinion?.trim()) return 'رأي الباحث مطلوب';
+      if (!data.beneficiaryAcceptance)     return 'يجب تأكيد قبول المستفيد للترميم';
+      if (!data.documentsCollected)        return 'يجب تأكيد جمع المستندات الأساسية';
+    }
+    return null;
+  };
+
+  const next = () => {
+    const err = validateStep(step);
+    if (err) { setError(err); return; }
+    setError(null);
+    setStep(s => Math.min(4, s + 1));
+  };
+  const prev = () => { setError(null); setStep(s => Math.max(1, s - 1)); };
+
+  const submit = async () => {
+    for (let s = 1; s <= 4; s++) {
+      const err = validateStep(s);
+      if (err) { setStep(s); setError(err); return; }
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await createProject(data, user);
+      try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
+      onComplete?.(result.projectRefId);
+      onClose();
+    } catch (e) {
+      setError((e as Error).message || 'تعذّر إنشاء المشروع');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4" dir="rtl">
+      <div className="bg-surface w-full sm:max-w-2xl max-h-screen sm:max-h-[90vh] sm:rounded-2xl border border-border-subtle flex flex-col shadow-card-hover">
+        <div className="flex items-center justify-between gap-3 p-4 border-b border-border-subtle">
+          <h2 className="text-lg font-bold text-fg">استمارة البحث الاجتماعي (F-02)</h2>
+          <button onClick={onClose} className="p-2 rounded-lg text-fg-muted hover:bg-surface-down" aria-label="إغلاق">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {hadDraft && (
+          <div className="px-4 py-2 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-300 flex items-center justify-between gap-2">
+            <span>تم استرجاع مسودة محفوظة من جلسة سابقة.</span>
+            <button onClick={startOver} className="flex items-center gap-1 hover:underline">
+              <RotateCcw className="w-3 h-3" /> بدء استمارة جديدة
+            </button>
+          </div>
+        )}
+
+        <div className="px-4 py-3 border-b border-border-subtle flex gap-2 overflow-x-auto">
+          {STEPS.map((s, i) => {
+            const idx = i + 1;
+            const cls = step === idx ? 'bg-brand text-white'
+                      : step > idx  ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                                    : 'bg-surface-down text-fg-faint';
+            return (
+              <button
+                key={idx}
+                onClick={() => setStep(idx)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs shrink-0 ${cls}`}
+              >
+                {step > idx && <Check className="w-3 h-3" />}
+                <span>{idx}. {s.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {step === 1 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {STEP1_FIELDS.map(f => (
+                <FieldRenderer key={f.key} field={f} value={data[f.key]} onChange={(v) => update(f.key, v as F02Data[typeof f.key])} />
+              ))}
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm font-semibold text-fg mb-2">الدخل الشهري</h3>
+                <div className="space-y-1.5">
+                  {INCOME_ITEMS.map(item => (
+                    <ToggleAmount
+                      key={item.key}
+                      label={item.label}
+                      value={data.income?.[item.key] || {}}
+                      onChange={(v) => update('income', { ...(data.income || {}), [item.key]: v })}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-fg mb-2">الديون</h3>
+                <div className="space-y-1.5">
+                  {DEBT_ITEMS.map(item => (
+                    <ToggleAmount
+                      key={item.key}
+                      label={item.label}
+                      value={data.debts?.[item.key] || {}}
+                      onChange={(v) => update('debts', { ...(data.debts || {}), [item.key]: v })}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {STEP3_FIELDS.map(f => (
+                  <FieldRenderer key={f.key} field={f} value={data[f.key]} onChange={(v) => update(f.key, v as F02Data[typeof f.key])} />
+                ))}
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox" checked={!!data.hasSpecialNeeds}
+                  onChange={(e) => update('hasSpecialNeeds', e.target.checked)}
+                  className="w-4 h-4 accent-brand-teal"
+                />
+                <span className="text-sm text-fg">يوجد في الأسرة فرد من ذوي الاحتياجات الخاصة</span>
+              </label>
+            </div>
+          )}
+
+          {step === 4 && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {STEP4_FIELDS.map(f => (
+                  <FieldRenderer key={f.key} field={f} value={data[f.key]} onChange={(v) => update(f.key, v as F02Data[typeof f.key])} />
+                ))}
+              </div>
+
+              <div className="space-y-2 p-3 rounded-lg border border-border-subtle bg-surface-up">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox" checked={!!data.beneficiaryAcceptance}
+                    onChange={(e) => update('beneficiaryAcceptance', e.target.checked)}
+                    className="mt-1 w-4 h-4 accent-brand-teal"
+                  />
+                  <div className="text-sm">
+                    <div className="text-fg font-medium">أؤكد قبول المستفيد لإجراء أعمال الترميم</div>
+                    <div className="text-fg-faint text-xs">شفوي أو موقَّع — يُرفق التعهد في المرفقات.</div>
+                  </div>
+                </label>
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox" checked={!!data.documentsCollected}
+                    onChange={(e) => update('documentsCollected', e.target.checked)}
+                    className="mt-1 w-4 h-4 accent-brand-teal"
+                  />
+                  <div className="text-sm">
+                    <div className="text-fg font-medium">أؤكد جمع المستندات الأساسية</div>
+                    <div className="text-fg-faint text-xs">صورة الهوية، صك السكن أو عقد الإيجار، ما يثبت الحالة المالية.</div>
+                  </div>
+                </label>
+              </div>
+
+              <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>عند الإرسال، يتم إنشاء المشروع وكامل سلسلة النماذج (22 نموذجاً) آلياً، وتُحال F-02 لمدير البحث للمراجعة. لا يمكن التراجع.</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-border-subtle p-4 flex items-center gap-2 flex-wrap">
+          {error && <p className="text-xs text-red-600 dark:text-red-400 flex-1 min-w-[150px]">{error}</p>}
+          <div className="flex gap-2 ms-auto">
+            {step > 1 && (
+              <button onClick={prev} disabled={busy} className="px-4 py-2 rounded-lg bg-surface-down text-fg-muted text-sm hover:bg-border-subtle flex items-center gap-1.5">
+                <ChevronRight className="w-4 h-4" /> السابق
+              </button>
+            )}
+            {step < 4 && (
+              <button onClick={next} disabled={busy} className="px-4 py-2 rounded-lg bg-brand-teal text-white text-sm font-medium hover:bg-brand-teal-light flex items-center gap-1.5">
+                التالي <ChevronLeft className="w-4 h-4" />
+              </button>
+            )}
+            {step === 4 && (
+              <button onClick={submit} disabled={busy} className="px-4 py-2 rounded-lg bg-gradient-to-r from-brand to-brand-teal text-white text-sm font-medium hover:opacity-90 disabled:opacity-50">
+                {busy ? 'جارٍ إنشاء المشروع...' : 'إنشاء المشروع'}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// THE RENDERER — view mode for an existing F-02 record (manager approval, etc.)
+// ============================================================================
+export const F02Renderer: React.FC<RendererProps> = ({ rec, project, user, api }) => {
+  const data = (rec.data || {}) as F02Data;
+  const [managerNotes, setManagerNotes] = useState(data.managerNotes || '');
+  const [verdict, setVerdict] = useState<F02Data['eligibilityVerdict']>(data.eligibilityVerdict || undefined);
+
+  useEffect(() => {
+    if (managerNotes === (data.managerNotes || '') && verdict === data.eligibilityVerdict) return;
+    const t = setTimeout(() => {
+      api.updateFormData(rec.id, { managerNotes, eligibilityVerdict: verdict });
+    }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [managerNotes, verdict]);
+
+  return (
+    <FormShell
+      rec={rec} project={project} user={user} api={api}
+      approvalPayload={{ managerNotes, eligibilityVerdict: verdict }}
+      canApprove={() => verdict ? null : 'يجب اختيار توصية الاستحقاق قبل الاعتماد'}
+    >
+      <div className="space-y-4">
+        <DataPanel title="البيانات الشخصية"     rows={STEP1_FIELDS.map(f => [f.label, formatValue(f, data[f.key])])} />
+        <IncomeDebtPanel income={data.income || {}} debts={data.debts || {}} />
+        <DataPanel title="الأسرة والسكن"        rows={[
+          ...STEP3_FIELDS.map(f => [f.label, formatValue(f, data[f.key])] as [string, React.ReactNode]),
+          ['ذوي احتياجات خاصة', data.hasSpecialNeeds ? 'نعم' : 'لا'],
+        ]} />
+        <DataPanel title="الباحث والمرفقات"     rows={[
+          ...STEP4_FIELDS.map(f => [f.label, formatValue(f, data[f.key])] as [string, React.ReactNode]),
+          ['قبول المستفيد', data.beneficiaryAcceptance ? '✓' : '—'],
+          ['جمع المستندات', data.documentsCollected ? '✓' : '—'],
+        ]} />
+
+        <div className="p-3 rounded-lg border border-border-default bg-surface-up space-y-3">
+          <h3 className="font-semibold text-fg">توصية مدير البحث</h3>
+          <Select
+            label="القرار *"
+            value={verdict || ''}
+            onChange={(e) => setVerdict(e.target.value as F02Data['eligibilityVerdict'])}
+            options={VERDICT_OPTIONS}
+            placeholder="اختر القرار"
+          />
+          <TextArea
+            label="ملاحظات المراجعة"
+            value={managerNotes}
+            onChange={(e) => setManagerNotes(e.target.value)}
+            rows={4}
+            hint="ستظهر للمدير التنفيذي مع F-03."
+          />
+        </div>
+      </div>
+      <FormComments formId={rec.id} user={user} />
+    </FormShell>
+  );
+};
+
+// Lookup a select option label, fallback to raw value
+const formatValue = (field: FieldDef, value: unknown): React.ReactNode => {
+  if (value == null || value === '') return '—';
+  if (field.type === 'select' && field.options) {
+    return field.options.find(o => o.value === value)?.label || String(value);
+  }
+  return String(value);
+};
+
+const DataPanel: React.FC<{ title: string; rows: Array<[string, React.ReactNode]> }> = ({ title, rows }) => (
+  <div className="rounded-lg border border-border-subtle bg-surface-up overflow-hidden">
+    <div className="px-3 py-2 bg-surface-down border-b border-border-subtle text-sm font-medium text-fg">{title}</div>
+    <dl className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
+      {rows.map(([k, v], i) => (
+        <div key={i} className="flex flex-col">
+          <dt className="text-xs text-fg-faint">{k}</dt>
+          <dd className="text-fg font-medium truncate">{v ?? '—'}</dd>
+        </div>
+      ))}
+    </dl>
+  </div>
+);
+
+const IncomeDebtPanel: React.FC<{
+  income: Record<string, { enabled?: boolean; amount?: number }>;
+  debts:  Record<string, { enabled?: boolean; amount?: number }>;
+}> = ({ income, debts }) => {
+  const activeIncome = INCOME_ITEMS.filter(i => income[i.key]?.enabled);
+  const activeDebts  = DEBT_ITEMS.filter(d => debts[d.key]?.enabled);
+  const incomeTotal  = activeIncome.reduce((s, i) => s + (income[i.key]?.amount || 0), 0);
+  const debtTotal    = activeDebts.reduce((s, d) => s + (debts[d.key]?.amount || 0), 0);
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface-up overflow-hidden">
+      <div className="px-3 py-2 bg-surface-down border-b border-border-subtle text-sm font-medium text-fg">
+        الدخل والديون
+      </div>
+      <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+        <div>
+          <div className="text-xs font-semibold text-fg-muted mb-1.5">الدخل (إجمالي: {incomeTotal.toLocaleString()} ر.س)</div>
+          {activeIncome.length === 0 ? <p className="text-xs text-fg-faint">لا يوجد</p> :
+            <ul className="space-y-1">
+              {activeIncome.map(i => (
+                <li key={i.key} className="flex justify-between gap-2 text-xs">
+                  <span className="text-fg">{i.label}</span>
+                  <span className="text-fg-muted">{(income[i.key]?.amount || 0).toLocaleString()} ر.س</span>
+                </li>
+              ))}
+            </ul>
+          }
+        </div>
+        <div>
+          <div className="text-xs font-semibold text-fg-muted mb-1.5">الديون (إجمالي: {debtTotal.toLocaleString()} ر.س)</div>
+          {activeDebts.length === 0 ? <p className="text-xs text-fg-faint">لا يوجد</p> :
+            <ul className="space-y-1">
+              {activeDebts.map(d => (
+                <li key={d.key} className="flex justify-between gap-2 text-xs">
+                  <span className="text-fg">{d.label}</span>
+                  <span className="text-fg-muted">{(debts[d.key]?.amount || 0).toLocaleString()} ر.س</span>
+                </li>
+              ))}
+            </ul>
+          }
+        </div>
+      </div>
+    </div>
+  );
+};
+```
+
+---
+
+## `src/components/NewProjectButton.tsx`
+
+```tsx
+import React, { useState } from 'react';
+import { Plus } from 'lucide-react';
+import { F02SocialResearchWizard } from './forms/F02_SocialResearch';
+import type { UserProfile } from './Auth';
+
+interface Props {
+  user: UserProfile;
+  variant?: 'primary' | 'fab' | 'menu-item';
+  className?: string;
+  onProjectCreated?: (projectRefId: string) => void;
+}
+
+/** Reusable launcher for the F-02 wizard. Mount in:
+ *  - Home dashboard CTA  (variant='primary')
+ *  - Projects page floating button on mobile  (variant='fab')
+ *  - Forms page "+ نموذج جديد" menu  (variant='menu-item')
+ *
+ * Visibility is gated to SOCIAL_RESEARCHER + admins — non-eligible users see nothing. */
+export const NewProjectButton: React.FC<Props> = ({ user, variant = 'primary', className = '', onProjectCreated }) => {
+  const [open, setOpen] = useState(false);
+  const canCreate = user.role === 'SOCIAL_RESEARCHER' || user.isAdmin;
+  if (!canCreate) return null;
+
+  const Btn = (() => {
+    if (variant === 'fab') {
+      return (
+        <button
+          onClick={() => setOpen(true)}
+          className={`fixed bottom-20 left-4 z-30 md:hidden p-4 rounded-full bg-gradient-to-br from-brand to-brand-teal text-white shadow-card-hover hover:opacity-90 ${className}`}
+          aria-label="إنشاء حالة جديدة"
+        >
+          <Plus className="w-6 h-6" />
+        </button>
+      );
+    }
+    if (variant === 'menu-item') {
+      return (
+        <button
+          onClick={() => setOpen(true)}
+          className={`w-full text-right px-3 py-2 rounded-lg text-sm text-fg hover:bg-surface-down flex items-center gap-2 ${className}`}
+        >
+          <Plus className="w-4 h-4 text-brand-teal" />
+          استمارة بحث اجتماعي (F-02)
+        </button>
+      );
+    }
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className={`px-4 py-2 rounded-lg bg-gradient-to-r from-brand to-brand-teal text-white text-sm font-medium hover:opacity-90 flex items-center gap-2 ${className}`}
+      >
+        <Plus className="w-4 h-4" />
+        إنشاء حالة جديدة
+      </button>
+    );
+  })();
+
+  return (
+    <>
+      {Btn}
+      {open && (
+        <F02SocialResearchWizard
+          user={user}
+          onClose={() => setOpen(false)}
+          onComplete={onProjectCreated}
+        />
+      )}
+    </>
+  );
+};
+```
+
+## `src/components/forms/index.ts` — register F-02
+
+```ts
+import type { FormCode } from '../../lib/data';
+import type { Renderer } from './_shared';
+import { F02Renderer }  from './F02_SocialResearch';
+import { F03Renderer }  from './F03_ResearchApproval';
+import { F031Renderer } from './F03_1_ExecApproval';
+import { F032Renderer } from './F03_2_FinalTransfer';
+import { F04Renderer }  from './F04_AssignDiagnosisEngineer';
+import { F08Renderer }  from './F08_DiagnosisBinder';
+import { F14Renderer }  from './F14_SupervisionReport';
+import { F15Renderer }  from './F15_InstallmentPayment';
+import { F18Renderer }  from './F18_EvacuationPledge';
+import { F19Renderer }  from './F19_InternalSupply';
+import { F20Renderer }  from './F20_MaterialSupply';
+import { F21Renderer }  from './F21_FurnitureInventory';
+import { F22Renderer }  from './F22_AltHousing';
+import { F23Renderer }  from './F23_AdditionalWorks';
+import { F32Renderer }  from './F32_AssignSupervisor';
+import { F33Renderer }  from './F33_StartDocumentation';
+import { F34Renderer }  from './F34_MaterialTransfer';
+import { F35Renderer }  from './F35_FirstPayment';
+import { F84Renderer }  from './F84_ContractorPricing';
+import { F85Renderer }  from './F85_TenderingAward';
+
+export const RENDERERS: Partial<Record<FormCode, Renderer>> = {
+  'F-02': F02Renderer,  'F-03':   F03Renderer,  'F-03.1': F031Renderer, 'F-03.2': F032Renderer,
+  'F-04': F04Renderer,  'F-08':   F08Renderer,  'F-14':   F14Renderer,  'F-15':   F15Renderer,
+  'F-18': F18Renderer,  'F-19':   F19Renderer,  'F-20':   F20Renderer,  'F-21':   F21Renderer,
+  'F-22': F22Renderer,  'F-23':   F23Renderer,  'F-32':   F32Renderer,  'F-33':   F33Renderer,
+  'F-34': F34Renderer,  'F-35':   F35Renderer,  'F-84':   F84Renderer,  'F-85':   F85Renderer,
+  // Remaining: F-07, F-52 (closure pair) — Batch 10
+};
+
+export { GenericFallback } from './_shared';
+export type { Renderer } from './_shared';
+```
+
+---
+
+## Notes worth flagging
+
+1. **`createProject` is called from one place** — the wizard's submit handler. If you ever expose a programmatic project-creation API (e.g., bulk import), call this same function. The transaction is its single source of truth.
+
+2. **`counters/projectSerial` doc is auto-created on first run.** The `merge: true` setDoc inside the transaction handles the no-doc case. No migration needed.
+
+3. **Year rollover behavior** — the projectId uses `new Date().getFullYear()` at creation time, but the counter is global (not per-year). On Jan 1, project #007 of 2026 becomes TRM-2027-007. If you want per-year counters, swap to `counters/projectSerial-2026`. Not blocking; flag if the operations team objects.
+
+4. **Notification after createProject is fire-and-forget** — wrapped in `.catch(console.error)` so a failed notification doesn't roll back the transaction. The form will still appear in the manager's queue via `formAwaitsUser` even without the notification.
+
+5. **The `NewProjectButton` isn't mounted anywhere yet** — Home / Projects / Forms still use legacy Gemini code. When those pages get rebuilt (per your trajectory list), drop `<NewProjectButton user={profile} variant="primary" />` into Home's quick-action strip, `variant="fab"` floating on Projects, and `variant="menu-item"` inside the Forms "+" dropdown. Three lines.
+
+6. **Wizard's "Start Over" cleans `localStorage` only** — closing via the X header button preserves the draft for next session. Both behaviors are intentional.
+
+## Batch 10 preview — F-07 + F-52 (closure pair)
+
+The final two renderers, both Phase 5. **F-07** (Handover Certificate) is the closure document — approve triggers `phase='CLOSED'`, `progressPct=100`, and conditionally activates F-52 if `mediaRequested` is true. The certificate is printable, so it needs PDF export (`@react-pdf/renderer`). **F-52** (Media Coverage Request) is straightforward — coverageTypes multi-select + taskNotes + bridges to COMMS.
+
+The PDF for F-07 is the only Batch-10 wildcard. Approach: render the certificate as a React component using `@react-pdf/renderer`, expose a "تنزيل الشهادة (PDF)" button on the F-07 renderer when status is approved. Single-page A4, Tarmeem logo header, beneficiary + project details, signature line. ~150 lines. The `@react-pdf/renderer` dep adds ~200KB gzipped — acceptable for an internal app.
+
+Once Batch 10 lands: 22 of 22 renderers shipped. Then comes the post-renderer work — `ProjectActionsMenu`, Dashboard 2.0, page rewrites, `firestore.rules`, smoke tests.
+
+Confirm Batch 10 scope or shuffle.
+
+Claude Project Plan:
+
+Batch 9 is solid. The wizard is well-architected, the transaction is atomic, draft preservation works, the F-02 → F-03 catch was a real find. One real must-fix on the F02Renderer view mode, two should-fix items, then Batch 10 is greenlit with two specifics.
+
+🔴 Must fix in Batch 10 opening: F02Renderer doesn't stage-gate manager input
+In F02_SocialResearch.tsx, the F02Renderer (view mode) section that captures the manager's verdict has no formAwaitsUser gate:
+<Select label="القرار *" value={verdict || ''} onChange={...} />
+<TextArea label="ملاحظات المراجعة" value={managerNotes} onChange={...} />
+These inputs are always editable in the DOM. The autosave effect fires on any change. So:
+	•	✅ Manager (stage 1, awaitsMe=true) opens F-02 → edits verdict + notes → approves. Correct.
+	•	🔴 Researcher (stage 1, awaitsMe=false) opens F-02 → edits verdict + notes → autosave writes their changes to data.managerNotes and data.eligibilityVerdict. They can't approve, but they CAN modify what the manager will see.
+	•	🔴 Any non-awaitee with read access to the project → same vulnerability.
+The data integrity hole: a researcher could pre-fill the manager's verdict before the manager opens it, and the manager might not notice the prepopulated values were tampered with.
+Fix — wrap the manager input section in a fieldset disabled by formAwaitsUser:
+import { formAwaitsUser } from '../../lib/rbac';
+// ...
+
+const awaitsMe = formAwaitsUser(rec, user);
+
+// In the JSX, wrap the manager review block:
+<div className="p-3 rounded-lg border border-border-default bg-surface-up space-y-3">
+  <div className="flex items-center justify-between gap-2">
+    <h3 className="font-semibold text-fg">توصية مدير البحث</h3>
+    {!awaitsMe && <Lock className="w-3.5 h-3.5 text-fg-faint" aria-label="مقفل" />}
+  </div>
+  <fieldset disabled={!awaitsMe} className="border-0 p-0 m-0 min-w-0 space-y-3">
+    <Select label="القرار *" value={verdict || ''} onChange={...} options={VERDICT_OPTIONS} />
+    <TextArea label="ملاحظات المراجعة" value={managerNotes} onChange={...} rows={4} />
+  </fieldset>
+</div>
+Also gate the autosave effect — if !awaitsMe, the local state mutations are harmless but they shouldn't propagate to Firestore:
+useEffect(() => {
+  if (!awaitsMe) return;  // ← add this
+  if (managerNotes === (data.managerNotes || '') && verdict === data.eligibilityVerdict) return;
+  const t = setTimeout(() => {
+    api.updateFormData(rec.id, { managerNotes, eligibilityVerdict: verdict });
+  }, 600);
+  return () => clearTimeout(t);
+}, [managerNotes, verdict, awaitsMe]);
+This same pattern needs to be audited across all renderers that have stage-specific input outside a <fieldset> wrap. Single-stage forms (F-04, F-22, F-18 etc.) already get this gating from FormShell's action bar suppression for non-awaitees, so they're fine. The risk is concentrated in renderers where input fields render outside <MultiStageActionBar>or outside a <fieldset disabled={!stageActive}>. F-02 is the only known offender.
+
+🟡 Should fix in Batch 10
+1. CITIES list is Eastern Province only
+Eight cities, all Eastern. If a referral comes from Riyadh, Makkah, Jeddah, anywhere else — the researcher can't select it. Two options:
+(a) Expand to all Saudi cities (~30 entries). Easy and complete. (b) Keep Eastern as primary + add { value: 'other', label: 'أخرى' } with a conditional free-text field shown when "other" is selected.
+Pick (a) — flat list of major Saudi cities is cleaner than a free-text fallback. If Tarmeem's operational scope is genuinely Eastern-only, leave it; just verify with operations.
+2. Wizard step strip permits skipping ahead without validation
+<button onClick={() => setStep(idx)} ...>
+Users can click step 4 from step 1, fill step 4, then submit() catches "step 1 incomplete" and re-routes. Functional but jumpy.
+Soft fix — disable jumping ahead unless current step validates:
+const canJumpTo = (target: number) => {
+  if (target <= step) return true;  // backward always allowed
+  for (let s = step; s < target; s++) {
+    if (validateStep(s)) return false;
+  }
+  return true;
+};
+
+<button
+  onClick={() => canJumpTo(idx) && setStep(idx)}
+  disabled={!canJumpTo(idx)}
+  className={`... ${!canJumpTo(idx) ? 'opacity-40 cursor-not-allowed' : ''}`}
+>
+Backward navigation stays unrestricted. Forward navigation requires all preceding steps to validate.
+3. F-02 → F-03 propagation assumes F-03 reads from data.managerNotes/eligibilityVerdict
+Claude Code added the propagation but didn't verify the F-03 renderer (shipped in Batch 3) reads these specific keys. If F-03's renderer was written to collect its own managerNotes and eligibilityVerdict, the propagation will pre-fill those fields and the manager edits them on F-03 — which is the intended flow. If F-03 used different key names, the propagation silently does nothing.
+Verify by re-reading F-03 renderer for these two reads:
+const data = (rec.data || {}) as F03Data;
+const [managerNotes, setManagerNotes] = useState(data.managerNotes || '');
+const [verdict, setVerdict] = useState(data.eligibilityVerdict || undefined);
+If those keys match, all good. If not, either align F-03's keys or update the propagation map. Either way it's a 5-minute fix — flag in Batch 10 opening.
+
+Honored from Batch 8 review ✅
+Item	Status
+rejectForm notifies specific rec.assigneeId when set, falls back to role-broadcast	✅
+StageGateContext created with sensible defaults {active:true, awaitsMe:true}	✅
+MultiStageActionBar wraps each stage body in Provider	✅
+FileUploader consumes context, ORs into effectivelyDisabled	✅
+F-23 ≥ 20% variation cost warning	✅
+TODO comments on PaymentSummary duplicates in F-15/F-35	✅
+Bonus: F-02 → F-03 propagation in ACTIVATE_DATA_PROPAGATIONS	✅ great catch
+createProject single runTransaction (counter + project + 22 forms)	✅
+Auth check (SOCIAL_RESEARCHER or admin)	✅
+F-02: status='pending', approvalIndex=1, stage-0 in approvals[]	✅
+Other forms: status='draft', approvalIndex=0, empty data	✅
+localStorage draft keyed by user.id, prompt to resume on mount	✅
+Wizard has NewProjectButton with 3 variants for 3 launch surfaces	✅
+RTL throughout, brand tokens consistent, dark-mode complete	✅
+Field count: 16/10/12/10 ≈ 48 base fields + acknowledgments	✅
+notifyResearchManagers fire-and-forget (won't roll back project on failure)	✅
+Year-rollover note flagged	✅
+Batch 10 — F-07 + F-52 greenlit, two locks
+The closure pair. Final two renderers, then post-renderer work begins.
+Lock 1: F-07's PDF needs Tajawal font embedded
+@react-pdf/renderer ships with Helvetica/Roboto only. Arabic text renders as boxes without a font registered. The Tajawal TTF needs to be loaded once and registered:
+// src/lib/pdfFonts.ts (new file)
+import { Font } from '@react-pdf/renderer';
+import TajawalRegular from '../assets/fonts/Tajawal-Regular.ttf';
+import TajawalBold from '../assets/fonts/Tajawal-Bold.ttf';
+
+Font.register({
+  family: 'Tajawal',
+  fonts: [
+    { src: TajawalRegular },
+    { src: TajawalBold, fontWeight: 'bold' },
+  ],
+});
+Imported once at app bootstrap. The font files (~80KB each) are bundled. Lock the certificate's default style to fontFamily: 'Tajawal'.
+Vite handles .ttf imports natively. The font files go in src/assets/fonts/. Source: Google Fonts → Tajawal → download family → keep Regular + Bold.
+If Tajawal files aren't on hand at build time, F-07 PDF can fall back to system fonts (rendering will show boxes for Arabic, but the renderer won't crash). Document the manual font-file step in the Batch 10 notes.
+Lock 2: PDF download button only on status === 'approved'
+F-07 PDF represents the official handover certificate. Generating it pre-approval is misleading (the certificate would carry "pending" state). Gate the download:
+{rec.status === 'approved' && (
+  <PDFDownloadLink
+    document={<HandoverCertificatePDF rec={rec} project={project} />}
+    fileName={`Handover-${project.projectId}.pdf`}
+  >
+    {({ loading }) => (
+      <button className="...">
+        {loading ? 'جارٍ التحضير...' : 'تنزيل الشهادة (PDF)'}
+      </button>
+    )}
+  </PDFDownloadLink>
+)}
+Approval triggers phase='CLOSED', progressPct=100. The PDF becomes available immediately. Earlier states show a placeholder ("ستتوفر شهادة التسليم بعد الاعتماد").
+Implementation order
+	1.	src/lib/pdfFonts.ts — Font registration, called once in App.tsx
+	2.	src/components/forms/F07_HandoverCertificate.tsx — Renderer + PDF document inside same file
+	3.	src/components/forms/F52_MediaCoverage.tsx — Standard single-stage renderer, multi-select for coverageTypes (تصوير فوتوغرافي، تصوير فيديو، مقابلة، تقرير صحفي), task notes, bridges to COMMS
+	4.	workflow.ts F-07 trigger — Set phase='CLOSED', progressPct=100, activate F-52 if mediaRequested === true
+	5.	forms/index.ts — Register both renderers
+	6.	ACTIVATE_DATA_PROPAGATIONS — F-07 → F-52: ['beneficiaryName', 'completionDate'] if any propagation is wanted
+F-52 data shape lock
+interface F52Data {
+  coverageTypes?: string[];  // multi-select
+  taskNotes?: string;
+  preferredVisitDate?: string;
+  assignedTo?: string;       // PR_OFFICER user id
+  outputLinks?: string[];    // links to published media (filled post-coverage)
+}
+Simple form. PR_OFFICER picks up the task from their dashboard. Standard FormShell, no custom actions.
+After Batch 10
+22 of 22 renderers shipped. Then the post-renderer work in order:
+	1.	ProjectActionsMenu + ReassignFormsModal
+	2.	BottomSheet primitive (vaul) + ConfirmDialog + Skeleton + Toast (sonner)
+	3.	Pages rewrites (Home, Projects, Departments, EmployeeProfile, Admin) — Admin fix (deleteDoc → updateDoc) is urgent here
+	4.	Dashboard 2.0 (6 MVP widgets)
+	5.	Settings + Cmd+K palette
+	6.	firestore.rules
+	7.	Smoke tests
+Each of those is a smaller batch than the renderers. Probably 4–6 more batches to v1.0.
+Ship Batch 10 with the F-02 manager-input stage gating folded in, the cities expansion (or "other" fallback), and the step-strip forward-navigation gate. Trajectory remains clean. F-07 PDF is the only remaining unknown — if Tajawal font files are unavailable at your repo, the PDF degrades gracefully and we ship the renderer + a "PDF coming soon" placeholder. The renderer doesn't block.
+
+
+
+
+
+I stopped conducting the conversation between Claude Code chat and Claude project chat here, planning to proceed tomorrow.

@@ -1,0 +1,3045 @@
+Claude Plan
+Claude Project Planer:
+Now let me look at the images and the conversation files to get additional context.I have now thoroughly analyzed all 12 source files, the two Gemini conversation transcripts (≈43k lines combined), the RBAC/workflow document, and the brand assets. I have a complete picture of what Tarmeem is, what went wrong in prior AI attempts, and what the correct target architecture must look like. Before drowning you in code, let me give you the deliverable in the right order so nothing is lost.
+
+Part A — Audit Findings & The Real Picture
+What Tarmeem actually is
+جمعية ترميم الخيرية — a Saudi charity that fully renovates homes for needy beneficiaries. The app is its internal operations platform ("منصة العمليات الموحّدة"), Arabic-first (RTL), Tajawal font, dark-mode-first, brand colors purple #4A1F66 + teal #43bba1. The Odoo plan is dead. This is now an internal app for ~9 departments, focused on the 5-phase project workflow and an ERP dashboard.
+Critical defects I found in the current codebase
+#	Defect	Where	Severity
+1	8 forms are skeletons (<div>F-02 SKELETON</div>)	FormRenderers.tsx lines 69–78	🔴 blocking
+2	F-23 wired to F-08 stub by mistake	FormRenderers.tsx line 639	🔴 blocking
+3	Building2 and Clock icons used in Home.tsx but never imported	Home.tsx lines 58, 59 of Projects.tsx	🔴 crashes UI
+4	ROLE_BY_KEY referenced inside usersByDepartment in App.tsxbut not imported	App.tsx line 61	🔴 crashes runtime
+5	FormStatus type used but not imported in App.tsx phase trigger code	App.tsx lines 155, 163	🔴 type-check fails
+6	Notification privacy leak — every client downloads every notification	App.tsx line 47	🔴 GDPR-level
+7	Unbounded Firestore listeners on users, forms, projects, notifications	App.tsx lines 44–47	🔴 cost & scale
+8	No writeBatch / runTransaction in advanceForm cascade triggers	App.tsx lines 132–192	🔴 corruption risk
+9	SLA uses client time + raw calendar days (counts Fri/Sat)	data.tsx line 87	🟡 wrong data
+10	Theme lock-in — most components use hardcoded bg-[#0a0a0a] with no dark: variants, making the <ThemeToggle/>cosmetic only	Home.tsx, Departments.tsx, Projects.tsx, EmployeeProfile.tsx	🟡 broken feature
+11	Hardcoded admin emails duplicated in App.tsx and data.tsx	App.tsx line 32, data.tsx line 48	🟡 DRY violation
+12	(e:any) and as any everywhere	All files	🟡 type safety
+13	The "God Function" advanceForm (90+ lines, branches on every form code)	App.tsx	🟡 maintainability
+14	Form data?: Record<string, any> — no strict schema per form	Forms.tsx line 9	🟡 type safety
+15	No ProjectsManager/Admin department guard on Admin portal beyond isAdmin flag	Admin.tsx	🟡 RBAC hole
+16	F-20 chat messages stored inline (will hit Firestore 1 MB doc limit)	FormRenderers.tsx line 89	🟡 scale risk
+17	onCreateForm only accepts F-02 despite portal asking for it for other forms	Projects.tsx line 78	🟡 UX bug
+18	Auth screen passes onAuth callback that is () => {} (no-op)	App.tsx line 212	🟡 dead code
+19	firebase.ts is imported but not in your file dump — must be re-created	All files	🟡 setup
+These are non-negotiable fixes. Below are the architectural decisions I am making and would like you to confirm before code generation.
+
+Part B — Major Improvements I'm Making (Need Your Buy-in)
+I am making 7 architectural decisions. Each is reversible, but I think they are right.
+Decision 1: Keep all 9 departments, but tag the "Active 7" vs "Reference 2"
+Active in the project workflow: EXEC, RESEARCH, PROJECTS, FINANCE, SUPPORT, PARTNERSHIP, COMMS. Reference-only (have portals & members but no forms in the project pipeline yet): VOLUNTEER, MARKETING. This matches your current data.tsx and your "stick to what we have" instruction.
+Decision 2: Drop the standalone ADMIN role
+Admin is now strictly a flag (isAdmin: true) on top of any real role, not a role itself. This kills the "ghost privileges" bug from the Gemini audit. Admins keep their real department/role for portal visibility but gain global override.
+Decision 3: Move FormRenderers from one 80KB monolith into per-form files
+src/components/forms/F02_SocialResearch.tsx
+src/components/forms/F03_ResearchApproval.tsx
+... (22 files)
+src/components/forms/_shared.tsx     ← FormShell, CroquisViewer
+src/components/forms/index.ts        ← RENDERERS + CREATORS registry
+This is non-negotiable for maintainability — Gemini's monolith is what caused the skeletons.
+Decision 4: Replace client-side SLA with Firestore serverTimestamp() + business-day calculator
+Skips Friday/Saturday (Saudi weekend). Lives in src/lib/sla.ts.
+Decision 5: Add Firestore Security Rules + bounded listeners
+	•	notifications listener filtered server-side by where('recipients', 'array-contains', uid).
+	•	forms and projects listeners use orderBy('updatedAt', 'desc') + limit(500).
+	•	Firestore rules enforce role checks (defense in depth — the React formAwaitsUser becomes UX, not security).
+Decision 6: Decouple advanceForm cascades into a "trigger map"
+Each form's "what happens after I'm approved" lives in a declarative TRIGGER_MAP in src/lib/workflow.ts, not inside App.tsx. The God Function dies. Trigger fns get a writeBatch and commit atomically.
+Decision 7: Make Light Mode actually work — but keep Dark as the default
+Every hardcoded bg-[#0a0a0a] becomes bg-white dark:bg-[#0a0a0a] etc. The <ThemeToggle /> works for real.
+If you disagree with any of these 7, tell me which and I'll revise. Otherwise everything below assumes all 7.
+
+Part C — The Definitive Departments × Roles × Forms × RBAC Matrix
+This is the authoritative spec. Stick this on the wall.
+1. Departments (9 total)
+Key	Arabic	Short	Active in workflow?
+EXEC	الإدارة التنفيذية	تنفيذية	✅
+RESEARCH	البحث الاجتماعي	البحث	✅
+PROJECTS	إدارة المشاريع	المشاريع	✅
+FINANCE	الشؤون المالية	المالية	✅
+SUPPORT	الخدمات المساندة	الخدمات	✅
+PARTNERSHIP	الشراكات	الشراكات	✅ (F-22 bridge)
+COMMS	الاتصال المؤسسي	الاتصال	✅ (F-52 bridge)
+VOLUNTEER	التطوع - مركز سمايا	التطوع	⚪ portal only
+MARKETING	التسويق والاستدامة	التسويق	⚪ portal only
+2. Roles per Department (24 roles)
+Department	Role Key	Job Title (AR)	isManager	Originates / Approves
+EXEC	SECRETARY_GENERAL	الأمين العام	✅	—
+EXEC	EXEC_DIRECTOR	المدير التنفيذي	✅	Originates F-03.1; approves F-15 stage 1, F-35 stage 1, F-23 stage 2
+EXEC	BOARD_MEMBER	عضو مجلس الإدارة	—	view-only
+EXEC	EXEC_SECRETARY	السكرتير التنفيذي	—	view-only
+RESEARCH	RESEARCH_MANAGER	مدير البحث الاجتماعي	✅	Originates F-03, F-03.2, F-07; approves F-02
+RESEARCH	SOCIAL_RESEARCHER	باحث اجتماعي	—	Originates F-02, F-18, F-22
+RESEARCH	COMPLAINTS_OFFICER	مسؤولة الشكاوى	—	view-only
+PROJECTS	PROJECTS_MANAGER	رئيس قسم المشاريع	✅	Originates F-85; approves F-21 stage 2, F-23 stage 1
+PROJECTS	HEAD_DIAGNOSIS	رئيس قسم التشخيص	✅	Originates F-04; co-originates F-84
+PROJECTS	HEAD_SUPERVISION	رئيس قسم الإشراف	✅	Originates F-32, F-14, F-52; approves F-14 stage 1
+PROJECTS	DIAGNOSIS_ENGINEER	مهندس التشخيص / الإشراف	—	Originates F-08, F-21, F-20, F-33, F-34, F-23; approves F-14 stage 2
+PROJECTS	ITQAN_HEAD	رئيس لجنة إتقان	✅	quality audit view
+PROJECTS	ITQAN_MEMBER	عضو لجنة إتقان	—	quality audit view
+FINANCE	FINANCE_HEAD	المدير المالي	✅	approves F-15/F-35 if escalated
+FINANCE	ACCOUNTANT	محاسب	—	Originates F-15, F-35; approves stage 0 & stage 2
+SUPPORT	SUPPORT_MANAGER	مدير الخدمات المساندة	✅	F-20 collaboration; F-19 oversight
+SUPPORT	PROCUREMENT_OFFICER	مسؤول المشتريات	—	Originates F-19; collaborates F-20
+SUPPORT	WAREHOUSE_CLERK	أمين المستودع	—	F-19 fulfillment
+VOLUNTEER	VOLUNTEER_MANAGER	مدير التطوع	✅	volunteer portal only
+MARKETING	MARKETING_MANAGER	مدير التسويق	✅	marketing portal only
+MARKETING	DIGITAL_MARKETING	مسؤول التسويق الرقمي	—	marketing portal only
+PARTNERSHIP	PARTNERSHIP_MANAGER	مدير الشراكات	✅	receives F-22 bridge
+COMMS	PR_OFFICER	مسؤول الإعلام	✅	receives F-52 bridge
+(any)	SYSTEM	النظام الآلي	—	auto-skip approvals only
+Bolded roles = active workflow actors.
+3. The 22 Forms — Authoritative Routing Table
+Code	Title (AR)	Phase	Owner Dept	Originated by	Approval Chain	Bridges to	SLA (business days)
+F-02	استمارة البحث الاجتماعي	1	RESEARCH	SOCIAL_RESEARCHER	SOCIAL_RESEARCHER → RESEARCH_MANAGER	—	5
+F-03	اعتماد مدير البحث	1	RESEARCH	RESEARCH_MANAGER	RESEARCH_MANAGER	—	3
+F-03.1	اعتماد المدير التنفيذي	1	EXEC	EXEC_DIRECTOR	EXEC_DIRECTOR	RESEARCH	3
+F-03.2	الاعتماد النهائي للإحالة	1	RESEARCH	RESEARCH_MANAGER	RESEARCH_MANAGER	PROJECTS	2
+F-04	تعيين مهندس التشخيص	2	PROJECTS	HEAD_DIAGNOSIS	HEAD_DIAGNOSIS	—	2
+F-08	كراسة التشخيص	2	PROJECTS	DIAGNOSIS_ENGINEER	DIAGNOSIS_ENGINEER → HEAD_DIAGNOSIS	—	7
+F-18	تعهد إخلاء المبنى	2	RESEARCH	SOCIAL_RESEARCHER	SOCIAL_RESEARCHER	—	5
+F-22	توفير سكن بديل	2	RESEARCH	SOCIAL_RESEARCHER	SOCIAL_RESEARCHER	PARTNERSHIP	3
+F-21	حصر الأثاث والأجهزة	2	PROJECTS	DIAGNOSIS_ENGINEER	DIAGNOSIS_ENGINEER → PROJECTS_MANAGER	—	7
+F-20	خطة توريد المواد (Workspace)	2/3	PROJECTS	DIAGNOSIS_ENGINEER + HEAD_DIAGNOSIS	DIAGNOSIS_ENGINEER (with SUPPORT collab)	SUPPORT	5
+F-84	تسعيرات المقاولين	3	PROJECTS	HEAD_DIAGNOSIS, DIAGNOSIS_ENGINEER	DIAGNOSIS_ENGINEER	—	4
+F-85	اعتماد الترسية	3	PROJECTS	PROJECTS_MANAGER	PROJECTS_MANAGER	FINANCE	2
+F-32	تعيين المهندس المشرف	3	PROJECTS	HEAD_SUPERVISION	HEAD_SUPERVISION	—	2
+F-33	توثيق البدء	3	PROJECTS	DIAGNOSIS_ENGINEER (assigned supervisor)	DIAGNOSIS_ENGINEER	—	2
+F-35	طلب دفعة أولى (30%)	4	FINANCE	ACCOUNTANT	ACCOUNTANT → EXEC_DIRECTOR → ACCOUNTANT	—	4
+F-34	إحالة حصر المواد	4	PROJECTS	DIAGNOSIS_ENGINEER, HEAD_SUPERVISION	DIAGNOSIS_ENGINEER	—	3
+F-19	طلب توريد داخلي (tracker)	4	SUPPORT	PROCUREMENT_OFFICER	PROCUREMENT_OFFICER	—	5
+F-14	تقرير الإشراف (يتكرر)	4	PROJECTS	HEAD_SUPERVISION (assign sec.) → DIAGNOSIS_ENGINEER (report sec.)	HEAD_SUPERVISION → DIAGNOSIS_ENGINEER	—	2
+F-23	اعتماد بنود أعمال إضافية	4	PROJECTS	DIAGNOSIS_ENGINEER, PROJECTS_MANAGER	PROJECTS_MANAGER → EXEC_DIRECTOR	—	3
+F-15	طلب صرف دفعة (يتولد آلياً)	4	FINANCE	SYSTEM (auto on F-14 milestones)	ACCOUNTANT → EXEC_DIRECTOR → ACCOUNTANT	—	4
+F-07	شهادة تسليم المنزل	5	RESEARCH	RESEARCH_MANAGER	RESEARCH_MANAGER	—	2
+F-52	طلب تصوير وتوثيق	5	PROJECTS	HEAD_SUPERVISION, DIAGNOSIS_ENGINEER	HEAD_SUPERVISION	COMMS	7
+4. The 5-Phase Workflow + Cascade Triggers
+PHASE 1 — البحث والاعتماد            [forms: F-02, F-03, F-03.1, F-03.2]
+   F-02 created  →  approves to F-03  →  approves to F-03.1  →  approves to F-03.2
+   F-03.2 approved  ⇒  project.phase = "DIAGNOSIS", activate F-04
+
+PHASE 2 — التشخيص والتجهيز           [forms: F-04, F-08, F-18, F-22, F-21, F-20]
+   F-04 assigns engineer  ⇒  activate F-08 (assignee = engineer)
+   F-08 approved  ⇒  activate F-21 + F-20
+                 ⇒  if safetyHazard=true → activate F-18 & F-22
+                    else → auto-complete F-18 & F-22 with SYSTEM note "لا يحتاج إخلاء"
+   F-21 approved  ⇒  bridges furniture inventory to F-20
+   F-20 approved (Projects side)  ⇒  project.phase = "TENDERING", activate F-84
+
+PHASE 3 — الترسية والبدء             [forms: F-84, F-85, F-32, F-33]
+   F-84 approved (bids collected)  ⇒  activate F-85
+   F-85 approved (winner)  ⇒  set project.contractorName, project.awardedPrice
+                          ⇒  activate F-32 (+ F-35)
+   F-32 approved (supervisor assigned)  ⇒  activate F-33 (assignee = supervisor)
+   F-33 approved  ⇒  project.phase = "EXECUTION", activate F-14 (1st report), F-19, F-34
+
+PHASE 4 — التنفيذ والمالية            [forms: F-34, F-19, F-35, F-14*, F-23, F-15*]
+   F-35 approved (3-stage: accountant→exec→accountant=transfer)  ⇒  payment 1 of 4 done
+   F-14 each report carries overallProgress %
+       overall ≥ 60%  ⇒  auto-create F-15 (payment 2 of 4)
+       overall ≥ 90%  ⇒  auto-create F-15 (payment 3 of 4)
+       overall = 100% ⇒  auto-create F-15 (payment 4 of 4, final)
+   F-14 with requestScopeChange=true  ⇒  auto-create F-23
+   F-15 (final, paymentIndex=4) approved  ⇒  project.phase = "HANDOVER", activate F-07
+
+PHASE 5 — الإغلاق والتوثيق            [forms: F-07, F-52]
+   F-07 approved  ⇒  if mediaRequested=true → activate F-52 (to HEAD_SUPERVISION → COMMS broadcast)
+                                  else → auto-complete F-52
+   F-07 approved  ⇒  project.phase = "CLOSED", progress = 100
+5. The RBAC Rule (formAwaitsUser, final version)
+A user can approve/edit a form iff all of the following hold:
+	1.	form.status === 'pending' (not draft, approved, rejected, deferred, completed)
+	2.	AND one of:
+	•	The user is Super Admin (user.isAdmin === true), OR
+	•	The user's role strictly equals form.approvalChain[form.approvalIndex], AND
+	•	If form.assigneeId is set, then form.assigneeId === user.id
+	3.	Manager override: if the user's role is isManager:true AND the user's department equals the next-role's department, they can act on behalf of a subordinate (used for sick days, recovery).
+	4.	Helper override: if user.id ∈ form.data.helpers[], they can edit collaboratively but not finally approve.
+	5.	Cross-dept collab: F-20 (Material Supply) explicitly grants edit access to SUPPORT department members while it's pending.
+Any user (regardless of role) can view any form on a project that's visible to them — the portal is the gate, the action button is the lock.
+
+Part D — Final File Tree
+src/
+├── App.tsx                                ← Shell + auth + global state
+├── main.tsx                               ← React entry
+├── index.css                              ← Tailwind base + custom CSS
+├── vite-env.d.ts
+├── lib/
+│   ├── firebase.ts                        ← Firebase config (was missing)
+│   ├── data.ts                            ← Departments, roles, forms dictionary
+│   ├── workflow.ts                        ← TRIGGER_MAP + cascade engine (NEW)
+│   ├── sla.ts                             ← Business-day SLA calculator (NEW)
+│   └── rbac.ts                            ← formAwaitsUser, portalAccess (split out)
+├── hooks/
+│   ├── useAuth.ts                         ← Auth state hook (NEW, splits App.tsx)
+│   ├── useFirestoreCollection.ts          ← Bounded onSnapshot hook (NEW)
+│   └── useNotifications.ts                ← Server-filtered (NEW)
+├── components/
+│   ├── ui.tsx                             ← Card, Pill, Input, Select, etc.
+│   ├── TarmeemLogo.tsx                    ← Logo SVG (was in ui)
+│   ├── ThemeProvider.tsx                  ← Light/dark toggle
+│   ├── Auth.tsx
+│   ├── Home.tsx                           ← Dashboard
+│   ├── Forms.tsx                          ← FormCard, FormDetailModal, NewFormModal
+│   ├── Departments.tsx                    ← Portal sidebar + dept template
+│   ├── Projects.tsx                       ← MasterList + ProjectDetail
+│   ├── EmployeeProfile.tsx
+│   ├── Admin.tsx                          ← User mgmt
+│   └── forms/
+│       ├── _shared.tsx                    ← FormShell, CroquisViewer, types
+│       ├── F02_SocialResearch.tsx
+│       ├── F03_ResearchApproval.tsx
+│       ├── F03_1_ExecApproval.tsx
+│       ├── F03_2_FinalTransfer.tsx
+│       ├── F04_AssignDiagnosisEngineer.tsx
+│       ├── F08_DiagnosisBinder.tsx        ← The big one (croquis + works + furniture)
+│       ├── F18_EvacuationPledge.tsx
+│       ├── F22_AltHousing.tsx
+│       ├── F21_FurnitureInventory.tsx
+│       ├── F20_MaterialSupply.tsx          ← Already implemented; clean up
+│       ├── F84_ContractorPricing.tsx
+│       ├── F85_TenderingAward.tsx
+│       ├── F32_AssignSupervisor.tsx
+│       ├── F33_StartDocumentation.tsx
+│       ├── F35_FirstPayment.tsx
+│       ├── F34_MaterialTransfer.tsx
+│       ├── F19_InternalSupply.tsx
+│       ├── F14_SupervisionReport.tsx
+│       ├── F23_AdditionalWorks.tsx        ← was wrongly mapped to F08
+│       ├── F15_InstallmentPayment.tsx
+│       ├── F07_HandoverCertificate.tsx
+│       ├── F52_MediaCoverage.tsx
+│       └── index.ts                       ← RENDERERS + CREATORS registry
+└── firestore.rules                        ← Security rules (NEW)
+33 source files + 1 rules file.
+
+Part E — The Realistic Delivery Plan
+You asked for full code for every file. The honest math: that's ~250–300 KB of TypeScript. A single chat response physically cannot hold it without truncation, and you'd be back where Gemini failed you. So here is the only reliable path:
+	1.	This response → the audit + spec + foundation files (data.ts, firebase.ts, workflow.ts, sla.ts, rbac.ts) + the Claude Code prompt.
+	2.	Claude Code in your GitHub repo → executes the prompt, applies every fix, scaffolds the 22 form files using the spec above, runs tsc and eslint, and commits in atomic batches.
+	3.	If anything is missing or wrong, you re-prompt Claude Code with the exact file — no chat token limits.
+This is the path that actually finishes the job. Below is everything Claude Code needs.
+
+Part F — Foundation Files (full code, ready to paste)
+src/lib/data.ts (Part 1 of 1 — fits in one block)
+// ============================================================================
+// TARMEEM ERP — CANONICAL DICTIONARY
+// Authoritative source for: brand, departments, roles, forms, phases.
+// All other files import from here. Do not duplicate these definitions.
+// ============================================================================
+import React from 'react';
+
+// ---------------------------------------------------------------------------
+// BRAND
+// ---------------------------------------------------------------------------
+export const TARMEEM_BRAND = {
+  purple: '#4A1F66',
+  purpleLight: '#6B3D87',
+  purpleDark: '#3A1652',
+  teal: '#43bba1',
+  tealLight: '#7AC8AD',
+  tealDark: '#359d86',
+  cream: '#FFF8E7',
+  accent: '#a871f7',
+} as const;
+
+export const THEME = {
+  primary: TARMEEM_BRAND.purple,
+  primaryLight: TARMEEM_BRAND.purpleLight,
+  primaryDark: TARMEEM_BRAND.purpleDark,
+  accent: TARMEEM_BRAND.teal,
+  accentLight: TARMEEM_BRAND.tealLight,
+  success: '#16a34a',
+  warning: '#f59e0b',
+  danger: '#dc2626',
+};
+
+// ---------------------------------------------------------------------------
+// DEPARTMENTS (9)
+// ---------------------------------------------------------------------------
+export type DepartmentKey =
+  | 'EXEC' | 'RESEARCH' | 'PROJECTS' | 'FINANCE' | 'SUPPORT'
+  | 'VOLUNTEER' | 'MARKETING' | 'PARTNERSHIP' | 'COMMS';
+
+export interface DepartmentDef {
+  key: DepartmentKey;
+  name: string;        // Arabic
+  shortName: string;   // Arabic short
+  nameEn: string;
+  color: string;
+  accent: string;
+  description: string;
+  activeInWorkflow: boolean; // false = portal exists but no forms in pipeline yet
+}
+
+export const DEPARTMENTS: DepartmentDef[] = [
+  { key: 'EXEC',        name: 'الإدارة التنفيذية',     shortName: 'تنفيذية',   nameEn: 'Executive',    color: '#4A1F66', accent: '#43bba1', description: 'القيادة التنفيذية والاعتمادات الكبرى.',     activeInWorkflow: true  },
+  { key: 'RESEARCH',    name: 'البحث الاجتماعي',       shortName: 'البحث',     nameEn: 'Social Research', color: '#0EA5E9', accent: '#0284C7', description: 'دراسة الحالات وتحديد الاستحقاق.',         activeInWorkflow: true  },
+  { key: 'PROJECTS',    name: 'إدارة المشاريع',        shortName: 'المشاريع',  nameEn: 'Projects',     color: '#7C3AED', accent: '#8B5CF6', description: 'التشخيص الهندسي، الإشراف والتنفيذ.',     activeInWorkflow: true  },
+  { key: 'FINANCE',     name: 'الشؤون المالية',        shortName: 'المالية',   nameEn: 'Finance',      color: '#16A34A', accent: '#22C55E', description: 'الميزانية والصرف والمحاسبة.',             activeInWorkflow: true  },
+  { key: 'SUPPORT',     name: 'الخدمات المساندة',      shortName: 'الخدمات',   nameEn: 'Support',      color: '#F97316', accent: '#FB923C', description: 'سلسلة التوريد والمشتريات والمستودعات.',  activeInWorkflow: true  },
+  { key: 'PARTNERSHIP', name: 'الشراكات',             shortName: 'الشراكات',  nameEn: 'Partnerships', color: '#0891B2', accent: '#06B6D4', description: 'إدارة العلاقات مع الجهات الشريكة.',       activeInWorkflow: true  },
+  { key: 'COMMS',       name: 'الاتصال المؤسسي',       shortName: 'الاتصال',   nameEn: 'Comms',        color: '#9333EA', accent: '#A855F7', description: 'العلاقات العامة والإعلام.',               activeInWorkflow: true  },
+  { key: 'VOLUNTEER',   name: 'التطوع - مركز سمايا',    shortName: 'التطوع',    nameEn: 'Volunteering', color: '#EA580C', accent: '#FB923C', description: 'إدارة التطوع وتنسيق الأعمال.',           activeInWorkflow: false },
+  { key: 'MARKETING',   name: 'التسويق والاستدامة',     shortName: 'التسويق',   nameEn: 'Marketing',    color: '#DB2777', accent: '#EC4899', description: 'الحملات والتسويق الرقمي والاستدامة.',    activeInWorkflow: false },
+];
+
+export const DEPT_BY_KEY: Record<DepartmentKey, DepartmentDef> =
+  DEPARTMENTS.reduce((acc, d) => { acc[d.key] = d; return acc; }, {} as Record<DepartmentKey, DepartmentDef>);
+
+export const departmentName = (key?: string): string =>
+  DEPT_BY_KEY[key as DepartmentKey]?.name || key || 'غير محدد';
+
+// ---------------------------------------------------------------------------
+// ROLES (24)
+// ---------------------------------------------------------------------------
+export type RoleKey =
+  | 'SYSTEM'
+  | 'SECRETARY_GENERAL' | 'EXEC_DIRECTOR' | 'BOARD_MEMBER' | 'EXEC_SECRETARY'
+  | 'RESEARCH_MANAGER' | 'SOCIAL_RESEARCHER' | 'COMPLAINTS_OFFICER'
+  | 'PROJECTS_MANAGER' | 'HEAD_DIAGNOSIS' | 'HEAD_SUPERVISION' | 'DIAGNOSIS_ENGINEER'
+  | 'ITQAN_HEAD' | 'ITQAN_MEMBER'
+  | 'FINANCE_HEAD' | 'ACCOUNTANT'
+  | 'SUPPORT_MANAGER' | 'PROCUREMENT_OFFICER' | 'WAREHOUSE_CLERK'
+  | 'VOLUNTEER_MANAGER'
+  | 'MARKETING_MANAGER' | 'DIGITAL_MARKETING'
+  | 'PARTNERSHIP_MANAGER'
+  | 'PR_OFFICER';
+
+export interface RoleDef {
+  key: RoleKey;
+  name: string;            // Arabic display name
+  membershipTitle: string; // عضوية (Arabic)
+  nameEn: string;
+  department: DepartmentKey;
+  isManager?: boolean;
+  isExecutive?: boolean;   // EXEC department members get cross-dept portal access
+}
+
+export const ROLES_DEF: RoleDef[] = [
+  { key: 'SYSTEM',              name: 'النظام الآلي',                              nameEn: 'System',                department: 'EXEC',        membershipTitle: 'النظام المبرمج' },
+
+  { key: 'SECRETARY_GENERAL',   name: 'الأمين العام',                             nameEn: 'Secretary General',     department: 'EXEC',        isExecutive: true, isManager: true,  membershipTitle: 'عضو الإدارة التنفيذية: الأمين العام' },
+  { key: 'EXEC_DIRECTOR',       name: 'المدير التنفيذي',                          nameEn: 'Executive Director',    department: 'EXEC',        isExecutive: true, isManager: true,  membershipTitle: 'عضو الإدارة التنفيذية: المدير التنفيذي' },
+  { key: 'BOARD_MEMBER',        name: 'عضو مجلس الإدارة / اللجنة التوجيهية',       nameEn: 'Board Member',          department: 'EXEC',        isExecutive: true,                  membershipTitle: 'عضو مجلس الإدارة' },
+  { key: 'EXEC_SECRETARY',      name: 'السكرتير التنفيذي',                        nameEn: 'Executive Secretary',   department: 'EXEC',                                            membershipTitle: 'سكرتير تنفيذي' },
+
+  { key: 'RESEARCH_MANAGER',    name: 'مدير البحث الاجتماعي',                     nameEn: 'Research Manager',      department: 'RESEARCH',     isManager: true,                   membershipTitle: 'مدير البحث الاجتماعي' },
+  { key: 'SOCIAL_RESEARCHER',   name: 'باحث اجتماعي / باحثة',                     nameEn: 'Social Researcher',     department: 'RESEARCH',                                        membershipTitle: 'باحث اجتماعي' },
+  { key: 'COMPLAINTS_OFFICER',  name: 'مسؤولة الشكاوى',                          nameEn: 'Complaints Officer',    department: 'RESEARCH',                                        membershipTitle: 'مسؤولة الشكاوى' },
+
+  { key: 'PROJECTS_MANAGER',    name: 'رئيس قسم المشاريع',                       nameEn: 'Projects Manager',      department: 'PROJECTS',     isManager: true,                   membershipTitle: 'رئيس قسم المشاريع' },
+  { key: 'HEAD_DIAGNOSIS',      name: 'رئيس قسم التشخيص',                        nameEn: 'Head of Diagnosis',     department: 'PROJECTS',     isManager: true,                   membershipTitle: 'رئيس التشخيص' },
+  { key: 'HEAD_SUPERVISION',    name: 'رئيس قسم الإشراف',                        nameEn: 'Head of Supervision',   department: 'PROJECTS',     isManager: true,                   membershipTitle: 'رئيس الإشراف' },
+  { key: 'DIAGNOSIS_ENGINEER',  name: 'مهندس التشخيص / الإشراف',                  nameEn: 'Field Engineer',        department: 'PROJECTS',                                        membershipTitle: 'المهندس الميداني' },
+  { key: 'ITQAN_HEAD',          name: 'رئيس لجنة إتقان',                         nameEn: 'Itqan Head',            department: 'PROJECTS',     isManager: true,                   membershipTitle: 'رئيس لجنة إتقان' },
+  { key: 'ITQAN_MEMBER',        name: 'عضو لجنة إتقان',                          nameEn: 'Itqan Member',          department: 'PROJECTS',                                        membershipTitle: 'عضو لجنة إتقان' },
+
+  { key: 'FINANCE_HEAD',        name: 'المدير المالي',                           nameEn: 'Finance Head',          department: 'FINANCE',      isManager: true,                   membershipTitle: 'المدير المالي' },
+  { key: 'ACCOUNTANT',          name: 'محاسب',                                  nameEn: 'Accountant',            department: 'FINANCE',                                         membershipTitle: 'محاسب' },
+
+  { key: 'SUPPORT_MANAGER',     name: 'مدير الخدمات المساندة',                   nameEn: 'Support Manager',       department: 'SUPPORT',      isManager: true,                   membershipTitle: 'مدير الخدمات المساندة' },
+  { key: 'PROCUREMENT_OFFICER', name: 'مسؤول المشتريات',                         nameEn: 'Procurement Officer',   department: 'SUPPORT',                                         membershipTitle: 'مسؤول المشتريات' },
+  { key: 'WAREHOUSE_CLERK',     name: 'أمين المستودع',                          nameEn: 'Warehouse Clerk',       department: 'SUPPORT',                                         membershipTitle: 'أمين المستودع' },
+
+  { key: 'VOLUNTEER_MANAGER',   name: 'مدير التطوع / رئيس مركز سمايا',            nameEn: 'Volunteer Manager',     department: 'VOLUNTEER',    isManager: true,                   membershipTitle: 'مدير التطوع' },
+
+  { key: 'MARKETING_MANAGER',   name: 'مدير التسويق',                            nameEn: 'Marketing Manager',     department: 'MARKETING',    isManager: true,                   membershipTitle: 'مدير التسويق' },
+  { key: 'DIGITAL_MARKETING',   name: 'مسؤول التسويق الرقمي',                    nameEn: 'Digital Marketing',     department: 'MARKETING',                                       membershipTitle: 'مسؤول تسويق رقمي' },
+
+  { key: 'PARTNERSHIP_MANAGER', name: 'مدير الشراكات',                           nameEn: 'Partnership Manager',   department: 'PARTNERSHIP',  isManager: true,                   membershipTitle: 'مدير الشراكات' },
+
+  { key: 'PR_OFFICER',          name: 'مسؤول الإعلام',                           nameEn: 'PR Officer',            department: 'COMMS',        isManager: true,                   membershipTitle: 'مسؤول الإعلام' },
+];
+
+export const ROLE_BY_KEY: Record<RoleKey, RoleDef> =
+  ROLES_DEF.reduce((acc, r) => { acc[r.key] = r; return acc; }, {} as Record<RoleKey, RoleDef>);
+
+export const roleName = (key?: string): string =>
+  ROLE_BY_KEY[key as RoleKey]?.name || key || 'غير محدد';
+
+// ---------------------------------------------------------------------------
+// ADMIN (flag, not a role)
+// ---------------------------------------------------------------------------
+export const ADMIN_EMAILS = [
+  'a.alkhaldi@tarmeem.org',
+  's.aldossari@tarmeem.org',
+] as const;
+
+export const isAdminEmail = (email?: string | null): boolean =>
+  !!email && (ADMIN_EMAILS as readonly string[]).includes(email.toLowerCase().trim());
+
+// ---------------------------------------------------------------------------
+// FORMS (22)
+// ---------------------------------------------------------------------------
+export type FormCode =
+  | 'F-02' | 'F-03' | 'F-03.1' | 'F-03.2'
+  | 'F-04' | 'F-08' | 'F-18' | 'F-22' | 'F-21' | 'F-20'
+  | 'F-84' | 'F-85' | 'F-32' | 'F-33'
+  | 'F-35' | 'F-34' | 'F-19' | 'F-14' | 'F-23' | 'F-15'
+  | 'F-07' | 'F-52';
+
+export type FormStatus =
+  | 'draft'      // locked, not yet active
+  | 'pending'    // awaiting an approval step
+  | 'approved'   // all approvals done
+  | 'rejected'
+  | 'deferred'
+  | 'completed'; // auto-completed (e.g. skipped F-18 when no evacuation needed)
+
+export const FORM_STATUS_LABELS: Record<FormStatus, string> = {
+  draft:     'مسودة (مقفل)',
+  pending:   'بانتظار الاعتماد',
+  approved:  'مكتمل',
+  rejected:  'مرفوض',
+  deferred:  'مؤجَّل',
+  completed: 'تخطي تلقائي',
+};
+
+export const FORM_STATUS_COLORS: Record<FormStatus, string> = {
+  draft:     'bg-gray-200 text-gray-600 dark:bg-slate-800 dark:text-slate-500',
+  pending:   'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+  approved:  'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+  rejected:  'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+  deferred:  'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+  completed: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
+};
+
+export type FormCategory = 'BENEFICIARY' | 'ENGINEERING' | 'SUPPLY' | 'FINANCE' | 'COMMS' | 'CLOSURE';
+
+export interface FormDef {
+  code: FormCode;
+  title: string;
+  titleEn: string;
+  category: FormCategory;
+  ownerDept: DepartmentKey;
+  originRoles: RoleKey[];
+  approvalChain: RoleKey[];
+  bridgesTo?: DepartmentKey[];
+  triggers?: FormCode[];
+  slaDays?: number;        // business days
+  description: string;
+  phase: 1 | 2 | 3 | 4 | 5;
+}
+
+export const FORMS: FormDef[] = [
+  // ----- PHASE 1: البحث والاعتماد -----
+  { code: 'F-02',   phase: 1, title: 'استمارة البحث الاجتماعي',  titleEn: 'Social Research Form',     category: 'BENEFICIARY', ownerDept: 'RESEARCH', originRoles: ['SOCIAL_RESEARCHER'], approvalChain: ['SOCIAL_RESEARCHER', 'RESEARCH_MANAGER'], slaDays: 5, description: 'يعبّئها الباحث الاجتماعي وتُولّد المشروع، ثم تُحال لمدير البحث.' },
+  { code: 'F-03',   phase: 1, title: 'اعتماد مدير البحث',        titleEn: 'Research Manager Approval', category: 'BENEFICIARY', ownerDept: 'RESEARCH', originRoles: ['RESEARCH_MANAGER'], approvalChain: ['RESEARCH_MANAGER'], slaDays: 3, description: 'مراجعة وتقييم مدير البحث الاجتماعي للحالة.' },
+  { code: 'F-03.1', phase: 1, title: 'اعتماد المدير التنفيذي',   titleEn: 'Executive Approval',        category: 'BENEFICIARY', ownerDept: 'EXEC',     originRoles: ['EXEC_DIRECTOR'],    approvalChain: ['EXEC_DIRECTOR'],    bridgesTo: ['RESEARCH'], slaDays: 3, description: 'القرار النهائي للاستحقاق من الإدارة التنفيذية.' },
+  { code: 'F-03.2', phase: 1, title: 'الاعتماد النهائي للإحالة',  titleEn: 'Final Transfer Approval',   category: 'BENEFICIARY', ownerDept: 'RESEARCH', originRoles: ['RESEARCH_MANAGER'], approvalChain: ['RESEARCH_MANAGER'], bridgesTo: ['PROJECTS'], slaDays: 2, description: 'إحالة المشروع المُعتمد لقسم المشاريع.' },
+
+  // ----- PHASE 2: التشخيص والتجهيز -----
+  { code: 'F-04', phase: 2, title: 'تعيين مهندس التشخيص',    titleEn: 'Assign Diagnosis Engineer', category: 'ENGINEERING', ownerDept: 'PROJECTS', originRoles: ['HEAD_DIAGNOSIS'], approvalChain: ['HEAD_DIAGNOSIS'], slaDays: 2, description: 'إسناد مهندس التشخيص وفريق الفزعة للمشروع.' },
+  { code: 'F-08', phase: 2, title: 'كراسة التشخيص',           titleEn: 'Diagnosis Binder',          category: 'ENGINEERING', ownerDept: 'PROJECTS', originRoles: ['DIAGNOSIS_ENGINEER'], approvalChain: ['DIAGNOSIS_ENGINEER', 'HEAD_DIAGNOSIS'], slaDays: 7, description: 'التشخيص الهندسي، الكروكي، وحصر الكميات.' },
+  { code: 'F-18', phase: 2, title: 'تعهد إخلاء المبنى',       titleEn: 'Evacuation Pledge',         category: 'BENEFICIARY', ownerDept: 'RESEARCH', originRoles: ['SOCIAL_RESEARCHER'], approvalChain: ['SOCIAL_RESEARCHER'], slaDays: 5, description: 'يفتح للباحث الاجتماعي عند طلب مهندس التشخيص بإخلاء.' },
+  { code: 'F-22', phase: 2, title: 'توفير سكن بديل',          titleEn: 'Alternative Housing Request', category: 'BENEFICIARY', ownerDept: 'RESEARCH', originRoles: ['SOCIAL_RESEARCHER'], approvalChain: ['SOCIAL_RESEARCHER'], bridgesTo: ['PARTNERSHIP'], slaDays: 3, description: 'يفتح للباحث الاجتماعي مع تفعيل خطر المبنى.' },
+  { code: 'F-21', phase: 2, title: 'حصر الأثاث والأجهزة',     titleEn: 'Furniture Inventory',       category: 'BENEFICIARY', ownerDept: 'PROJECTS', originRoles: ['DIAGNOSIS_ENGINEER'], approvalChain: ['DIAGNOSIS_ENGINEER', 'PROJECTS_MANAGER'], slaDays: 7, description: 'حصر الأثاث والأجهزة المطلوبة بعد التشخيص.' },
+  { code: 'F-20', phase: 2, title: 'خطة توريد المواد',        titleEn: 'Material Supply Plan',      category: 'SUPPLY',      ownerDept: 'PROJECTS', originRoles: ['DIAGNOSIS_ENGINEER', 'HEAD_DIAGNOSIS'], approvalChain: ['DIAGNOSIS_ENGINEER'], bridgesTo: ['SUPPORT'], slaDays: 5, description: 'ساحة عمل تعاونية بين المشاريع والخدمات المساندة لتوزيع المواد.' },
+
+  // ----- PHASE 3: الترسية والبدء -----
+  { code: 'F-84', phase: 3, title: 'تسعيرات المقاولين',       titleEn: 'Contractors Pricing',       category: 'ENGINEERING', ownerDept: 'PROJECTS', originRoles: ['HEAD_DIAGNOSIS', 'DIAGNOSIS_ENGINEER'], approvalChain: ['DIAGNOSIS_ENGINEER'], slaDays: 4, description: 'حصر تسعيرات المقاولين المبدئية.' },
+  { code: 'F-85', phase: 3, title: 'اعتماد الترسية',          titleEn: 'Tendering Award',           category: 'ENGINEERING', ownerDept: 'PROJECTS', originRoles: ['PROJECTS_MANAGER'], approvalChain: ['PROJECTS_MANAGER'], bridgesTo: ['FINANCE'], slaDays: 2, description: 'اعتماد المقاول الفائز والتكلفة النهائية.' },
+  { code: 'F-32', phase: 3, title: 'تعيين المهندس المشرف',    titleEn: 'Assign Supervisor',         category: 'ENGINEERING', ownerDept: 'PROJECTS', originRoles: ['HEAD_SUPERVISION'], approvalChain: ['HEAD_SUPERVISION'], slaDays: 2, description: 'إسناد مشرف التنفيذ وفريق الإشراف.' },
+  { code: 'F-33', phase: 3, title: 'توثيق البدء',             titleEn: 'Start Documentation',       category: 'ENGINEERING', ownerDept: 'PROJECTS', originRoles: ['DIAGNOSIS_ENGINEER'], approvalChain: ['DIAGNOSIS_ENGINEER'], slaDays: 2, description: 'توثيق انطلاق العمل الميداني رسمياً.' },
+
+  // ----- PHASE 4: التنفيذ والمالية -----
+  { code: 'F-35', phase: 4, title: 'طلب دفعة أولى (30%)',     titleEn: 'First Payment Request',     category: 'FINANCE',     ownerDept: 'FINANCE',  originRoles: ['ACCOUNTANT', 'FINANCE_HEAD'], approvalChain: ['ACCOUNTANT', 'EXEC_DIRECTOR', 'ACCOUNTANT'], slaDays: 4, description: 'دفعة مالية أولى للمقاول (30% من قيمة العقد).' },
+  { code: 'F-34', phase: 4, title: 'إحالة حصر المواد',        titleEn: 'Material Inventory Transfer', category: 'SUPPLY',     ownerDept: 'PROJECTS', originRoles: ['DIAGNOSIS_ENGINEER', 'HEAD_SUPERVISION'], approvalChain: ['DIAGNOSIS_ENGINEER'], slaDays: 3, description: 'النسخة المُعتمدة والمفلترة لإحالتها للتوريد.' },
+  { code: 'F-19', phase: 4, title: 'طلب توريد داخلي',         titleEn: 'Internal Supply Tracker',   category: 'SUPPLY',      ownerDept: 'SUPPORT',  originRoles: ['PROCUREMENT_OFFICER'], approvalChain: ['PROCUREMENT_OFFICER'], slaDays: 5, description: 'ساحة تتبع مستمرة لإنجاز التوريد عبر الخدمات المساندة.' },
+  { code: 'F-14', phase: 4, title: 'تقرير الإشراف الميداني',   titleEn: 'Supervision Report',        category: 'ENGINEERING', ownerDept: 'PROJECTS', originRoles: ['HEAD_SUPERVISION'], approvalChain: ['HEAD_SUPERVISION', 'DIAGNOSIS_ENGINEER'], slaDays: 2, description: 'تقارير إشراف ميدانية متكررة، نسبة الإنجاز تُولّد دفعات F-15 آلياً.' },
+  { code: 'F-23', phase: 4, title: 'اعتماد بنود أعمال إضافية',  titleEn: 'Additional Works',          category: 'ENGINEERING', ownerDept: 'PROJECTS', originRoles: ['DIAGNOSIS_ENGINEER', 'PROJECTS_MANAGER'], approvalChain: ['PROJECTS_MANAGER', 'EXEC_DIRECTOR'], slaDays: 3, description: 'اعتماد بنود أعمال خارج نطاق الكراسة الأصلية.' },
+  { code: 'F-15', phase: 4, title: 'طلب صرف دفعة',            titleEn: 'Installment Disbursement',  category: 'FINANCE',     ownerDept: 'FINANCE',  originRoles: ['ACCOUNTANT', 'FINANCE_HEAD'], approvalChain: ['ACCOUNTANT', 'EXEC_DIRECTOR', 'ACCOUNTANT'], slaDays: 4, description: 'دفعات الإنجاز المتولّدة آلياً (الثانية 30%، الثالثة 30%، الأخيرة 10%).' },
+
+  // ----- PHASE 5: الإغلاق والتوثيق -----
+  { code: 'F-07', phase: 5, title: 'شهادة تسليم المنزل',      titleEn: 'Handover Certificate',      category: 'CLOSURE',     ownerDept: 'RESEARCH', originRoles: ['RESEARCH_MANAGER'], approvalChain: ['RESEARCH_MANAGER'], slaDays: 2, description: 'تسليم المبنى للمستفيد وإغلاق المشروع رسمياً.' },
+  { code: 'F-52', phase: 5, title: 'طلب تصوير وتوثيق',        titleEn: 'Media Coverage Request',    category: 'COMMS',       ownerDept: 'PROJECTS', originRoles: ['HEAD_SUPERVISION', 'DIAGNOSIS_ENGINEER'], approvalChain: ['HEAD_SUPERVISION'], bridgesTo: ['COMMS'], slaDays: 7, description: 'طلب توثيق إعلامي لختام المشروع، يُحال للاتصال المؤسسي.' },
+];
+
+export const FORM_BY_CODE: Record<FormCode, FormDef> =
+  FORMS.reduce((acc, f) => { acc[f.code] = f; return acc; }, {} as Record<FormCode, FormDef>);
+
+export const formsByDepartment = (dept: DepartmentKey): FormDef[] =>
+  FORMS.filter(f => f.ownerDept === dept || (f.bridgesTo || []).includes(dept));
+
+export const FORM_PHASE_MAP: Record<FormCode, 1 | 2 | 3 | 4 | 5> =
+  FORMS.reduce((acc, f) => { acc[f.code] = f.phase; return acc; }, {} as Record<FormCode, 1 | 2 | 3 | 4 | 5>);
+
+// Ordered list of form codes per phase (used by ProjectDetail UI)
+export const PHASE_FORMS: Record<1 | 2 | 3 | 4 | 5, FormCode[]> = {
+  1: ['F-02', 'F-03', 'F-03.1', 'F-03.2'],
+  2: ['F-04', 'F-08', 'F-18', 'F-22', 'F-21', 'F-20'],
+  3: ['F-84', 'F-85', 'F-32', 'F-33'],
+  4: ['F-35', 'F-34', 'F-19', 'F-14', 'F-23', 'F-15'],
+  5: ['F-07', 'F-52'],
+};
+
+export const PHASE_LABELS: Record<1 | 2 | 3 | 4 | 5, string> = {
+  1: 'البحث والاعتماد',
+  2: 'التشخيص والتجهيز',
+  3: 'الترسية والبدء',
+  4: 'التنفيذ والمالية',
+  5: 'الإغلاق والتوثيق',
+};
+
+// ---------------------------------------------------------------------------
+// PROJECT PHASE (different from form phase number — describes project state)
+// ---------------------------------------------------------------------------
+export type ProjectPhase =
+  | 'RESEARCH' | 'DIAGNOSIS' | 'EVACUATION' | 'TENDERING'
+  | 'EXECUTION' | 'HANDOVER' | 'CLOSED';
+
+export const PROJECT_PHASE_LABELS: Record<ProjectPhase, string> = {
+  RESEARCH:   'البحث الاجتماعي',
+  DIAGNOSIS:  'التشخيص الهندسي',
+  EVACUATION: 'إخلاء وسكن بديل',
+  TENDERING:  'الترسية والتسعيرات',
+  EXECUTION:  'التنفيذ والإشراف',
+  HANDOVER:   'التسليم',
+  CLOSED:     'مغلق',
+};
+
+// Map ProjectPhase → which 1..5 phase tab to open in UI by default
+export const PROJECT_PHASE_TO_TAB: Record<ProjectPhase, 1 | 2 | 3 | 4 | 5> = {
+  RESEARCH:   1,
+  DIAGNOSIS:  2,
+  EVACUATION: 2,
+  TENDERING:  3,
+  EXECUTION:  4,
+  HANDOVER:   5,
+  CLOSED:     5,
+};
+
+// ---------------------------------------------------------------------------
+// REGIONS & DEFAULT LISTS (used by F-02 dropdowns)
+// ---------------------------------------------------------------------------
+export const REGION_LABELS: Record<string, string> = {
+  ALL: 'جميع المناطق',
+  DAM: 'الدمام',
+  KHB: 'الخبر',
+  DHA: 'الظهران',
+  QAT: 'القطيف',
+  JUB: 'الجبيل',
+  AHS: 'الأحساء',
+  BQA: 'بقيق',
+  KHA: 'الخفجي',
+};
+
+export const regionLabel = (r?: string): string =>
+  REGION_LABELS[r as string] || r || 'غير محدد';
+
+export const DEFAULT_LISTS = {
+  cities:             ['الدمام', 'الخبر', 'الظهران', 'القطيف', 'الجبيل', 'الأحساء', 'بقيق', 'الخفجي'],
+  housings:           ['ملك', 'إيجار', 'ورثة', 'منحة', 'سكن خيري', 'أخرى'],
+  housingTypes:       ['منزل مستقل', 'فلة', 'شقة', 'ملحق', 'شعبي', 'أخرى'],
+  needs:              ['ترميم كلي', 'ترميم جزئي', 'صيانة', 'إعادة بناء'],
+  socialStatus:       ['متزوج/ة', 'أعزب/عزباء', 'مطلق/ة', 'أرمل/ة'],
+  educationLevels:    ['أمي', 'ابتدائي', 'متوسط', 'ثانوي', 'دبلوم', 'بكالوريوس', 'دراسات عليا'],
+  furnitureCondition: ['ممتاز', 'جيد', 'يحتاج صيانة', 'سيء', 'لا يصلح'],
+} as const;
+
+// ---------------------------------------------------------------------------
+// HELPERS
+// ---------------------------------------------------------------------------
+export const formatProjectId = (year: number, serial: number): string =>
+  `TRM-${year}-${String(serial).padStart(3, '0')}`;
+
+// ---------------------------------------------------------------------------
+// CUSTOM SVG ICONS
+// ---------------------------------------------------------------------------
+export const SaudiRiyalGlassIcon: React.FC<{ className?: string }> = ({ className = 'w-12 h-12' }) => (
+  <div className={`group relative inline-flex items-center justify-center rounded-lg bg-white/10 backdrop-blur-md border border-white/20 shadow-[0_4px_12px_rgba(128,0,128,0.1)] transition-all overflow-hidden ${className}`}>
+    <div className="absolute inset-0 bg-gradient-to-br from-purple-500/20 to-teal-500/20 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1124.14 1256.39" className="relative z-10 w-full h-full p-1 drop-shadow-md fill-current text-slate-800 dark:text-slate-100 group-hover:text-teal-400 transition-colors duration-500" aria-label="Saudi Riyal" role="img">
+      <path d="M699.62,1113.02h0c-20.06,44.48-33.32,92.75-38.4,143.37l424.51-90.24c20.06-44.47,33.31-92.75,38.4-143.37l-424.51,90.24Z"/>
+      <path d="M1085.73,895.8c20.06-44.47,33.32-92.75,38.4-143.37l-330.68,70.33v-135.2l292.27-62.11c20.06-44.47,33.32-92.75,38.4-143.37l-330.68,70.27V66.13c-50.67,28.45-95.67,66.32-132.25,110.99v403.35l-132.25,28.11V0c-50.67,28.44-95.67,66.32-132.25,110.99v525.69l-295.91,62.88c-20.06,44.47-33.33,92.75-38.42,143.37l334.33-71.05v170.26l-358.3,76.14c-20.06,44.47-33.32,92.75-38.4,143.37l375.04-79.7c30.53-6.35,56.77-24.4,73.83-49.24l68.78-101.97v-.02c7.14-10.55,11.3-23.27,11.3-36.97v-149.98l132.25-28.11v270.4l424.53-90.28Z"/>
+    </svg>
+  </div>
+);
+src/lib/firebase.ts
+// Firebase initialization. Replace placeholder env vars in .env.local
+// VITE_FIREBASE_API_KEY=...
+// VITE_FIREBASE_AUTH_DOMAIN=...
+// VITE_FIREBASE_PROJECT_ID=...
+// VITE_FIREBASE_STORAGE_BUCKET=...
+// VITE_FIREBASE_MESSAGING_SENDER_ID=...
+// VITE_FIREBASE_APP_ID=...
+import { initializeApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
+
+const firebaseConfig = {
+  apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId:             import.meta.env.VITE_FIREBASE_APP_ID,
+};
+
+export const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+
+// Use persistent IndexedDB cache so the app works offline (matches the
+// "WifiOff offline banner" already in App.tsx).
+export const db = (() => {
+  try {
+    return initializeFirestore(app, {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    });
+  } catch {
+    // initializeFirestore can only be called once per app; fall back if HMR re-runs this.
+    return getFirestore(app);
+  }
+})();
+
+export const storage = getStorage(app);
+src/lib/sla.ts
+// Business-day SLA calculator. Skips Friday & Saturday (Saudi weekend).
+import { Timestamp } from 'firebase/firestore';
+
+export type SlaTone = 'ok' | 'warn' | 'late' | 'neutral';
+export interface SlaStatus { text: string; tone: SlaTone; remaining: number; daysTaken: number; }
+
+const ONE_DAY_MS = 86_400_000;
+
+/** Count business days between two dates (Sun–Thu working week). */
+export function businessDaysBetween(start: Date, end: Date): number {
+  if (end <= start) return 0;
+  let cursor = new Date(start);
+  cursor.setHours(0, 0, 0, 0);
+  const endMidnight = new Date(end);
+  endMidnight.setHours(0, 0, 0, 0);
+  let count = 0;
+  while (cursor < endMidnight) {
+    const d = cursor.getDay(); // 0=Sun … 6=Sat
+    if (d !== 5 && d !== 6) count++; // skip Fri (5) & Sat (6)
+    cursor = new Date(cursor.getTime() + ONE_DAY_MS);
+  }
+  return count;
+}
+
+export function slaStatus(stepStartedAtIso: string | null | undefined, slaDays: number | undefined): SlaStatus {
+  if (!stepStartedAtIso || !slaDays) return { text: 'بدون SLA', tone: 'neutral', remaining: 0, daysTaken: 0 };
+  const start = new Date(stepStartedAtIso);
+  const now = new Date();
+  const taken = businessDaysBetween(start, now);
+  const remaining = slaDays - taken;
+  if (remaining < 0)        return { text: `متأخر ${Math.abs(remaining)} يوم عمل`, tone: 'late',    remaining, daysTaken: taken };
+  if (remaining === 0)      return { text: 'ينتهي اليوم',                          tone: 'warn',    remaining, daysTaken: taken };
+  if (remaining <= 1)       return { text: `متبقّي ${remaining} يوم عمل`,           tone: 'warn',    remaining, daysTaken: taken };
+  return                            { text: `متبقّي ${remaining} يوم عمل`,           tone: 'ok',      remaining, daysTaken: taken };
+}
+
+/** Convert Firestore Timestamp or ISO string to Date (defensive). */
+export const toDate = (v: Timestamp | string | Date | null | undefined): Date | null => {
+  if (!v) return null;
+  if (v instanceof Date) return v;
+  if (typeof v === 'string') return new Date(v);
+  if (typeof (v as Timestamp).toDate === 'function') return (v as Timestamp).toDate();
+  return null;
+};
+
+export const formatRelativeTime = (input: string | Date | null | undefined): string => {
+  const d = toDate(input);
+  if (!d) return '';
+  const diff = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (diff < 60) return 'الآن';
+  if (diff < 3600) return `قبل ${Math.floor(diff / 60)} دقيقة`;
+  if (diff < 86400) return `قبل ${Math.floor(diff / 3600)} ساعة`;
+  return `قبل ${Math.floor(diff / 86400)} يوم`;
+};
+src/lib/rbac.ts
+import { FORM_BY_CODE, ROLE_BY_KEY, DEPARTMENTS } from './data';
+import type { FormCode, RoleKey, DepartmentKey, FormDef } from './data';
+import type { UserProfile } from '../components/Auth';
+import type { FormRecord } from '../components/Forms';
+
+/** Can a user originate (create) a form of this code? */
+export function formCanBeOriginatedBy(form: FormDef, user: UserProfile): boolean {
+  if (user.isAdmin) return true;
+  return form.originRoles.includes(user.role as RoleKey);
+}
+
+/**
+ * Is this pending form awaiting THIS user's action?
+ * Strict, layered rule:
+ *   1. status must be 'pending'
+ *   2. Super-admin override → true
+ *   3. Strict role match against approvalChain[approvalIndex]
+ *   4. If assigneeId is set, it must equal user.id
+ *   5. Special case F-20 (cross-dept collab with SUPPORT)
+ *   6. Manager-of-department override (manager can act for absent subordinate)
+ */
+export function formAwaitsUser(record: FormRecord, user: UserProfile): boolean {
+  if (record.status !== 'pending') return false;
+  if (user.isAdmin) return true;
+
+  const userRoleDef = ROLE_BY_KEY[user.role as RoleKey];
+  if (!userRoleDef) return false;
+  const userDept: DepartmentKey | undefined = (user.department as DepartmentKey) || userRoleDef.department;
+  const nextRole = record.approvalChain[record.approvalIndex];
+  if (!nextRole) return false;
+  const nextRoleDef = ROLE_BY_KEY[nextRole];
+
+  // Cross-dept collab: F-20 explicitly allows SUPPORT employees to act
+  if (record.code === 'F-20' && userDept === 'SUPPORT') return true;
+
+  // Manager override for own department
+  if ((userRoleDef.isManager || user.isManager) && nextRoleDef?.department === userDept) return true;
+
+  // Strict role match
+  if (nextRole !== user.role) return false;
+
+  // Assignee gate
+  if (record.assigneeId && record.assigneeId !== user.id) return false;
+
+  return true;
+}
+
+/** Can the user see a department portal? */
+export function portalAccessForRole(user: UserProfile): DepartmentKey[] {
+  if (user.isAdmin) return DEPARTMENTS.map(d => d.key);
+  const def = ROLE_BY_KEY[user.role as RoleKey];
+  if (!def) return [];
+  if (def.isExecutive) return DEPARTMENTS.map(d => d.key); // exec sees everything
+  return [def.department];
+}
+
+/** Can the user view (read-only) a specific form on a project? */
+export function canViewForm(rec: FormRecord, user: UserProfile): boolean {
+  if (user.isAdmin) return true;
+  const allowedDepts = portalAccessForRole(user);
+  if (allowedDepts.includes(rec.ownerDept)) return true;
+  if ((rec.bridgesTo || []).some(d => allowedDepts.includes(d))) return true;
+  return false;
+}
+
+/** Helper: is this user a helper assigned to this form? */
+export function isFormHelper(rec: FormRecord, user: UserProfile): boolean {
+  const helpers: string[] = (rec.data?.helpers as string[]) || [];
+  return helpers.includes(user.id);
+}
+src/lib/workflow.ts (the cascade engine — replaces the "God Function")
+import { writeBatch, doc, collection, addDoc, updateDoc, serverTimestamp, DocumentReference } from 'firebase/firestore';
+import { db } from './firebase';
+import { FORM_BY_CODE } from './data';
+import type { FormCode, ProjectPhase, RoleKey } from './data';
+import type { FormRecord } from '../components/Forms';
+import type { ProjectRecord } from '../components/forms/_shared';
+import type { UserProfile } from '../components/Auth';
+
+export interface CascadeContext {
+  forms: FormRecord[];
+  projects: ProjectRecord[];
+  users: UserProfile[];
+  actor: UserProfile;
+  approvedRecord: FormRecord;
+  dataPatch?: Record<string, any>;
+}
+
+export interface CascadeResult {
+  projectPatch?: { phase?: ProjectPhase; progressPct?: number; contractorName?: string | null; awardedPrice?: number | null; supervisingEngineerId?: string | null; diagnosisEngineerId?: string | null; data?: Record<string, any> };
+  activate?: { formId: string; assigneeId?: string }[];
+  autoComplete?: { formId: string; note: string }[];
+  createForms?: { code: FormCode; data: Record<string, any>; title?: string; assigneeId?: string }[];
+  notify?: { recipients: string[]; text: string; subject: string; link?: string; type: string }[];
+}
+
+/** Declarative trigger map: each entry is a function the engine calls after a form is approved. */
+export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => CascadeResult>> = {
+  // ============== PHASE 1 ==============
+  'F-02': () => ({
+    activate: [], // F-02 is in its own chain (researcher → manager). When chain ends, F-03 triggers.
+  }),
+
+  'F-03': (ctx) => {
+    const f031 = ctx.forms.find(f => f.code === 'F-03.1' && f.projectRefId === ctx.approvedRecord.projectRefId);
+    return { activate: f031 ? [{ formId: f031.id }] : [] };
+  },
+
+  'F-03.1': (ctx) => {
+    const f032 = ctx.forms.find(f => f.code === 'F-03.2' && f.projectRefId === ctx.approvedRecord.projectRefId);
+    return { activate: f032 ? [{ formId: f032.id }] : [] };
+  },
+
+  'F-03.2': (ctx) => {
+    const f04 = ctx.forms.find(f => f.code === 'F-04' && f.projectRefId === ctx.approvedRecord.projectRefId);
+    return {
+      projectPatch: { phase: 'DIAGNOSIS', progressPct: 15 },
+      activate: f04 ? [{ formId: f04.id }] : [],
+    };
+  },
+
+  // ============== PHASE 2 ==============
+  'F-04': (ctx) => {
+    const engineerId = (ctx.dataPatch?.engineerId as string) || (ctx.approvedRecord.data?.engineerId as string);
+    const f08 = ctx.forms.find(f => f.code === 'F-08' && f.projectRefId === ctx.approvedRecord.projectRefId);
+    return {
+      projectPatch: { diagnosisEngineerId: engineerId, data: { diagnosisHelpers: ctx.approvedRecord.data?.helpers || [] } },
+      activate: f08 ? [{ formId: f08.id, assigneeId: engineerId }] : [],
+    };
+  },
+
+  'F-08': (ctx) => {
+    const projectRefId = ctx.approvedRecord.projectRefId!;
+    const f20 = ctx.forms.find(f => f.code === 'F-20' && f.projectRefId === projectRefId);
+    const f21 = ctx.forms.find(f => f.code === 'F-21' && f.projectRefId === projectRefId);
+    const f18 = ctx.forms.find(f => f.code === 'F-18' && f.projectRefId === projectRefId);
+    const f22 = ctx.forms.find(f => f.code === 'F-22' && f.projectRefId === projectRefId);
+    const safetyHazard = !!(ctx.dataPatch?.safetyHazard ?? ctx.approvedRecord.data?.basic?.safetyHazard);
+    const project = ctx.projects.find(p => p.id === projectRefId);
+
+    const result: CascadeResult = {
+      activate: [
+        ...(f20 ? [{ formId: f20.id }] : []),
+        ...(f21 ? [{ formId: f21.id, assigneeId: project?.diagnosisEngineerId || undefined }] : []),
+      ],
+    };
+
+    if (safetyHazard) {
+      if (f18) result.activate!.push({ formId: f18.id, assigneeId: project?.createdBy });
+      if (f22) result.activate!.push({ formId: f22.id, assigneeId: project?.createdBy });
+      result.projectPatch = { phase: 'EVACUATION', progressPct: 30 };
+    } else {
+      result.autoComplete = [
+        ...(f18 ? [{ formId: f18.id, note: 'تخطي تلقائي — لا يحتاج إخلاء' }] : []),
+        ...(f22 ? [{ formId: f22.id, note: 'تخطي تلقائي — لا يحتاج سكن بديل' }] : []),
+      ];
+      result.projectPatch = { progressPct: 30 };
+    }
+    return result;
+  },
+
+  'F-20': (ctx) => {
+    const f84 = ctx.forms.find(f => f.code === 'F-84' && f.projectRefId === ctx.approvedRecord.projectRefId);
+    return {
+      projectPatch: { phase: 'TENDERING', progressPct: 45 },
+      activate: f84 ? [{ formId: f84.id }] : [],
+    };
+  },
+
+  // ============== PHASE 3 ==============
+  'F-84': (ctx) => {
+    const f85 = ctx.forms.find(f => f.code === 'F-85' && f.projectRefId === ctx.approvedRecord.projectRefId);
+    return { activate: f85 ? [{ formId: f85.id }] : [] };
+  },
+
+  'F-85': (ctx) => {
+    const projectRefId = ctx.approvedRecord.projectRefId!;
+    const f32 = ctx.forms.find(f => f.code === 'F-32' && f.projectRefId === projectRefId);
+    const f35 = ctx.forms.find(f => f.code === 'F-35' && f.projectRefId === projectRefId);
+    return {
+      projectPatch: {
+        contractorName: (ctx.dataPatch?.winnerContractor as string) || null,
+        awardedPrice: Number(ctx.dataPatch?.winnerPrice) || null,
+        progressPct: 55,
+      },
+      activate: [
+        ...(f32 ? [{ formId: f32.id }] : []),
+        ...(f35 ? [{ formId: f35.id }] : []),
+      ],
+    };
+  },
+
+  'F-32': (ctx) => {
+    const supervisorId = (ctx.dataPatch?.engineerId as string) || (ctx.approvedRecord.data?.engineerId as string);
+    const f33 = ctx.forms.find(f => f.code === 'F-33' && f.projectRefId === ctx.approvedRecord.projectRefId);
+    return {
+      projectPatch: { supervisingEngineerId: supervisorId, data: { supervisionHelpers: ctx.approvedRecord.data?.helpers || [] } },
+      activate: f33 ? [{ formId: f33.id, assigneeId: supervisorId }] : [],
+    };
+  },
+
+  'F-33': (ctx) => {
+    const projectRefId = ctx.approvedRecord.projectRefId!;
+    const f14 = ctx.forms.find(f => f.code === 'F-14' && f.projectRefId === projectRefId);
+    const f19 = ctx.forms.find(f => f.code === 'F-19' && f.projectRefId === projectRefId);
+    const f34 = ctx.forms.find(f => f.code === 'F-34' && f.projectRefId === projectRefId);
+    return {
+      projectPatch: { phase: 'EXECUTION', progressPct: 60 },
+      activate: [
+        ...(f14 ? [{ formId: f14.id }] : []),
+        ...(f19 ? [{ formId: f19.id }] : []),
+        ...(f34 ? [{ formId: f34.id }] : []),
+      ],
+    };
+  },
+
+  // ============== PHASE 4 ==============
+  'F-14': (ctx) => {
+    const projectRefId = ctx.approvedRecord.projectRefId!;
+    const overall = Number(ctx.dataPatch?.overallProgress ?? ctx.approvedRecord.data?.overallProgress ?? 0);
+    const existingF15 = ctx.forms.filter(f => f.code === 'F-15' && f.projectRefId === projectRefId);
+
+    const createForms: NonNullable<CascadeResult['createForms']> = [];
+    if (overall >= 60 && !existingF15.some(f => f.data?.paymentIndex === 2))
+      createForms.push({ code: 'F-15', data: { paymentIndex: 2 }, title: 'طلب صرف الدفعة الثانية (30%)' });
+    if (overall >= 90 && !existingF15.some(f => f.data?.paymentIndex === 3))
+      createForms.push({ code: 'F-15', data: { paymentIndex: 3 }, title: 'طلب صرف الدفعة الثالثة (30%)' });
+    if (overall >= 100 && !existingF15.some(f => f.data?.paymentIndex === 4))
+      createForms.push({ code: 'F-15', data: { paymentIndex: 4 }, title: 'طلب صرف الدفعة الأخيرة (10%)' });
+
+    // Spawn F-23 if scope change requested
+    if (ctx.dataPatch?.requestScopeChange || ctx.approvedRecord.data?.requestScopeChange) {
+      createForms.push({ code: 'F-23', data: { triggeredByF14: ctx.approvedRecord.id }, title: 'اعتماد بنود أعمال إضافية (مولّد آلياً)' });
+    }
+
+    return {
+      projectPatch: { progressPct: Math.max(60, Math.min(99, overall)) },
+      createForms,
+    };
+  },
+
+  'F-15': (ctx) => {
+    const paymentIndex = Number(ctx.approvedRecord.data?.paymentIndex || 1);
+    if (paymentIndex !== 4) return {};
+    const f07 = ctx.forms.find(f => f.code === 'F-07' && f.projectRefId === ctx.approvedRecord.projectRefId);
+    return {
+      projectPatch: { phase: 'HANDOVER', progressPct: 95 },
+      activate: f07 ? [{ formId: f07.id }] : [],
+    };
+  },
+
+  // ============== PHASE 5 ==============
+  'F-07': (ctx) => {
+    const f52 = ctx.forms.find(f => f.code === 'F-52' && f.projectRefId === ctx.approvedRecord.projectRefId);
+    const mediaRequested = !!(ctx.dataPatch?.mediaRequested ?? ctx.approvedRecord.data?.mediaRequested);
+    const project = ctx.projects.find(p => p.id === ctx.approvedRecord.projectRefId);
+
+    const result: CascadeResult = { projectPatch: { phase: 'CLOSED', progressPct: 100 } };
+    if (f52) {
+      if (mediaRequested) {
+        result.activate = [{ formId: f52.id, assigneeId: project?.supervisingEngineerId || undefined }];
+      } else {
+        result.autoComplete = [{ formId: f52.id, note: 'تخطي تلقائي — لم يُطلب توثيق إعلامي' }];
+      }
+    }
+    return result;
+  },
+
+  'F-52': (ctx) => {
+    const commsUsers = ctx.users.filter(u => u.status === 'active' && (u.department === 'COMMS' || u.role === 'PR_OFFICER')).map(u => u.id);
+    return {
+      notify: [{
+        recipients: commsUsers,
+        text: `طلب توثيق إعلامي جاهز للمشروع ${ctx.approvedRecord.projectId || ''}`,
+        subject: 'تنبيه تغطية إعلامية',
+        type: 'media_coverage',
+        link: ctx.approvedRecord.id,
+      }],
+    };
+  },
+};
+
+/** Execute a cascade result atomically. */
+export async function applyCascade(result: CascadeResult, ctx: CascadeContext): Promise<void> {
+  const batch = writeBatch(db);
+  const now = serverTimestamp();
+
+  // 1. Project patch
+  if (result.projectPatch && ctx.approvedRecord.projectRefId) {
+    batch.update(doc(db, 'projects', ctx.approvedRecord.projectRefId), {
+      ...result.projectPatch,
+      updatedAt: now,
+    });
+  }
+
+  // 2. Activate forms (draft → pending)
+  for (const a of result.activate || []) {
+    batch.update(doc(db, 'forms', a.formId), {
+      status: 'pending',
+      stepStartedAt: now,
+      assigneeId: a.assigneeId ?? null,
+      updatedAt: now,
+    });
+  }
+
+  // 3. Auto-complete forms
+  for (const a of result.autoComplete || []) {
+    batch.update(doc(db, 'forms', a.formId), {
+      status: 'completed',
+      approvals: [{ role: 'SYSTEM' as RoleKey, actorId: 'system', actorName: 'النظام', at: new Date().toISOString(), decision: 'approved', note: a.note }],
+      updatedAt: now,
+    });
+  }
+
+  // 4. Create new forms
+  const newFormRefs: DocumentReference[] = [];
+  for (const cf of result.createForms || []) {
+    const def = FORM_BY_CODE[cf.code];
+    const ref = doc(collection(db, 'forms'));
+    batch.set(ref, {
+      code: cf.code,
+      title: cf.title || def.title,
+      projectId: ctx.approvedRecord.projectId || null,
+      projectRefId: ctx.approvedRecord.projectRefId || null,
+      beneficiaryName: ctx.approvedRecord.beneficiaryName || '',
+      status: 'pending',
+      approvalIndex: 0,
+      approvalChain: def.approvalChain,
+      approvals: [],
+      createdBy: 'system',
+      createdByName: 'النظام',
+      createdByRole: 'SYSTEM' as RoleKey,
+      createdAt: now,
+      updatedAt: now,
+      ownerDept: def.ownerDept,
+      bridgesTo: def.bridgesTo || [],
+      notes: '',
+      data: cf.data,
+      assigneeId: cf.assigneeId ?? null,
+      files: [],
+      stepStartedAt: now,
+    });
+    newFormRefs.push(ref);
+  }
+
+  await batch.commit();
+
+  // 5. Notifications (after batch — they don't need atomicity with the workflow)
+  for (const n of result.notify || []) {
+    await addDoc(collection(db, 'notifications'), {
+      ...n,
+      readBy: [],
+      createdAt: new Date().toISOString(),
+    });
+  }
+}
+
+Part G — The Claude Code Prompt (use this in your GitHub repo)
+Copy-paste this into Claude Code (run from the repo root with claude code):
+You are the lead architect finishing the Tarmeem ERP web app (React + TypeScript + Tailwind + Firebase). The current codebase has 19 confirmed defects, 8 form renderers that are still skeletons, and a monolithic FormRenderers.tsx file (~80 KB). You are going to rebuild this app to a production-quality state in atomic commits. Do not ask permission between commits — execute the full plan.
+
+# CONTEXT YOU MUST READ BEFORE WRITING CODE
+1. `src/lib/data.ts` — I have already replaced this file with the canonical dictionary (departments, roles, forms, phases). Use it as the single source of truth. Do NOT redefine RoleKey, DepartmentKey, FormCode, FORMS, or any related constants anywhere else.
+2. `src/lib/firebase.ts` — already created.
+3. `src/lib/sla.ts` — already created. Use `slaStatus()` everywhere SLA is displayed; do NOT compute calendar days inline.
+4. `src/lib/rbac.ts` — already created. Use `formAwaitsUser`, `formCanBeOriginatedBy`, `portalAccessForRole`, `canViewForm`, `isFormHelper`. Do not duplicate this logic.
+5. `src/lib/workflow.ts` — already created. Holds `TRIGGER_MAP` and `applyCascade`. App.tsx’s old monolithic `advanceForm` cascade logic MUST be deleted and replaced with `applyCascade(TRIGGER_MAP[code](ctx), ctx)`.
+
+# THE 5-PHASE WORKFLOW (DO NOT DEVIATE)
+Phase 1 — البحث والاعتماد: F-02 → F-03 → F-03.1 → F-03.2 → activates F-04 + sets project.phase='DIAGNOSIS'.
+Phase 2 — التشخيص والتجهيز: F-04 activates F-08 (assignee=engineer). F-08 approved → activates F-20+F-21 always; if safetyHazard activates F-18+F-22 else auto-completes them. F-20 approved → project.phase='TENDERING', activates F-84.
+Phase 3 — الترسية والبدء: F-84 → F-85 (sets contractor + price) → activates F-32 + F-35. F-32 assigns supervisor → activates F-33. F-33 → project.phase='EXECUTION', activates F-14, F-19, F-34.
+Phase 4 — التنفيذ والمالية: F-14 reports carry overallProgress %; at 60% auto-creates F-15 payment 2; at 90% payment 3; at 100% payment 4. F-14 with requestScopeChange=true → auto-creates F-23. F-15 (paymentIndex=4) approved → project.phase='HANDOVER', activates F-07.
+Phase 5 — الإغلاق والتوثيق: F-07 approved → project.phase='CLOSED', progressPct=100. If mediaRequested → activates F-52 (assignee = supervisingEngineer), else auto-completes F-52. F-52 approved → notifies all COMMS dept members.
+
+# DEPARTMENTS (9) — keep all, two are reference-only
+EXEC, RESEARCH, PROJECTS, FINANCE, SUPPORT, PARTNERSHIP, COMMS, VOLUNTEER, MARKETING.
+Active in workflow: first 7. VOLUNTEER and MARKETING have portals but no forms in pipeline.
+
+# RBAC RULES
+- `isAdmin: true` flag on user grants global override on any form.
+- Admin is NOT a role; it’s a flag. Real role + isAdmin = correct payload.
+- `formAwaitsUser` (in rbac.ts) is authoritative for action buttons.
+- `portalAccessForRole`: EXEC department members see all portals; everyone else sees only their own. Admins see all.
+- Firestore Security Rules at `firestore.rules` mirror this server-side (defense in depth).
+
+# YOUR TASKS — EXECUTE IN ORDER, COMMIT AFTER EACH
+
+## Commit 1: Repo hygiene
+- Create `.env.example` with all 6 VITE_FIREBASE_* keys placeholder.
+- Add `.env.local` to `.gitignore` if not already.
+- Add `firestore.rules` at repo root (see Commit 12 for content).
+- Run `npm install firebase@latest react@latest react-dom@latest typescript@latest tailwindcss@latest lucide-react@latest`.
+
+## Commit 2: Type contracts
+Create `src/types/firestore.ts` with strict interfaces for every form's `data` payload. At minimum:
+- `F02Data`, `F03Data`, `F031Data`, `F032Data`, `F04Data`, `F08Data` (with nested `works[]`, `croquisList[]`, `furnitureFixed`, `appliancesFixed`), `F18Data`, `F22Data`, `F21Data`, `F20Data` (items, buckets, messages), `F84Data` (bids[]), `F85Data` (winner), `F32Data` (engineerId, helpers), `F33Data`, `F35Data` (3-stage notes + transferRef), `F34Data`, `F19Data` (progressData), `F14Data` (engineerId, sectionData, overallProgress, requestScopeChange), `F23Data`, `F15Data` (paymentIndex 2|3|4, notes per stage, transferRef), `F07Data` (mediaRequested, uploaded), `F52Data` (coverageTypes, taskNotes).
+- `FormRecord` (replace `data?: Record<string, any>` with `data?: FormDataByCode[Code]` via a discriminated union).
+- `UserProfile`, `ProjectRecord`, `AppNotification`.
+
+## Commit 3: Hooks split out of App.tsx
+Create:
+- `src/hooks/useAuth.ts` — `onAuthStateChanged` subscription, exposes `{ firebaseUser, profile, loading }`. Memoize on `firebaseUser.uid` only (kills the dependency-thrashing bug).
+- `src/hooks/useFirestoreCollection.ts` — generic bounded `onSnapshot` wrapper that takes `(collectionName, queryConstraints[])` and returns `{ data, loading }`. Default limit = 500 with `orderBy('updatedAt', 'desc')`.
+- `src/hooks/useNotifications.ts` — server-filtered with `where('recipients','array-contains', uid)` + `orderBy('createdAt','desc')` + `limit(50)`.
+
+## Commit 4: Theme + UI primitives
+- Create `src/components/ThemeProvider.tsx` (context: `theme: 'light'|'dark'`, persist to localStorage, toggle method). Default to `'dark'`.
+- Move from `ui.tsx` (the current file) into `src/components/ui/` directory:
+  - `Card.tsx`, `Pill.tsx`, `Input.tsx`, `Select.tsx`, `TextArea.tsx`, `NumberCounter.tsx`, `ReadOnlyField.tsx`, `EmptyState.tsx`, `SearchBar.tsx`, `ProgressBar.tsx`, `AccessDeniedCard.tsx`, `index.ts` (re-export).
+- Move `TarmeemLogo`, `TarmeemSplash`, `ThemeToggle` into `src/components/TarmeemLogo.tsx`.
+- EVERY component: replace hardcoded `bg-[#0a0a0a]`, `text-white`, `border-gray-800` with `bg-white dark:bg-[#0a0a0a]`, `text-gray-900 dark:text-white`, `border-gray-200 dark:border-gray-800`. Light mode must look good (white surfaces, brand purple accents) — not just be functional.
+
+## Commit 5: Auth.tsx
+- Keep current dark login screen aesthetic.
+- Move `UserProfile` interface to `src/types/firestore.ts`; import it here.
+- Email validation: trim + lowercase before write.
+- On signup, set `status: 'pending'`, `role: 'PENDING' as any` (we'll allow PENDING as a meta-role at the UserProfile level only, NOT in RoleKey union — use string literal in the interface).
+- On login: if email is in `ADMIN_EMAILS`, set `isAdmin: true` automatically (current legacy admin auto-promote logic — keep it but move it into `useAuth.ts`).
+
+## Commit 6: App.tsx
+- Remove all the mounted `useEffect` that fetches users/forms/projects/notifications. Replace with the new hooks.
+- Delete the entire `advanceForm` God Function. Replace with a tiny wrapper:
+  ```ts
+  const advanceForm = async (formId, user, decision, note, dataPatch) => {
+    const rec = forms.find(f => f.id === formId);
+    if (!rec) return;
+    // 1. Compute new approval state (kept inline — only ~15 lines)
+    // 2. updateDoc the form with new approval + status + index + SLA fields (via writeBatch)
+    // 3. If newStatus === 'approved' and TRIGGER_MAP[rec.code] exists:
+    //      const result = TRIGGER_MAP[rec.code]({ forms, projects, users, actor: user, approvedRecord: rec, dataPatch });
+    //      await applyCascade(result, ctx);
+    // 4. Dispatch notifications for the new pending step (find next-role users).
+  };
+  ```
+- `formsApi` stays the same shape — only the internals change.
+- Remove `legacyAdmins` hardcoded array — use `isAdminEmail()` from data.ts.
+- Remove all `(e:any)` and `as any` casts.
+
+## Commit 7: FormRenderers split (the big one)
+Delete `src/components/forms/FormRenderers.tsx`. Create:
+- `src/components/forms/_shared.tsx` — `FormShell`, `CroquisViewer`, `ProjectRecord` and `FormsContext` interfaces.
+- 22 files, one per form (see file tree in the spec doc). Each file exports a default `Renderer` and (where applicable) a `Creator`.
+- `src/components/forms/index.ts` — imports all and exports `RENDERERS` and `CREATORS` records.
+
+**For each form, the renderer MUST:**
+- Be fully implemented (no SKELETONs).
+- Lock every input with `disabled={!awaitsMe}` (use `formAwaitsUser`).
+- Wrap async submits in `try/finally` so `busy` always toggles back.
+- Use `FormShell` for standard approve/reject buttons OR pass `approvalSection={<custom/>}` when the form has multi-stage UI (F-14, F-15, F-35).
+- Save drafts via `api.updateFormData(rec.id, partial)`.
+- Final approve via `api.approveForm(rec.id, user, note, dataPatch)`.
+- NEVER call `applyCascade` directly — that's App.tsx's job after the approval is committed.
+
+**Specific form requirements:**
+- **F-02 (Creator)**: 4-step wizard (شخصية → دخل وديون → الأسرة والسكن → الباحث والمرفقات). On submit, single `writeBatch` that creates the Project doc, the F-02 doc (status=draft, with full data), AND the entire 21-form pipeline (each as `status:'draft'`), plus the F-02 set to `status:'pending'` (approvalIndex=0, awaiting SOCIAL_RESEARCHER step which is auto-completed since user IS the researcher → actually approvalIndex starts at 1 awaiting RESEARCH_MANAGER). Fields per Phase 1 plan: personal (fullName, idNumber, nationality, gender, dob, mobile1, mobile2, city, neighborhood, gps, socialStatus, education), work (commercialReg, currentJob), income (6 toggle+amount pairs), debts (4 toggle+amount pairs), family (wives, sons, daughters, total, under15, over64, specialNeeds, healthStatus, socialSecurityStatus), housing (ownership, type, age, furniture, need), researcher (name, mobile, visitDate, opinion), manager (name, title, mobile), documents[], pledge.
+- **F-03**: radio (مستحق/غير مستحق) + managerNotes + approve button.
+- **F-03.1**: exec radio (موافق/غير موافق) + execNotes + approve button.
+- **F-03.2**: research_manager confirms transfer + transferNotes + approve.
+- **F-04**: Select engineer from DIAGNOSIS_ENGINEER users + 3 helper selects + notes + submit (sets data.engineerId, data.helpers).
+- **F-08**: Tab UI (5 tabs: الأساسية، حصر الأعمال، الأثاث والأجهزة، كروكي المبنى، الاعتماد). 
+  - الأساسية: buildingType, area, age, diagnosisResult, safetyHazard checkbox (red alert when checked), summary.
+  - حصر الأعمال: dynamic `works[]` array — each item has name, civilFixed (8 boolean+note pairs: ceiling/concrete/ceramic/insulation/plaster/paint/aluminum/wood), civilCustom[], electricalFixed (4 count pairs: ceilingLight/breaker/normalSocket/spotlight), electricalCustom[], plumbingFixed (4 count pairs: westernToilet/arabicToilet/ceramicSink/heater), plumbingCustom[], photos[].
+  - الأثاث والأجهزة: furnitureFixed (14 count keys per spec: bedSingle, bed15, bedDouble, mattressSingle, mattress15, mattressDouble, sofaMeters, floorSeating, carpet, wardrobe2, wardrobe3, wardrobe4, nightstand, vanity) + furnitureCustom[]. appliancesFixed (8 count keys: acSplit1, acSplit15, acWindow15, washer, stove, fridge, vacuum, waterCooler) + appliancesCustom[].
+  - كروكي المبنى: SVG canvas editor with pen tool — each croquis has floorNum, roomName, totalArea, paths[], fixtures[]. Reuse `CroquisViewer` from _shared.tsx for read-only view; build a minimal canvas editor (mouse/touch points → paths array).
+  - الاعتماد: notes + pledge checkbox + submit.
+- **F-18**: simple pledge checkbox + evacuationDate + submit.
+- **F-22**: simple housing details (proposedAddress, monthlyRent, durationMonths) + submit. Bridges to PARTNERSHIP.
+- **F-21**: read furniture inventory from F-08; allow PROJECTS_MANAGER stage 2 to confirm.
+- **F-20**: KEEP existing implementation (it's good) — just clean types, move chat messages to subcollection `forms/{id}/messages` (Commit 11).
+- **F-84**: dynamic `bids[]` (name, amount). Save draft + submit.
+- **F-85**: select winning bid (radio) + timeframe + notes + pledge + submit.
+- **F-32**: same shape as F-04 but for supervisor.
+- **F-33**: date picker + pledge + submit.
+- **F-35**: 3-stage UI (accountant review → exec_director approval → accountant disbursement). Each stage shows its inputs (accountantNotes1, execNotes, transferRef) only when active. Compute paymentValue = winnerPrice × 0.30.
+- **F-34**: read F-20 buckets, display direct/inKind/partnership tables, allow DIAGNOSIS_ENGINEER to add approval notes + submit.
+- **F-19**: progressData (furnPct slider, handoverPct slider, notes) + save button. This form NEVER auto-completes; it's a permanent tracker until project closes.
+- **F-14**: 2-section UI (تعيين مهندس الإشراف → جولة الإشراف الميدانية). Section 1 (HEAD_SUPERVISION): select engineer + helpers. Section 2 (DIAGNOSIS_ENGINEER): walk F-08 works, check completed items, sectionData[sectionId]={pct, note}, overallProgress (0-100), requestScopeChange checkbox, triggersPayment checkbox, finalNote, submit.
+- **F-23**: dynamic itemsList (name, quantity, estCost) + reason + 2-stage approval.
+- **F-15**: identical to F-35 structure but uses paymentIndex to label (الثانية 30%، الثالثة 30%، الأخيرة 10%).
+- **F-07**: mediaRequested checkbox + photos upload + pledge + submit. Auto-spawn F-52 logic handled by TRIGGER_MAP.
+- **F-52**: coverageTypes multi-select (قبل/بعد، فيديو ميداني، مقابلة، تصوير حدث) + taskNotes + submit. Notifies COMMS dept on approval.
+
+## Commit 8: Components polish
+- **Home.tsx**: import `Building2`, `Clock` from lucide-react (currently missing → crash). Wire ALL hardcoded colors to dark: variants. Move leaderboard + activity into `useMemo` over forms.
+- **Departments.tsx**: same theme cleanup. The "myQueue", "deptAlerts", "sops" tabs are fine.
+- **Projects.tsx**:
+  - Fix `Clock` missing import.
+  - Use `PROJECT_PHASE_TO_TAB` from data.ts to set initial activePhase from project.phase.
+  - Use `useMemo` for filtered projects.
+  - Replace inline FORM_PHASE_MAP with import from data.ts.
+  - Fix `onCreateForm?.('F-02')` button visibility: allow SOCIAL_RESEARCHER, RESEARCH_MANAGER, and isAdmin (current code accepts ADMIN role which we're killing — use `isAdmin` flag only).
+- **EmployeeProfile.tsx**: extract typed `mobile`/`ext` fields properly (currently `(profile as any).mobile`). Add to UserProfile interface.
+- **Admin.tsx**:
+  - Implement the "ترقية إلى مسؤول النظام (Super Admin)" toggle that, when checked, forces payload override per the architecture decision.
+  - The "Reject" path must use `updateDoc` to set `status:'rejected'` + `rejectionReason` + audit log; never `deleteDoc`. (Currently `rejectUser` in App.tsx deletes — fix it.)
+  - The bulk "إعادة ضبط الأدوار" button stays; keep current `resetUserRole` semantics.
+  - Filter buttons (all/pending/active/deactivated/reset) — keep.
+
+## Commit 9: NewFormModal + onCreateForm wiring
+- Currently `onCreateForm` in App.tsx only supports F-02. Fix it to accept any FormCode and route to the matching Creator (only F-02 has a Creator today; others are draft-then-pending in the pipeline).
+- For non-F-02 creators (currently `GenericCreator`), keep the generic notes-only fallback.
+
+## Commit 10: Firestore subcollection migration for F-20 messages
+- Migrate `forms/{id}.data.messages` → `forms/{id}/messages` subcollection.
+- Add a `useFormMessages(formId)` hook.
+- Update F-20 renderer to read/write via the hook.
+
+## Commit 11: firestore.rules
+Create `firestore.rules`:
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() { return request.auth != null; }
+    function userDoc() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function isAdmin() { return isSignedIn() && userDoc().isAdmin == true; }
+    function isActive() { return isSignedIn() && userDoc().status == 'active'; }
+
+    match /users/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if isSignedIn() && request.auth.uid == uid && request.resource.data.status == 'pending';
+      allow update: if isAdmin() || (request.auth.uid == uid && resource.data.status == 'active'
+                       && request.resource.data.diff(resource.data).affectedKeys()
+                          .hasOnly(['fullName','mobile','ext']));
+      allow delete: if isAdmin();
+    }
+
+    match /projects/{id} {
+      allow read: if isActive();
+      allow create, update: if isActive();
+      allow delete: if isAdmin();
+    }
+
+    match /forms/{id} {
+      allow read: if isActive();
+      allow create: if isActive();
+      allow update: if isActive(); // detailed approval-step gating done client-side + Cloud Function later
+      allow delete: if isAdmin();
+
+      match /messages/{mid} {
+        allow read, create: if isActive();
+        allow update, delete: if isAdmin();
+      }
+    }
+
+    match /notifications/{nid} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.recipients;
+      allow update: if isSignedIn() && request.auth.uid in resource.data.recipients
+                       && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy']);
+      allow create: if isActive();
+      allow delete: if isAdmin();
+    }
+
+    match /counters/{id} {
+      allow read, write: if isActive();
+    }
+  }
+}
+```
+- Add `firebase.json` with `firestore.rules` reference if missing.
+
+## Commit 12: Final verification
+- Run `npx tsc --noEmit` → fix every type error. Zero `any` outside JSON-shaped form data fields.
+- Run `npm run build` → must succeed.
+- Run `npm run lint` if eslint configured.
+- Add a smoke test in `src/__tests__/workflow.test.ts` covering: F-02 → F-03 → F-03.1 → F-03.2 → F-04 activation; F-08 with/without safetyHazard; F-14 milestone payment generation; F-07 with/without media.
+
+# CODE QUALITY RULES
+- No `any` anywhere except inside form data field handlers where the discriminated union is intentionally relaxed.
+- No `(e: any)` event handlers — use `React.ChangeEvent<HTMLInputElement>` etc.
+- No hardcoded dark colors without a `dark:` companion class.
+- No inline `useEffect` with object dependencies — destructure primitives.
+- Every Firestore write that touches >1 doc uses `writeBatch` or `runTransaction`.
+- Every `onSnapshot` has explicit `limit()` + `orderBy()`.
+- Arabic copy must be reviewed for typos; UI is RTL by default (`<html dir="rtl">` in index.html).
+
+# FAILURE MODES TO AVOID (we lost weeks to these)
+- Do NOT put placeholder/skeleton renderers. Every form must work end-to-end.
+- Do NOT define `RoleKey` or `FormCode` in any file other than `src/lib/data.ts`.
+- Do NOT bring back the `ADMIN` role — it's a flag, not a role.
+- Do NOT count Friday/Saturday as business days.
+- Do NOT fetch all notifications globally — server-side filter.
+- Do NOT hardcode admin emails in App.tsx — use `isAdminEmail()` from data.ts.
+
+When done, push a single PR titled `feat: Tarmeem ERP v2 — full workflow implementation` with all 12 commits, and post a short summary listing: number of files changed, total LOC delta, and any deviations from this spec with the reason.
+
+Part H — What I Need From You Next
+This response gave you:
+	•	Full audit (19 defects identified)
+	•	7 architectural decisions for your sign-off
+	•	Authoritative spec: 9 departments × 24 roles × 22 forms × 5 phases × RBAC matrix
+	•	Full file tree (34 files)
+	•	Foundation code for data.ts, firebase.ts, sla.ts, rbac.ts, workflow.ts (the 5 files everything else depends on)
+	•	A self-contained Claude Code prompt that finishes the rest in your GitHub repo
+Tell me:
+	1.	Do you approve the 7 architectural decisions? Any change requests?
+	2.	Do you want me to next produce full code for App.tsx + components/Auth.tsx + components/ui/ (the next three foundation pieces) so you can paste them before running Claude Code? Or run the prompt as-is and let Claude Code generate them?
+If you say "approve and continue," I'll produce App.tsx + Auth + ui primitives in the next turn, then individual form renderers in batches of 4–5 per turn until done.
+
+Claude Code Response:
+
+The spec is solid and the 7 architectural decisions hold up. Before I produce this batch, one bug to flag in the foundation code you've already written:
+
+**F-02 trigger in `src/lib/workflow.ts` is dead-ended.** The F-02 Creator creates F-03 as `status:'draft'`, but the F-02 trigger returns `{ activate: [] }`. So when the Research Manager approves F-02, nothing activates F-03 and the project halts. The comment lies. Patch:
+
+```ts
+// src/lib/workflow.ts — replace the F-02 trigger
+'F-02': (ctx) => {
+  const f03 = ctx.forms.find(f => f.code === 'F-03' && f.projectRefId === ctx.approvedRecord.projectRefId);
+  return { activate: f03 ? [{ formId: f03.id }] : [] };
+},
+```
+
+Also noting (not bugs, but worth being explicit):
+- `applyCascade` is called AFTER the form's approval batch commits, so a cascade failure leaves the form approved with no downstream. Acceptable for V1 since cascades are idempotent (drafts → pending is a no-op if already pending), but worth a Cloud Function later.
+- The `useFirestoreCollection` hook below takes an explicit `key` instead of serializing constraints, because `QueryConstraint` objects don't `JSON.stringify` reliably.
+
+Producing the promised batch now. Order is dependency-first: hooks → theme → logo → UI primitives → Auth → App.
+
+---
+
+## `src/hooks/useAuth.ts`
+
+```ts
+import { useState, useEffect } from 'react';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
+import { isAdminEmail } from '../lib/data';
+import type { UserProfile } from '../components/Auth';
+
+export function useAuth() {
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setFirebaseUser(u);
+      if (!u) { setProfile(null); setLoading(false); }
+    });
+    return unsub;
+  }, []);
+
+  // Bind only to uid (primitive) to avoid effect thrashing.
+  const uid = firebaseUser?.uid;
+  const email = firebaseUser?.email;
+
+  useEffect(() => {
+    if (!uid) return;
+    const userRef = doc(db, 'users', uid);
+    const unsub = onSnapshot(
+      userRef,
+      async (snap) => {
+        if (!snap.exists()) {
+          const admin = isAdminEmail(email);
+          await setDoc(userRef, {
+            email: (email || '').toLowerCase().trim(),
+            fullName: email || 'مستخدم جديد',
+            role: admin ? 'EXEC_DIRECTOR' : 'PENDING',
+            department: admin ? 'EXEC' : null,
+            isAdmin: admin,
+            isManager: false,
+            status: admin ? 'active' : 'pending',
+            createdAt: serverTimestamp(),
+          });
+          return; // snapshot will re-fire with the new doc
+        }
+        const data = snap.data();
+        // Legacy auto-promote: known admin email but flag missing
+        if (isAdminEmail(email) && !data.isAdmin) {
+          await setDoc(userRef, { isAdmin: true, status: 'active' }, { merge: true });
+          return;
+        }
+        setProfile({ id: uid, ...(data as Omit<UserProfile, 'id'>) });
+        setLoading(false);
+      },
+      () => setLoading(false),
+    );
+    return unsub;
+  }, [uid, email]);
+
+  return { firebaseUser, profile, loading };
+}
+```
+
+## `src/hooks/useFirestoreCollection.ts`
+
+```ts
+import { useState, useEffect } from 'react';
+import { collection, onSnapshot, query, orderBy, limit as fbLimit, QueryConstraint } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+
+interface Options {
+  defaultLimit?: number;
+  orderByField?: string;
+  enabled?: boolean;
+  /** Stable cache key — change this to re-subscribe with new constraints. */
+  key?: string;
+}
+
+export function useFirestoreCollection<T>(
+  collectionName: string,
+  constraints: QueryConstraint[] = [],
+  options: Options = {},
+) {
+  const { defaultLimit = 500, orderByField = 'updatedAt', enabled = true, key = '' } = options;
+  const [data, setData] = useState<T[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!enabled) { setLoading(false); return; }
+    const q = query(
+      collection(db, collectionName),
+      ...constraints,
+      orderBy(orderByField, 'desc'),
+      fbLimit(defaultLimit),
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        setData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as unknown as T)));
+        setLoading(false);
+      },
+      (err) => {
+        console.error(`[${collectionName}] snapshot error`, err);
+        setLoading(false);
+      },
+    );
+    return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collectionName, key, defaultLimit, orderByField, enabled]);
+
+  return { data, loading };
+}
+```
+
+## `src/hooks/useNotifications.ts`
+
+```ts
+import { where } from 'firebase/firestore';
+import { useFirestoreCollection } from './useFirestoreCollection';
+
+export interface AppNotification {
+  id: string;
+  recipients: string[];
+  readBy: string[];
+  text: string;
+  subject: string;
+  type: string;
+  link?: string;
+  createdAt: string;
+}
+
+export function useNotifications(uid: string | undefined) {
+  return useFirestoreCollection<AppNotification>(
+    'notifications',
+    uid ? [where('recipients', 'array-contains', uid)] : [],
+    { defaultLimit: 50, orderByField: 'createdAt', enabled: !!uid, key: uid || '' },
+  );
+}
+```
+
+## `src/components/ThemeProvider.tsx`
+
+```tsx
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+
+type Theme = 'light' | 'dark';
+interface Ctx { theme: Theme; toggleTheme: () => void; setTheme: (t: Theme) => void; }
+
+const ThemeContext = createContext<Ctx>({ theme: 'dark', toggleTheme: () => {}, setTheme: () => {} });
+const STORAGE_KEY = 'tarmeem.theme';
+
+export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [theme, setThemeState] = useState<Theme>(() => {
+    if (typeof window === 'undefined') return 'dark';
+    return (localStorage.getItem(STORAGE_KEY) as Theme) || 'dark';
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle('dark', theme === 'dark');
+    root.style.colorScheme = theme;
+    try { localStorage.setItem(STORAGE_KEY, theme); } catch { /* ignore */ }
+  }, [theme]);
+
+  const setTheme = useCallback((t: Theme) => setThemeState(t), []);
+  const toggleTheme = useCallback(() => setThemeState((t) => (t === 'dark' ? 'light' : 'dark')), []);
+
+  return <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>{children}</ThemeContext.Provider>;
+};
+
+export const useTheme = () => useContext(ThemeContext);
+```
+
+## `src/components/TarmeemLogo.tsx`
+
+```tsx
+import React from 'react';
+import { Sun, Moon } from 'lucide-react';
+import { TARMEEM_BRAND } from '../lib/data';
+import { useTheme } from './ThemeProvider';
+
+interface LogoProps { size?: number; className?: string; showText?: boolean; }
+
+export const TarmeemLogo: React.FC<LogoProps> = ({ size = 48, className = '', showText = true }) => (
+  <div className={`inline-flex items-center gap-3 ${className}`}>
+    <svg viewBox="0 0 100 100" width={size} height={size} aria-hidden="true">
+      <defs>
+        <linearGradient id="trmGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor={TARMEEM_BRAND.purple} />
+          <stop offset="100%" stopColor={TARMEEM_BRAND.teal} />
+        </linearGradient>
+      </defs>
+      <circle cx="50" cy="50" r="46" fill="url(#trmGrad)" />
+      <path d="M28 68 L28 42 L50 24 L72 42 L72 68 Z" fill="#fff" opacity="0.94" />
+      <rect x="44" y="50" width="12" height="18" fill={TARMEEM_BRAND.purple} />
+      <rect x="33" y="46" width="6" height="6" fill={TARMEEM_BRAND.teal} />
+      <rect x="61" y="46" width="6" height="6" fill={TARMEEM_BRAND.teal} />
+    </svg>
+    {showText && (
+      <div className="flex flex-col leading-tight">
+        <span className="font-bold text-lg text-gray-900 dark:text-white">ترميم</span>
+        <span className="text-[11px] text-gray-500 dark:text-slate-400">منصة العمليات الموحّدة</span>
+      </div>
+    )}
+  </div>
+);
+
+export const TarmeemSplash: React.FC<{ message?: string }> = ({ message = 'جارٍ التحميل...' }) => (
+  <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-white dark:bg-[#0a0a0a]" dir="rtl">
+    <TarmeemLogo size={96} />
+    <div className="flex items-center gap-2 text-gray-500 dark:text-slate-400 text-sm">
+      <span className="inline-block w-2 h-2 rounded-full bg-[#43bba1] animate-pulse" />
+      {message}
+    </div>
+  </div>
+);
+
+export const ThemeToggle: React.FC<{ className?: string }> = ({ className = '' }) => {
+  const { theme, toggleTheme } = useTheme();
+  return (
+    <button
+      type="button"
+      onClick={toggleTheme}
+      aria-label={theme === 'dark' ? 'تفعيل الوضع الفاتح' : 'تفعيل الوضع الداكن'}
+      className={`p-2 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors ${className}`}
+    >
+      {theme === 'dark'
+        ? <Sun className="w-4 h-4 text-amber-400" />
+        : <Moon className="w-4 h-4 text-purple-700" />}
+    </button>
+  );
+};
+```
+
+## `src/components/ui/index.tsx`
+
+```tsx
+import React from 'react';
+import { Search, AlertTriangle, Inbox } from 'lucide-react';
+
+// ---------- Card ----------
+export const Card: React.FC<React.HTMLAttributes<HTMLDivElement> & { padded?: boolean }> = ({
+  className = '', padded = true, children, ...rest
+}) => (
+  <div
+    {...rest}
+    className={`rounded-2xl border border-gray-200 dark:border-slate-800 bg-white dark:bg-[#111111] shadow-sm ${padded ? 'p-5' : ''} ${className}`}
+  >
+    {children}
+  </div>
+);
+
+// ---------- Pill ----------
+export type PillTone = 'neutral' | 'purple' | 'teal' | 'success' | 'warn' | 'danger' | 'info';
+const PILL_TONES: Record<PillTone, string> = {
+  neutral: 'bg-gray-100 text-gray-700 dark:bg-slate-800 dark:text-slate-300',
+  purple:  'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
+  teal:    'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300',
+  success: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+  warn:    'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+  danger:  'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+  info:    'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+};
+export const Pill: React.FC<{ tone?: PillTone; className?: string; children: React.ReactNode }> = ({
+  tone = 'neutral', className = '', children,
+}) => (
+  <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${PILL_TONES[tone]} ${className}`}>
+    {children}
+  </span>
+);
+
+// ---------- Input ----------
+export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  label?: string; hint?: string; error?: string;
+}
+export const Input: React.FC<InputProps> = ({ label, hint, error, className = '', ...rest }) => (
+  <label className="flex flex-col gap-1.5">
+    {label && <span className="text-sm font-medium text-gray-700 dark:text-slate-300">{label}</span>}
+    <input
+      {...rest}
+      className={`w-full px-3 py-2 rounded-lg border bg-white dark:bg-slate-900 text-gray-900 dark:text-white border-gray-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-[#43bba1] disabled:opacity-50 disabled:cursor-not-allowed ${error ? 'border-red-400 dark:border-red-500' : ''} ${className}`}
+    />
+    {hint && !error && <span className="text-xs text-gray-500 dark:text-slate-400">{hint}</span>}
+    {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
+  </label>
+);
+
+// ---------- Select ----------
+export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
+  label?: string; options: { value: string; label: string }[]; placeholder?: string;
+}
+export const Select: React.FC<SelectProps> = ({ label, options, placeholder, className = '', ...rest }) => (
+  <label className="flex flex-col gap-1.5">
+    {label && <span className="text-sm font-medium text-gray-700 dark:text-slate-300">{label}</span>}
+    <select
+      {...rest}
+      className={`w-full px-3 py-2 rounded-lg border bg-white dark:bg-slate-900 text-gray-900 dark:text-white border-gray-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-[#43bba1] disabled:opacity-50 ${className}`}
+    >
+      {placeholder && <option value="">{placeholder}</option>}
+      {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  </label>
+);
+
+// ---------- TextArea ----------
+export interface TextAreaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
+  label?: string; hint?: string;
+}
+export const TextArea: React.FC<TextAreaProps> = ({ label, hint, className = '', rows = 3, ...rest }) => (
+  <label className="flex flex-col gap-1.5">
+    {label && <span className="text-sm font-medium text-gray-700 dark:text-slate-300">{label}</span>}
+    <textarea
+      rows={rows}
+      {...rest}
+      className={`w-full px-3 py-2 rounded-lg border bg-white dark:bg-slate-900 text-gray-900 dark:text-white border-gray-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-[#43bba1] disabled:opacity-50 resize-y ${className}`}
+    />
+    {hint && <span className="text-xs text-gray-500 dark:text-slate-400">{hint}</span>}
+  </label>
+);
+
+// ---------- NumberCounter ----------
+export const NumberCounter: React.FC<{
+  label?: string; value: number; onChange: (v: number) => void;
+  min?: number; max?: number; step?: number; disabled?: boolean;
+}> = ({ label, value, onChange, min = 0, max = 999, step = 1, disabled }) => {
+  const set = (v: number) => onChange(Math.max(min, Math.min(max, v)));
+  return (
+    <div className="flex items-center justify-between gap-3">
+      {label && <span className="text-sm text-gray-700 dark:text-slate-300 flex-1">{label}</span>}
+      <div className="inline-flex items-center gap-1 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900">
+        <button type="button" disabled={disabled} onClick={() => set(value - step)} className="px-3 py-1 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800 disabled:opacity-50">−</button>
+        <input
+          type="number"
+          value={value}
+          disabled={disabled}
+          onChange={(e) => set(Number(e.target.value) || 0)}
+          className="w-14 text-center bg-transparent text-gray-900 dark:text-white focus:outline-none"
+        />
+        <button type="button" disabled={disabled} onClick={() => set(value + step)} className="px-3 py-1 text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800 disabled:opacity-50">+</button>
+      </div>
+    </div>
+  );
+};
+
+// ---------- ReadOnlyField ----------
+export const ReadOnlyField: React.FC<{ label: string; value?: React.ReactNode; className?: string }> = ({
+  label, value, className = '',
+}) => (
+  <div className={`flex flex-col gap-1 ${className}`}>
+    <span className="text-xs text-gray-500 dark:text-slate-400">{label}</span>
+    <span className="text-sm text-gray-900 dark:text-white font-medium">{value ?? '—'}</span>
+  </div>
+);
+
+// ---------- EmptyState ----------
+export const EmptyState: React.FC<{
+  title: string; description?: string; icon?: React.ReactNode; action?: React.ReactNode;
+}> = ({ title, description, icon, action }) => (
+  <div className="flex flex-col items-center justify-center text-center p-10 gap-3 text-gray-600 dark:text-slate-400">
+    <div className="w-12 h-12 rounded-full bg-gray-100 dark:bg-slate-800 flex items-center justify-center">
+      {icon || <Inbox className="w-6 h-6" />}
+    </div>
+    <div className="text-base font-semibold text-gray-900 dark:text-white">{title}</div>
+    {description && <p className="text-sm max-w-sm">{description}</p>}
+    {action}
+  </div>
+);
+
+// ---------- SearchBar ----------
+export const SearchBar: React.FC<{
+  value: string; onChange: (v: string) => void; placeholder?: string; className?: string;
+}> = ({ value, onChange, placeholder = 'بحث...', className = '' }) => (
+  <div className={`relative ${className}`}>
+    <Search className="absolute top-1/2 -translate-y-1/2 right-3 w-4 h-4 text-gray-400 pointer-events-none" />
+    <input
+      type="search"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="w-full pr-9 pl-3 py-2 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#43bba1]"
+    />
+  </div>
+);
+
+// ---------- ProgressBar ----------
+export const ProgressBar: React.FC<{
+  value: number; label?: string; tone?: 'purple' | 'teal' | 'success' | 'warn' | 'danger';
+}> = ({ value, label, tone = 'teal' }) => {
+  const pct = Math.max(0, Math.min(100, value));
+  const colorMap: Record<string, string> = {
+    purple: 'bg-purple-500', teal: 'bg-[#43bba1]', success: 'bg-green-500',
+    warn: 'bg-amber-500', danger: 'bg-red-500',
+  };
+  return (
+    <div className="w-full">
+      {label && (
+        <div className="flex justify-between text-xs text-gray-600 dark:text-slate-400 mb-1">
+          <span>{label}</span><span>{pct}%</span>
+        </div>
+      )}
+      <div className="h-2 rounded-full bg-gray-200 dark:bg-slate-800 overflow-hidden">
+        <div className={`h-full ${colorMap[tone]} transition-all`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+};
+
+// ---------- AccessDeniedCard ----------
+export const AccessDeniedCard: React.FC<{ message?: string }> = ({
+  message = 'ليس لديك صلاحية لعرض هذا القسم.',
+}) => (
+  <Card className="text-center">
+    <div className="flex flex-col items-center gap-3 py-6">
+      <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+        <AlertTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
+      </div>
+      <div className="text-base font-semibold text-gray-900 dark:text-white">وصول مرفوض</div>
+      <p className="text-sm text-gray-600 dark:text-slate-400 max-w-sm">{message}</p>
+    </div>
+  </Card>
+);
+```
+
+## `src/components/Auth.tsx`
+
+```tsx
+import React, { useState } from 'react';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+} from 'firebase/auth';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { Loader2, Eye, EyeOff, Mail, Lock, User as UserIcon } from 'lucide-react';
+import { auth, db } from '../lib/firebase';
+import { isAdminEmail } from '../lib/data';
+import { TarmeemLogo, ThemeToggle } from './TarmeemLogo';
+import type { RoleKey, DepartmentKey } from '../lib/data';
+
+// UserProfile lives here for now; the Claude Code prompt later moves it to src/types/firestore.ts.
+export interface UserProfile {
+  id: string;
+  email: string;
+  fullName: string;
+  /** 'PENDING' is a meta-state used only before admin assigns a real RoleKey. */
+  role: RoleKey | 'PENDING';
+  department: DepartmentKey | null;
+  isAdmin: boolean;
+  isManager?: boolean;
+  status: 'pending' | 'active' | 'deactivated';
+  rejectionReason?: string;
+  mobile?: string;
+  ext?: string;
+  createdAt?: string;
+}
+
+type Mode = 'login' | 'signup' | 'reset';
+
+export const Auth: React.FC = () => {
+  const [mode, setMode] = useState<Mode>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setInfo(null);
+
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) { setError('البريد الإلكتروني مطلوب.'); return; }
+    if (mode !== 'reset' && password.length < 6) { setError('كلمة المرور يجب ألا تقل عن 6 أحرف.'); return; }
+    if (mode === 'signup' && fullName.trim().length < 2) { setError('الاسم الكامل مطلوب.'); return; }
+
+    setBusy(true);
+    try {
+      if (mode === 'login') {
+        await signInWithEmailAndPassword(auth, cleanEmail, password);
+      } else if (mode === 'signup') {
+        const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+        const admin = isAdminEmail(cleanEmail);
+        await setDoc(doc(db, 'users', cred.user.uid), {
+          email: cleanEmail,
+          fullName: fullName.trim(),
+          role: admin ? 'EXEC_DIRECTOR' : 'PENDING',
+          department: admin ? 'EXEC' : null,
+          isAdmin: admin,
+          isManager: false,
+          status: admin ? 'active' : 'pending',
+          createdAt: serverTimestamp(),
+        });
+      } else {
+        await sendPasswordResetEmail(auth, cleanEmail);
+        setInfo('تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك.');
+        setMode('login');
+      }
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code;
+      setError(authErrorMessage(code));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      dir="rtl"
+      className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-50 via-white to-teal-50 dark:from-[#1a0f25] dark:via-[#0a0a0a] dark:to-[#0d1f1a]"
+    >
+      <div className="absolute top-4 left-4"><ThemeToggle /></div>
+
+      <div className="w-full max-w-md">
+        <div className="flex justify-center mb-6"><TarmeemLogo size={64} /></div>
+
+        <div className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-slate-800 rounded-2xl shadow-xl p-6 md:p-8">
+          <h1 className="text-2xl font-bold text-center text-gray-900 dark:text-white mb-1">
+            {mode === 'login' && 'تسجيل الدخول'}
+            {mode === 'signup' && 'إنشاء حساب جديد'}
+            {mode === 'reset' && 'استعادة كلمة المرور'}
+          </h1>
+          <p className="text-center text-sm text-gray-500 dark:text-slate-400 mb-6">
+            منصة العمليات الموحّدة — جمعية ترميم الخيرية
+          </p>
+
+          {error && (
+            <div className="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">
+              {error}
+            </div>
+          )}
+          {info && (
+            <div className="mb-4 p-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 text-sm text-emerald-700 dark:text-emerald-300">
+              {info}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {mode === 'signup' && (
+              <div className="relative">
+                <UserIcon className="absolute top-1/2 -translate-y-1/2 right-3 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="الاسم الكامل"
+                  className="w-full pr-10 pl-3 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#43bba1]"
+                  required
+                />
+              </div>
+            )}
+
+            <div className="relative">
+              <Mail className="absolute top-1/2 -translate-y-1/2 right-3 w-4 h-4 text-gray-400" />
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="البريد الإلكتروني"
+                className="w-full pr-10 pl-3 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#43bba1]"
+                dir="ltr"
+                autoComplete="email"
+                required
+              />
+            </div>
+
+            {mode !== 'reset' && (
+              <div className="relative">
+                <Lock className="absolute top-1/2 -translate-y-1/2 right-3 w-4 h-4 text-gray-400" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="كلمة المرور"
+                  className="w-full pr-10 pl-10 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#43bba1]"
+                  dir="ltr"
+                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((s) => !s)}
+                  className="absolute top-1/2 -translate-y-1/2 left-3 text-gray-400 hover:text-gray-600 dark:hover:text-slate-300"
+                  aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={busy}
+              className="w-full py-2.5 rounded-lg bg-gradient-to-r from-[#4A1F66] to-[#43bba1] text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {busy && <Loader2 className="w-4 h-4 animate-spin" />}
+              {mode === 'login'  && 'دخول'}
+              {mode === 'signup' && 'إنشاء الحساب'}
+              {mode === 'reset'  && 'إرسال رابط الاستعادة'}
+            </button>
+          </form>
+
+          <div className="mt-6 pt-4 border-t border-gray-200 dark:border-slate-800 flex justify-between text-sm">
+            {mode === 'login' ? (
+              <>
+                <button onClick={() => { setMode('signup'); setError(null); }} className="text-[#43bba1] hover:underline">إنشاء حساب جديد</button>
+                <button onClick={() => { setMode('reset'); setError(null); }} className="text-gray-500 dark:text-slate-400 hover:underline">نسيت كلمة المرور؟</button>
+              </>
+            ) : (
+              <button onClick={() => { setMode('login'); setError(null); }} className="text-[#43bba1] hover:underline">العودة لتسجيل الدخول</button>
+            )}
+          </div>
+        </div>
+
+        <p className="text-center text-xs text-gray-500 dark:text-slate-500 mt-4">
+          © 2026 جمعية ترميم الخيرية — جميع الحقوق محفوظة
+        </p>
+      </div>
+    </div>
+  );
+};
+
+function authErrorMessage(code?: string): string {
+  switch (code) {
+    case 'auth/email-already-in-use':  return 'البريد مستخدم مسبقاً.';
+    case 'auth/invalid-email':         return 'البريد غير صالح.';
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':        return 'البريد أو كلمة المرور غير صحيحة.';
+    case 'auth/too-many-requests':     return 'محاولات كثيرة. حاول لاحقاً.';
+    case 'auth/network-request-failed':return 'تعذّر الاتصال بالخادم.';
+    case 'auth/weak-password':         return 'كلمة المرور ضعيفة (6 أحرف على الأقل).';
+    default:                           return 'حدث خطأ غير متوقع. حاول مجدداً.';
+  }
+}
+```
+
+## `src/App.tsx`
+
+```tsx
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { signOut } from 'firebase/auth';
+import {
+  addDoc, arrayUnion, collection, doc, serverTimestamp, updateDoc, writeBatch,
+} from 'firebase/firestore';
+import {
+  Bell, Building, FileText, FolderTree, Home as HomeIcon, LogOut, Menu,
+  Settings, UserCircle, WifiOff, X,
+} from 'lucide-react';
+
+import { auth, db } from './lib/firebase';
+import { FORM_BY_CODE, ROLE_BY_KEY } from './lib/data';
+import type { FormCode, FormStatus, RoleKey } from './lib/data';
+import { TRIGGER_MAP, applyCascade } from './lib/workflow';
+import { formAwaitsUser } from './lib/rbac';
+
+import { useAuth } from './hooks/useAuth';
+import { useFirestoreCollection } from './hooks/useFirestoreCollection';
+import { useNotifications } from './hooks/useNotifications';
+
+import { ThemeProvider } from './components/ThemeProvider';
+import { TarmeemLogo, TarmeemSplash, ThemeToggle } from './components/TarmeemLogo';
+import { Auth, type UserProfile } from './components/Auth';
+import { Home } from './components/Home';
+import { Forms, type FormRecord } from './components/Forms';
+import { Projects } from './components/Projects';
+import { Departments } from './components/Departments';
+import { EmployeeProfile } from './components/EmployeeProfile';
+import { Admin } from './components/Admin';
+import type { ProjectRecord } from './components/forms/_shared';
+
+type Tab = 'home' | 'departments' | 'projects' | 'forms' | 'profile' | 'admin';
+
+export interface FormsApi {
+  approveForm: (formId: string, user: UserProfile, note: string, dataPatch?: Record<string, unknown>) => Promise<void>;
+  rejectForm:  (formId: string, user: UserProfile, note: string) => Promise<void>;
+  deferForm:   (formId: string, user: UserProfile, note: string) => Promise<void>;
+  updateFormData: (formId: string, dataPatch: Record<string, unknown>) => Promise<void>;
+  createForm:  (code: FormCode, payload: Partial<FormRecord>) => Promise<string>;
+}
+
+const AppInner: React.FC = () => {
+  const { firebaseUser, profile, loading: authLoading } = useAuth();
+  const [tab, setTab] = useState<Tab>('home');
+  const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
+  const [navOpen, setNavOpen] = useState(false);
+
+  useEffect(() => {
+    const on  = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener('online',  on);
+    window.addEventListener('offline', off);
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+  }, []);
+
+  // Bounded server-side listeners. `enabled: !!profile` prevents firing pre-auth.
+  const { data: users    } = useFirestoreCollection<UserProfile>('users',    [], { defaultLimit: 1000, orderByField: 'createdAt', enabled: !!profile, key: profile?.id || '' });
+  const { data: forms    } = useFirestoreCollection<FormRecord>('forms',     [], { defaultLimit: 500,                                                  enabled: !!profile, key: profile?.id || '' });
+  const { data: projects } = useFirestoreCollection<ProjectRecord>('projects',[],{ defaultLimit: 500,                                                  enabled: !!profile, key: profile?.id || '' });
+  const { data: notifications } = useNotifications(profile?.id);
+
+  // Stable refs so formsApi functions can be memoized once.
+  const stateRef = useRef({ forms, projects, users });
+  stateRef.current = { forms, projects, users };
+
+  const formsApi = useMemo<FormsApi>(() => ({
+    approveForm: async (formId, user, note, dataPatch) => {
+      const { forms, projects, users } = stateRef.current;
+      const rec = forms.find((f) => f.id === formId);
+      if (!rec) throw new Error('Form not found');
+      if (!formAwaitsUser(rec, user)) throw new Error('Not authorized to approve');
+
+      const nextIndex = rec.approvalIndex + 1;
+      const newStatus: FormStatus = nextIndex >= rec.approvalChain.length ? 'approved' : 'pending';
+      const approval = {
+        role: rec.approvalChain[rec.approvalIndex],
+        actorId: user.id,
+        actorName: user.fullName,
+        at: new Date().toISOString(),
+        decision: 'approved' as const,
+        note: note || '',
+      };
+
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'forms', formId), {
+        approvalIndex: nextIndex,
+        status: newStatus,
+        approvals: arrayUnion(approval),
+        stepStartedAt: newStatus === 'pending' ? serverTimestamp() : rec.stepStartedAt ?? serverTimestamp(),
+        ...(dataPatch ? { data: { ...(rec.data || {}), ...dataPatch } } : {}),
+        updatedAt: serverTimestamp(),
+      });
+      await batch.commit();
+
+      if (newStatus === 'approved') {
+        const trigger = TRIGGER_MAP[rec.code];
+        if (trigger) {
+          const updatedRec: FormRecord = {
+            ...rec,
+            data: { ...(rec.data || {}), ...(dataPatch || {}) },
+            approvalIndex: nextIndex,
+            status: 'approved',
+          };
+          const ctx = { forms, projects, users, actor: user, approvedRecord: updatedRec, dataPatch };
+          const result = trigger(ctx);
+          await applyCascade(result, ctx);
+        }
+      } else {
+        await notifyNextStep({ ...rec, approvalIndex: nextIndex }, users);
+      }
+    },
+
+    rejectForm: async (formId, user, note) => {
+      const rec = stateRef.current.forms.find((f) => f.id === formId);
+      if (!rec) throw new Error('Form not found');
+      if (!formAwaitsUser(rec, user)) throw new Error('Not authorized to reject');
+      await updateDoc(doc(db, 'forms', formId), {
+        status: 'rejected',
+        approvals: arrayUnion({
+          role: rec.approvalChain[rec.approvalIndex],
+          actorId: user.id, actorName: user.fullName,
+          at: new Date().toISOString(), decision: 'rejected', note: note || '',
+        }),
+        updatedAt: serverTimestamp(),
+      });
+    },
+
+    deferForm: async (formId, user, note) => {
+      const rec = stateRef.current.forms.find((f) => f.id === formId);
+      if (!rec) throw new Error('Form not found');
+      if (!formAwaitsUser(rec, user)) throw new Error('Not authorized to defer');
+      await updateDoc(doc(db, 'forms', formId), {
+        status: 'deferred',
+        approvals: arrayUnion({
+          role: rec.approvalChain[rec.approvalIndex],
+          actorId: user.id, actorName: user.fullName,
+          at: new Date().toISOString(), decision: 'deferred', note: note || '',
+        }),
+        updatedAt: serverTimestamp(),
+      });
+    },
+
+    updateFormData: async (formId, dataPatch) => {
+      const rec = stateRef.current.forms.find((f) => f.id === formId);
+      if (!rec) return;
+      await updateDoc(doc(db, 'forms', formId), {
+        data: { ...(rec.data || {}), ...dataPatch },
+        updatedAt: serverTimestamp(),
+      });
+    },
+
+    createForm: async (code, payload) => {
+      const def = FORM_BY_CODE[code];
+      const ref = await addDoc(collection(db, 'forms'), {
+        code,
+        title: payload.title || def.title,
+        projectId: payload.projectId ?? null,
+        projectRefId: payload.projectRefId ?? null,
+        beneficiaryName: payload.beneficiaryName ?? '',
+        status: payload.status || 'pending',
+        approvalIndex: payload.approvalIndex ?? 0,
+        approvalChain: def.approvalChain,
+        approvals: [],
+        createdBy: payload.createdBy || 'system',
+        createdByName: payload.createdByName || '',
+        createdByRole: payload.createdByRole || 'SYSTEM',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        ownerDept: def.ownerDept,
+        bridgesTo: def.bridgesTo || [],
+        data: payload.data || {},
+        assigneeId: payload.assigneeId ?? null,
+        files: payload.files || [],
+        stepStartedAt: serverTimestamp(),
+      });
+      return ref.id;
+    },
+  }), []); // stateRef-backed → safe to memo with empty deps
+
+  const myPendingCount = useMemo(() => {
+    if (!profile) return 0;
+    return forms.filter((f) => formAwaitsUser(f, profile)).length;
+  }, [forms, profile]);
+
+  const unreadNotifs = useMemo(() => {
+    if (!profile) return 0;
+    return notifications.filter((n) => !(n.readBy || []).includes(profile.id)).length;
+  }, [notifications, profile]);
+
+  const handleSignOut = useCallback(() => { void signOut(auth); }, []);
+
+  // ---- Gating ----
+  if (authLoading) return <TarmeemSplash />;
+  if (!firebaseUser || !profile) return <Auth />;
+
+  if (profile.status === 'pending') {
+    return <GateScreen
+      title="حسابك قيد المراجعة"
+      message="سيتم إعلامك فور اعتماد حسابك من قِبَل الإدارة."
+      onSignOut={handleSignOut}
+    />;
+  }
+  if (profile.status === 'deactivated') {
+    return <GateScreen
+      title="تم إيقاف الحساب"
+      message={profile.rejectionReason || 'يُرجى التواصل مع الإدارة.'}
+      tone="danger"
+      onSignOut={handleSignOut}
+    />;
+  }
+
+  // ---- Main UI ----
+  const navItems: { key: Tab; label: string; icon: React.FC<{ className?: string }>; badge?: number }[] = [
+    { key: 'home',        label: 'الرئيسية',  icon: HomeIcon  },
+    { key: 'departments', label: 'الأقسام',   icon: Building   },
+    { key: 'projects',    label: 'المشاريع',  icon: FolderTree },
+    { key: 'forms',       label: 'النماذج',   icon: FileText, badge: myPendingCount },
+    { key: 'profile',     label: 'حسابي',    icon: UserCircle },
+    ...(profile.isAdmin ? [{ key: 'admin' as Tab, label: 'الإدارة', icon: Settings }] : []),
+  ];
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] text-gray-900 dark:text-white" dir="rtl">
+      {!online && (
+        <div className="bg-amber-100 dark:bg-amber-900/30 text-amber-900 dark:text-amber-200 text-xs text-center py-1.5 flex items-center justify-center gap-2">
+          <WifiOff className="w-3 h-3" /> لا يوجد اتصال — التعديلات ستُحفظ محلياً وتُزامَن لاحقاً.
+        </div>
+      )}
+
+      <header className="sticky top-0 z-30 bg-white/95 dark:bg-[#0a0a0a]/95 backdrop-blur border-b border-gray-200 dark:border-slate-800">
+        <div className="max-w-7xl mx-auto flex items-center justify-between px-4 py-3 gap-3">
+          <div className="flex items-center gap-3">
+            <button
+              className="md:hidden p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800"
+              onClick={() => setNavOpen((o) => !o)}
+              aria-label="القائمة"
+            >
+              {navOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
+            <TarmeemLogo size={36} />
+          </div>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <button className="relative p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800" aria-label="الإشعارات">
+              <Bell className="w-5 h-5 text-gray-700 dark:text-slate-300" />
+              {unreadNotifs > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
+                  {unreadNotifs > 99 ? '99+' : unreadNotifs}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={handleSignOut}
+              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800"
+              aria-label="تسجيل الخروج"
+            >
+              <LogOut className="w-5 h-5 text-gray-700 dark:text-slate-300" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="max-w-7xl mx-auto flex flex-col md:flex-row gap-4 p-4">
+        <aside className={`${navOpen ? 'block' : 'hidden'} md:block w-full md:w-56 shrink-0`}>
+          <nav className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-slate-800 rounded-2xl p-2 md:sticky md:top-20">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const active = tab === item.key;
+              return (
+                <button
+                  key={item.key}
+                  onClick={() => { setTab(item.key); setNavOpen(false); }}
+                  className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                    active
+                      ? 'bg-gradient-to-l from-[#4A1F66] to-[#43bba1] text-white shadow-sm'
+                      : 'text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <span className="flex items-center gap-3"><Icon className="w-4 h-4" />{item.label}</span>
+                  {item.badge ? (
+                    <span className={`text-[10px] rounded-full px-2 py-0.5 ${active ? 'bg-white/20 text-white' : 'bg-red-500 text-white'}`}>
+                      {item.badge}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
+
+        <main className="flex-1 min-w-0">
+          {tab === 'home'        && <Home          user={profile} forms={forms} projects={projects} users={users} onNavigate={setTab} />}
+          {tab === 'departments' && <Departments   user={profile} forms={forms} projects={projects} users={users} api={formsApi} />}
+          {tab === 'projects'    && <Projects      user={profile} forms={forms} projects={projects} users={users} api={formsApi} />}
+          {tab === 'forms'       && <Forms         user={profile} forms={forms} projects={projects} users={users} api={formsApi} />}
+          {tab === 'profile'     && <EmployeeProfile user={profile} users={users} forms={forms} />}
+          {tab === 'admin' && profile.isAdmin && <Admin currentUser={profile} users={users} />}
+        </main>
+      </div>
+    </div>
+  );
+};
+
+const GateScreen: React.FC<{ title: string; message: string; tone?: 'neutral' | 'danger'; onSignOut: () => void }> = ({
+  title, message, tone = 'neutral', onSignOut,
+}) => (
+  <div className="min-h-screen flex items-center justify-center bg-white dark:bg-[#0a0a0a] p-6" dir="rtl">
+    <div className="max-w-md text-center space-y-4">
+      <TarmeemLogo size={72} className="justify-center" />
+      <h2 className={`text-xl font-semibold ${tone === 'danger' ? 'text-red-700 dark:text-red-400' : 'text-gray-900 dark:text-white'}`}>
+        {title}
+      </h2>
+      <p className="text-sm text-gray-600 dark:text-slate-400">{message}</p>
+      <button
+        onClick={onSignOut}
+        className="px-4 py-2 rounded-lg bg-gray-100 dark:bg-slate-800 text-gray-700 dark:text-slate-200 hover:bg-gray-200 dark:hover:bg-slate-700"
+      >
+        تسجيل الخروج
+      </button>
+    </div>
+  </div>
+);
+
+async function notifyNextStep(rec: FormRecord, users: UserProfile[]): Promise<void> {
+  const nextRole = rec.approvalChain[rec.approvalIndex];
+  if (!nextRole) return;
+  const def = ROLE_BY_KEY[nextRole as RoleKey];
+  const recipients = users
+    .filter((u) => u.status === 'active')
+    .filter((u) => u.role === nextRole || u.isAdmin)
+    .filter((u) => (def?.department ? u.department === def.department || u.isAdmin : true))
+    .map((u) => u.id);
+  if (!recipients.length) return;
+  await addDoc(collection(db, 'notifications'), {
+    recipients,
+    readBy: [],
+    text: `بانتظار اعتمادك: ${rec.title} (${rec.code})`,
+    subject: 'مهمة جديدة',
+    type: 'form_pending',
+    link: rec.id,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export const App: React.FC = () => (
+  <ThemeProvider>
+    <AppInner />
+  </ThemeProvider>
+);
+
+export default App;
+```
+
+---
+
+Saving the project context to memory so future sessions can pick this up cold.
+
+---
+
+## What's in this batch
+
+| File | Purpose | Notes |
+|---|---|---|
+| `src/hooks/useAuth.ts` | Auth state + Firestore profile sync | Memoizes on `uid` (primitive) — no dependency thrashing. Handles legacy admin auto-promote. |
+| `src/hooks/useFirestoreCollection.ts` | Generic bounded `onSnapshot` | Takes explicit `key` for cache invalidation (constraints aren't reliably serializable). |
+| `src/hooks/useNotifications.ts` | Server-side filtered notifications | `where('recipients','array-contains', uid)` + `limit(50)`. Fixes the GDPR-level leak. |
+| `src/components/ThemeProvider.tsx` | Real light/dark toggle | Dark default. Persists to localStorage. |
+| `src/components/TarmeemLogo.tsx` | Logo, Splash, ThemeToggle | All with `dark:` variants. |
+| `src/components/ui/index.tsx` | 11 primitives | Card, Pill, Input, Select, TextArea, NumberCounter, ReadOnlyField, EmptyState, SearchBar, ProgressBar, AccessDeniedCard. Every one supports both themes. |
+| `src/components/Auth.tsx` | Login / signup / reset | Email is trim+lowercased before write. Signup creates `status:'pending'` profile; admin emails auto-active. |
+| `src/App.tsx` | Shell + formsApi + cascade dispatcher | The God Function is dead. `formsApi` is stable (ref-backed) — no more re-render cascades on every Firestore tick. |
+
+## Things to do before pasting
+
+1. **Apply the F-02 trigger patch** above to your existing `src/lib/workflow.ts`.
+2. The App.tsx imports `Home`, `Forms`, `Projects`, `Departments`, `EmployeeProfile`, `Admin` from the existing codebase — those builds will keep working with the existing components while I rebuild them in subsequent batches.
+3. `FormRecord` is expected to live in `./components/Forms` and `ProjectRecord` in `./components/forms/_shared` — if your current code has them elsewhere, either move them or fix the imports.
+
+## Next turn
+
+`src/components/forms/_shared.tsx` (FormShell, CroquisViewer view-only, the type contracts that all 22 renderers depend on) + the 4 simplest renderers — **F-03, F-03.1, F-03.2, F-04**. After that batch lands cleanly, we open the can on F-08 (the croquis SVG editor) and F-02 (the 4-step wizard) — each gets a dedicated turn given their size.
+
+Claude Project Planer:
+
+You're right to push back. I went through the documents again with a much harsher eye and found that my first pass — while it fixed the obvious bugs and got the structure right — was missing roughly 30% of the workflow logic and almost all the polish layer. Here is the honest, exhaustive re-audit.
+
+🔍 What I Missed (Self-Critique)
+#	Gap	Severity	Why it matters
+1	No rejection paths for any form	🔴 blocking	A user could approve a form but had nowhere to send it back. The current code has a rejectForm API but no "where does a rejected form go" logic.
+2	No "Decline Project" paths	🔴 blocking	F-03.1 (Exec) and F-08 (Diagnosis) can produce "this case is not feasible" outcomes. There was no terminal state for that.
+3	No project cancellation / hold / archive	🔴 blocking	Real-world projects get cancelled, withdrawn, or paused. The state machine had no exit doors.
+4	No reassignment mechanism	🟡	Engineer quits or goes on leave mid-project — currently the assigned form is stuck forever.
+5	No budget reconciliation	🟡	We award a contract, then pay installments, then add variations (F-23). Nothing rolls these up into a live financial view.
+6	No file upload pipeline	🟡	files[] exists on every form but no Firebase Storage integration was specified.
+7	No audit trail at the project level	🟡	History lives inside each form's approvals[]. There's no unified timeline view.
+8	No comments on most forms	🟡	F-20 has chat; every other form needs lightweight commenting for cross-team friction.
+9	No PDF/print export	🟡	A handover certificate (F-07) that can't be printed and given to the beneficiary is useless.
+10	No global search (Cmd+K)	🟡	At 200+ projects you need it.
+11	No empty states / skeleton loaders / toast systemspecified	🟡	First-load and error screens currently fall back to blank space.
+12	Logo/motion not specified	🟢	I assumed TarmeemSplash existed in ui.tsx; needs explicit definition.
+13	Responsive breakpoints not specified	🟢	Sidebar collapses at md, but tablet (768–1023) layout undefined.
+14	Theme tokens not centralized	🟢	Light/dark needs CSS variables, not just dark: Tailwind classes scattered everywhere.
+15	Dashboard is generic	🟢	"ERP dashboard" should be role-specific, action-oriented, and have real KPIs.
+My original 7 decisions were correct but incomplete. They stand; here's everything they were missing.
+
+Part A · The Complete Workflow Decision Tree
+This is the authoritative answer to "every scenario has a logical end." Three terminal states exist for every project: CLOSED (success), REJECTED (failed eligibility), CANCELLED (withdrawn / aborted). Every approval, rejection, decline, defer, and side-trigger maps to one of them.
+Form Action Vocabulary (4 verbs, not 3)
+Verb	Button label (AR)	Semantic	Project effect
+Approve	اعتماد	Advance to next step in approvalChain	Cascade triggers fire on final step
+Reject	إعادة للتعديل	Send back to the originator (or previous step) for rework	Form re-enters its chain at index 0; no project state change
+Decline	رفض نهائي	Terminal "no" decision (only on specific forms)	Sets project.phase='REJECTED' + closes all subsequent forms
+Defer	تأجيل	Pause SLA clock awaiting external input	project.status='on_hold'
+Only F-03 (eligibility recommendation), F-03.1 (executive eligibility decision), F-08 (technical feasibility), F-23 (variation orders) carry a Decline button. All others have only Approve / Reject / Defer.
+Per-Form Outcome Matrix
+Code	Approve outcome	Reject target	Decline outcome	Defer reason example
+F-02	Goes to RESEARCH_MANAGER for review	Back to Researcher	—	"Awaiting beneficiary documents"
+F-03	Activates F-03.1	Back to Researcher (resets F-02 to pending)	—	"Awaiting field verification"
+F-03.1	Activates F-03.2	Back to Research Manager	REJECT_PROJECT: phase='REJECTED', all forms auto-complete, beneficiary notified	—
+F-03.2	Activates F-04 + phase='DIAGNOSIS'	Back to Manager (loops F-03.1)	—	—
+F-04	Activates F-08, sets diagnosisEngineerId	— (assignment, no reject)	—	—
+F-08	Advances to HEAD_DIAGNOSIS; on final approve cascades F-20/F-21/F-18/F-22	Back to Engineer	NOT_RENOVABLE: phase='REJECTED', payment forms auto-cancel	"Awaiting structural lab test"
+F-18	One-step approval, no cascade by itself	—	—	"Beneficiary refused to sign pledge" → escalates to RESEARCH_MANAGER
+F-22	Approves + notifies PARTNERSHIP_MANAGER	Back to Researcher	—	"No partner housing available"
+F-21	Eng → Projects Manager	Back to Engineer	—	—
+F-20	Engineer closes workspace → phase='TENDERING' + activates F-84	— (collaborative workspace, no formal reject)	—	—
+F-84	Activates F-85	—	—	"Re-tender — no acceptable bids" (Manager action)
+F-85	Sets contractor + price, activates F-32 + F-35	Back to Manager (re-pick)	—	"Winner withdrew"
+F-32	Activates F-33 with supervisor as assignee	—	—	—
+F-33	phase='EXECUTION' + activates F-14, F-19, F-34	—	—	—
+F-35	3 stages: Accountant → Exec → Accountant disburse. Last stage logs transferRef.	Each stage rejects back to stage 0 with reason	—	"Awaiting bank confirmation"
+F-34	Confirms supply plan transfer	Back to Engineer	—	—
+F-19	Permanent tracker, never closes until project closes	—	—	—
+F-14	Sec 1 (Head Sup) → Sec 2 (Engineer). On final approve, cascades F-15 generation by overallProgressthresholds.	Sec 2 reject returns to Sec 1 (engineer change)	—	"Contractor unavailable for visit"
+F-23	Manager → Exec. On final approve, variation booked.	Each stage rejects to stage 0	DENY_VARIATION: variation noted as denied, work proceeds without it	—
+F-15	3-stage like F-35. On final-instance (paymentIndex=4) approve → activates F-07 + phase='HANDOVER'.	Each stage rejects to stage 0	—	"Awaiting tax compliance certificate"
+F-07	phase='CLOSED', progressPct=100. If mediaRequested=true activates F-52; else auto-completes it.	Back to Research Manager (rare)	—	"Beneficiary unavailable for handover"
+F-52	Notifies COMMS dept (PR_OFFICER)	—	—	—
+Project-Level Actions (the missing exit doors)
+These live on every ProjectDetail page as a "⋮ More" menu, gated by RBAC:
+Action	Who	Where allowed	Effect
+إيقاف مؤقت(Hold)	Manager+	Any active phase	project.status='on_hold'. SLA clocks freeze. Pending forms keep their state.
+استئناف(Resume)	Manager+	Only when on_hold	Reverses hold. SLA resumes from now (no retroactive penalty).
+إلغاء المشروع(Cancel)	Admin only	Any phase except CLOSED	phase='CANCELLED', reason required. All pending forms auto-complete with reason. Approved forms remain for audit.
+رفض النهائي(Mark Rejected)	RESEARCH_MANAGER or HEAD_DIAGNOSIS	Phase 1–2 only	phase='REJECTED'. Different from Cancel: this means "eligibility/feasibility denial" not "withdrawal".
+إعادة فتح(Reopen)	Admin only	CLOSED / REJECTED / CANCELLED	Returns to last-active phase. Used for corrections.
+أرشفة(Archive)	Admin	CLOSED ≥ 6 months	Moves to archived_projects collection. Hidden from main list.
+Project State Diagram (final, with terminal states)
+                    ┌──── CANCELLED (admin override, reason logged)
+                    │
+                    │     ┌── REJECTED (F-03.1 decline or F-08 not-renovable)
+                    │     │
+   RESEARCH ──► DIAGNOSIS ──► [EVACUATION] ──► TENDERING ──► EXECUTION ──► HANDOVER ──► CLOSED ──► [ARCHIVED]
+       │                                                                                              ▲
+       └──────────── ON_HOLD ◄═══════ (any phase can enter ON_HOLD and exit back to its prior phase) ──┘
+EVACUATION is in brackets because it's a parallel state for DIAGNOSIS (only entered if F-08 safety hazard is true). ARCHIVED is in brackets because it's a hidden state, not a phase.
+Reassignment Mechanism
+Adds a Reassign button on F-04, F-08, F-32, F-33, F-14 (any form with assigneeId). Visible to: the role that originally assigned (e.g., HEAD_DIAGNOSIS for F-04/F-08) and admins. Writes a new approval row with decision: 'reassigned', note: 'سبب إعادة الإسناد', updates assigneeId, keeps SLA running.
+
+Part B · User Account Lifecycle (Complete)
+SIGNUP ──► PENDING ──► (admin approves) ──► ACTIVE ◄─────┐
+              │                              │  │        │
+              │ (admin rejects, reason)      │  │ (admin │
+              ▼                              │  │  edits │
+           REJECTED                          │  │  role) │
+        (status='rejected',                  │  └────────┘
+         email kept for audit)               │
+                                             ▼
+                                       (admin deactivates)
+                                             │
+                                             ▼
+                                       DEACTIVATED ──► ACTIVE
+                                                  (reactivate)
+                                             │
+                                             ▼
+                                       NEEDS_ROLE_RESET (legacy migration)
+                                             │
+                                             ▼
+                                       (back to PENDING for re-approval)
+Status	Can login?	Can act on forms?	Visible in directory?
+pending	Yes, sees waiting screen	No	Admins only
+active	Yes	Yes, per role	Yes
+deactivated	No (locked screen)	No	Admins only
+rejected	No (locked screen, reason shown)	No	Admins only
+Rules I'm adding to the prompt:
+	•	rejectUser MUST updateDoc with status='rejected' + reason — never deleteDoc (the current code wrongly deletes; that's why audits break).
+	•	Deactivation requires reassignment of any pending forms (UI surfaces a "Reassign forms" picker before allowing deactivation).
+	•	Role changes log an auditLog entry with before/after values.
+	•	Super-Admin promotion shows a confirmation modal with the warning "هذا المستخدم سيستطيع تجاوز جميع الصلاحيات".
+
+Part C · Brand & Visual Identity
+The Logo System
+From the image assets (IMG_0888.jpg, IMG_0895, IMG_0897, IMG_0898, IMG_0900, IMG_1274, IMG_1275) the canonical mark is:
+	•	Crown: two purple diamond/lozenge shapes forming a "W"-like apex
+	•	Wall: a 3-row brick pattern in alternating purple #4A1F66 and teal #43bba1
+	•	Wordmark: "ترميم / Tarmeem" in custom Tajawal-derived lettering
+	•	Tagline: "جمعية ترميم الخيرية"
+Five variants needed in TarmeemLogo.tsx:
+Variant	Usage	Components included
+icon	App icon, favicon, small sidebar (md:hidden header)	Crown + wall only, no text
+horizontal	Desktop header	Crown + wall + wordmark side-by-side
+stacked	Auth screen, splash, profile	Crown + wall above, wordmark below
+full	Email signatures, PDFs	Stacked + tagline
+monogram	Avatar fallback for SYSTEM user	Just the crown in a circle
+Each variant supports size, color (white | brand | mono), animated (boolean).
+The Motion System
+Splash (app launch, ~2 seconds)
+TarmeemSplash.tsx plays once per session (gated by sessionStorage.tarmeem_splash_seen — already in App.tsx, keep it).
+Animation choreography (1800ms total):
+	1.	0–300ms: Dark background fades in
+	2.	300–800ms: Bricks build the wall row-by-row, bottom-up, with a 60ms stagger per brick. Each brick: scale 0.6 → 1.0 + opacity 0 → 1, ease-out
+	3.	700–1100ms: Crown drops from translateY(-30px) to translateY(0), with a slight bounce (cubic-bezier(0.34, 1.56, 0.64, 1))
+	4.	1000–1400ms: Wordmark "ترميم Tarmeem" fades in from below the wall, translateY(20px) → 0
+	5.	1400–1800ms: Subtle pulse on the crown (scale 1.0 → 1.04 → 1.0), then onComplete callback
+Use framer-motion for orchestration (already a sane addition; lighter than building 8 keyframe rules).
+Inline loading (clicks, fetches)
+Three patterns depending on duration:
+Pattern	When	What it looks like
+Button spinner	Synchronous action ≤ 800ms (approve, save, submit)	Replace button text with <TarmeemLogo variant="icon" size={16} animated /> (slow rotation 1.5s) + small "جارٍ المعالجة…"
+Skeleton	Data fetch / route change (200ms–2s)	Gray placeholder boxes in card layout, with shimmer animation (purple→teal gradient sweeps left-to-right every 1.5s)
+Full overlay	Long operation (>2s, e.g., F-02 pipeline creation with 22-doc writeBatch)	Backdrop blur + centered TarmeemSplash mini variant + descriptive text "جارٍ إنشاء المشروع وتوليد النماذج…" + progress bar if measurable
+Empty states (consistent illustration)
+A simple SVG: faded brick wall outline + dotted crown above + text. Different copy per context:
+	•	No projects: "لم يتم إنشاء مشاريع بعد · أنشئ أول حالة"
+	•	No tasks: "لا توجد مهام بانتظارك · استمتع بفنجان قهوة ☕"
+	•	No notifications: "صندوقك نظيف"
+	•	No search results: "لم نجد ما تبحث عنه"
+Success/error toasts
+Top-center, brand-themed, 3s auto-dismiss. Library: sonner (lightweight, RTL-friendly). Sounds disabled by default.
+
+Part D · Responsive Design Specification
+The current code does sidebar + bottom-nav at the md breakpoint, but the tablet range is unhandled and the project detail view has hardcoded widths that overflow. Here's the matrix:
+Breakpoints (matching Tailwind defaults + one custom)
+sm:  640px   — Large phones
+md:  768px   — Tablets portrait
+lg:  1024px  — Tablets landscape / small laptops
+xl:  1280px  — Desktops
+2xl: 1536px  — Large monitors
+Layout per device class
+Region	Mobile (<md)	Tablet (md–lg)	Desktop (lg+)
+Header	Compact (icon logo + bell + avatar; no subtitle)	Horizontal logo, no subtitle	Horizontal logo + subtitle "منصة العمليات الموحّدة · جمعية ترميم"
+Primary nav	Bottom tab bar (Home, Projects, Admin) + ☰ for portals	Collapsible sidebar (icon-only by default, expandable on hover)	Full sidebar 256px
+Project list	1 column cards	2 columns	3 cols (xl: 4)
+Project detail · phase tabs	Horizontal scroll, snap-x, sticky top	Same as mobile but no overflow	Full row, no scroll
+Project detail · form list inside phase	1 column, fold/unfold	1 column	2 columns, fold/unfold
+F-02 wizard	Full-screen modal, step pills at top, single column	Modal max-w-2xl, 2-col where useful	Modal max-w-4xl, 2-col
+F-08 tabs	Bottom-sheet tabs (slide-up)	Top tabs	Top tabs, side-by-side sections
+F-20 workspace	Stacked sections, swipeable bucket cards	2 columns (items + buckets)	3 columns + chat sidebar
+Dashboard	1×4 stat cards stacked, then activity feed	2×2 stats, then split feed	4 stats + sidebar feed
+Admin table	Card list (no table)	Horizontal scroll table	Full table
+Mobile-specific patterns
+	•	Bottom sheets (not modals) for action menus — vaul or custom: drag-handle, swipe-to-dismiss
+	•	Floating Action Button on Projects screen (+ icon) for Researchers
+	•	Pull-to-refresh on Home, Projects, Forms — uses react-pull-to-refresh or native overscroll
+	•	Swipe gestures on project cards: swipe-left reveals quick actions (open, archive)
+	•	Sticky form headers keep the action buttons visible while scrolling long forms
+Touch targets
+	•	Minimum 44×44 px (iOS HIG)
+	•	Buttons: h-11 minimum on mobile, h-10 desktop
+	•	Form inputs: h-12 mobile, h-10 desktop
+	•	Hit-slop on small icons: add before:absolute before:inset-[-8px] pseudo-element
+Performance budgets
+	•	LCP < 2.5s on 4G
+	•	Code-split each phase's forms (React.lazy per renderer)
+	•	Image lazy-load with loading="lazy"
+	•	Splash hidden after first session render (no re-trigger on navigation)
+
+Part E · Theme System (Dark Default, Light Actually Works)
+The current code's <ThemeToggle/> is decorative — most components have hardcoded dark hex values. Here's the fix:
+CSS Variables (in src/index.css)
+:root {
+  /* Brand (constant across themes) */
+  --tarmeem-purple: #4A1F66;
+  --tarmeem-purple-light: #6B3D87;
+  --tarmeem-purple-dark: #3A1652;
+  --tarmeem-teal: #43bba1;
+  --tarmeem-teal-light: #7AC8AD;
+  --tarmeem-accent: #a871f7;
+  --tarmeem-cream: #FFF8E7;
+
+  /* Semantic — light defaults */
+  --bg-app: #F8F9FA;
+  --bg-surface: #FFFFFF;
+  --bg-surface-elevated: #FFFFFF;
+  --bg-surface-sunken: #F1F3F5;
+  --bg-input: #FFFFFF;
+  --border-subtle: #E5E7EB;
+  --border-default: #D1D5DB;
+  --text-primary: #111827;
+  --text-secondary: #4B5563;
+  --text-tertiary: #9CA3AF;
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-card-hover: 0 4px 12px rgba(74,31,102,0.12);
+}
+
+.dark {
+  --bg-app: #050505;
+  --bg-surface: #0a0a0a;
+  --bg-surface-elevated: #111111;
+  --bg-surface-sunken: #050505;
+  --bg-input: #111111;
+  --border-subtle: #1F1F1F;
+  --border-default: #2D2D2D;
+  --text-primary: #F9FAFB;
+  --text-secondary: #D1D5DB;
+  --text-tertiary: #6B7280;
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.4);
+  --shadow-card-hover: 0 8px 24px rgba(168,113,247,0.15);
+}
+Tailwind config exposes them as utilities
+// tailwind.config.js
+extend: {
+  colors: {
+    'app-bg':       'var(--bg-app)',
+    'surface':      'var(--bg-surface)',
+    'surface-up':   'var(--bg-surface-elevated)',
+    'surface-down': 'var(--bg-surface-sunken)',
+    'input-bg':     'var(--bg-input)',
+    'border-subtle':'var(--border-subtle)',
+    'border-default':'var(--border-default)',
+    'fg':           'var(--text-primary)',
+    'fg-muted':     'var(--text-secondary)',
+    'fg-faint':     'var(--text-tertiary)',
+    'brand':        'var(--tarmeem-purple)',
+    'brand-light':  'var(--tarmeem-purple-light)',
+    'brand-teal':   'var(--tarmeem-teal)',
+    'brand-accent': 'var(--tarmeem-accent)',
+  },
+}
+Default = dark
+// ThemeProvider.tsx initial state
+const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+  if (typeof window === 'undefined') return 'dark';
+  const stored = localStorage.getItem('tarmeem-theme') as 'light' | 'dark' | null;
+  return stored ?? 'dark';   // dark is the explicit fallback
+});
+useEffect(() => {
+  document.documentElement.classList.toggle('dark', theme === 'dark');
+  localStorage.setItem('tarmeem-theme', theme);
+}, [theme]);
+Every component now uses bg-surface, text-fg, border-border-subtle instead of bg-white dark:bg-[#0a0a0a]. One source of truth — toggle the .dark class on <html> and the whole app re-skins instantly.
+
+Part F · Dashboard 2.0 (Professional ERP)
+The current dashboard is generic. Here's the redesign, role-aware:
+Layout (desktop, lg+)
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Greeting Banner  ·  Quick action bar (search ⌘K, +new, filters)         │
+├──────────────────────────────────┬───────────────────────────────────────┤
+│  My Day (role-personalized)      │  KPI Strip (4 cards, role-aware)      │
+│  · Pending approvals             │  · Active projects                    │
+│  · SLA-at-risk                   │  · My tasks today                     │
+│  · Due today                     │  · Avg SLA breach % (this month)      │
+│                                  │  · Closed this month                  │
+├──────────────────────────────────┼───────────────────────────────────────┤
+│  Phase Funnel                    │  Department Workload                  │
+│  Horizontal bar chart            │  Stacked bar per dept × phase         │
+│  showing # projects per phase    │                                       │
+├──────────────────────────────────┴───────────────────────────────────────┤
+│  Activity Timeline (real-time)    ·    Weekly Stars (leaderboard)        │
+├───────────────────────────────────────────────────────────────────────────┤
+│  Budget Snapshot (FINANCE / EXEC roles only)                              │
+│   Committed · Paid · Outstanding · Trend                                  │
+└───────────────────────────────────────────────────────────────────────────┘
+Role-aware "My Day" widget
+The killer feature. Each role sees different cards:
+Role	"My Day" shows
+SOCIAL_RESEARCHER	Draft F-02s, F-18/F-22 awaiting me, scheduled visits
+RESEARCH_MANAGER	F-02s in my approval queue, F-03/F-03.2/F-07 to author, eligibility decline rate this month
+EXEC_DIRECTOR	F-03.1 pending, F-15/F-35 payment approvals, F-23 variations, total committed budget
+HEAD_DIAGNOSIS	F-04 to assign, F-08 to validate, engineer workload distribution
+HEAD_SUPERVISION	F-32 to assign, F-14 reports to validate, F-52 to author
+DIAGNOSIS_ENGINEER	My F-08 in progress, F-14 reports due, supply plan tasks
+ACCOUNTANT	F-15/F-35 stages 0 and 2 (prep + disburse), expired transfers
+FINANCE_HEAD	Approval queue, monthly disbursement total, variance vs budget
+PROCUREMENT_OFFICER	F-19 trackers, F-20 collaborations, low-stock alerts
+PR_OFFICER	F-52 incoming, scheduled coverage
+Admin (flag)	System health (active users, pending approvals, SLA breaches across org, audit log preview)
+KPI cards with trend indicators
+Each KPI is a number + δ vs last week + sparkline:
+  Active Projects                       My Tasks Today
+  ▌▌▌▌▌▌▌▌▌▌▌                            ▌▌▌▌
+  37  ▲ +4 this week                     12  ▼ -2
+Phase Funnel
+Horizontal stacked bar, click any segment to filter the Projects list. Color-coded:
+	•	RESEARCH: sky
+	•	DIAGNOSIS: violet
+	•	EVACUATION: amber
+	•	TENDERING: orange
+	•	EXECUTION: teal
+	•	HANDOVER: emerald
+	•	CLOSED: gray
+	•	REJECTED: red (separated)
+	•	CANCELLED: dark red
+SLA Breach Heatmap (managers + admin)
+Calendar-style grid: rows = forms, columns = last 14 days. Cell colored by # breaches that day. Hover shows breakdown. This is the single most useful management view.
+Bottleneck Detection
+Auto-computed: "Forms at this step take avg 4.2 business days (SLA: 2). Consider review." Surfaces the slowest step org-wide.
+Quick actions strip
+Single search input (Cmd+K opens omnibar to search projects, forms, users). Plus 3 buttons: + حالة جديدة (researchers), بحث متقدم, تقارير.
+
+Part G · Architecture Additions Beyond My First Pass
+1. Audit Log (project-wide timeline)
+New collection audit_logs keyed by projectRefId. Every state-changing action writes here, not just inside form.approvals. Queryable as a unified timeline on the ProjectDetail page (new "السجل" tab).
+2. Comments Subcollection (universal)
+forms/{id}/comments — every form has it (not just F-20). Component <FormComments /> mounted in every renderer's <FormShell />. Threaded replies optional.
+3. File Pipeline (Firebase Storage)
+<FileUploader /> component with:
+	•	Drag & drop
+	•	Multi-file
+	•	Progress bars
+	•	Auto-thumbnail for images
+	•	Files stored at gs://{bucket}/projects/{projectRefId}/forms/{formId}/{uuid}-{filename}
+	•	Form's files[] stores { name, url, size, mimeType, uploadedBy, uploadedAt }
+4. PDF Export
+@react-pdf/renderer for two templates:
+	•	Handover Certificate (F-07 approved) — printable A4
+	•	Project Closure Report (F-07 + all financial summary)
+Generated server-side via a Cloud Function on demand (or client-side as fallback).
+5. Notifications Layer
+	•	In-app (existing, fixed with server filtering)
+	•	Email digest (Cloud Function, daily 7am, configurable per user)
+	•	Web Push (FCM, opt-in per browser)
+6. Global Search (Cmd+K Omnibar)
+cmdk library. Index in-memory:
+	•	Projects by projectId, beneficiaryName, city
+	•	Forms by code, title, beneficiaryName
+	•	Users by fullName, email
+	•	Recent actions
+7. Reports Page
+New top-level route /reports (admin + managers):
+	•	Pre-built: SLA breach report, Department performance, Financial summary, Closed projects (year-to-date)
+	•	Export to Excel via SheetJS
+8. Settings Page
+New top-level route /settings:
+	•	Theme (toggle)
+	•	Notification preferences
+	•	Language (currently AR-only; structure for future EN)
+	•	Password change
+
+Part H · Updated File Tree
+src/
+├── App.tsx
+├── main.tsx
+├── index.css                              ← CSS variables (light + dark)
+├── routes.tsx                             ← Centralized route table (NEW)
+├── lib/
+│   ├── firebase.ts
+│   ├── data.ts                            ← Adds REJECTED/CANCELLED/ON_HOLD phases
+│   ├── workflow.ts                        ← TRIGGER_MAP (now handles decline paths)
+│   ├── sla.ts
+│   ├── rbac.ts
+│   ├── audit.ts                           ← Project audit log writer (NEW)
+│   ├── search.ts                          ← In-memory indexer (NEW)
+│   └── exports.ts                         ← PDF/Excel generators (NEW)
+├── hooks/
+│   ├── useAuth.ts
+│   ├── useFirestoreCollection.ts
+│   ├── useNotifications.ts
+│   ├── useFormComments.ts                 ← (NEW)
+│   ├── useFileUpload.ts                   ← Firebase Storage (NEW)
+│   ├── useKeyboardShortcuts.ts            ← Cmd+K etc. (NEW)
+│   └── useMediaQuery.ts                   ← Responsive helpers (NEW)
+├── components/
+│   ├── ui/
+│   │   ├── Card.tsx
+│   │   ├── Pill.tsx
+│   │   ├── Input.tsx
+│   │   ├── Select.tsx
+│   │   ├── TextArea.tsx
+│   │   ├── NumberCounter.tsx
+│   │   ├── ReadOnlyField.tsx
+│   │   ├── EmptyState.tsx                 ← Standardized w/ Tarmeem illustration
+│   │   ├── SearchBar.tsx
+│   │   ├── ProgressBar.tsx
+│   │   ├── Skeleton.tsx                   ← Shimmer loader (NEW)
+│   │   ├── BottomSheet.tsx                ← Mobile action sheet (NEW)
+│   │   ├── Toast.tsx                      ← sonner wrapper (NEW)
+│   │   ├── ConfirmDialog.tsx              ← Destructive action confirm (NEW)
+│   │   ├── FileUploader.tsx               ← (NEW)
+│   │   ├── FormComments.tsx               ← Universal comments (NEW)
+│   │   ├── ProjectActionsMenu.tsx         ← Hold/Cancel/Reject/Reopen (NEW)
+│   │   └── index.ts
+│   ├── brand/
+│   │   ├── TarmeemLogo.tsx                ← 5 variants
+│   │   ├── TarmeemSplash.tsx              ← Motion splash
+│   │   └── ThemeToggle.tsx
+│   ├── ThemeProvider.tsx
+│   ├── Auth.tsx
+│   ├── Home.tsx                           ← Dashboard 2.0
+│   ├── Forms.tsx
+│   ├── Departments.tsx
+│   ├── Projects.tsx
+│   ├── EmployeeProfile.tsx
+│   ├── Admin.tsx
+│   ├── Reports.tsx                        ← (NEW)
+│   ├── Settings.tsx                       ← (NEW)
+│   ├── CommandPalette.tsx                 ← Cmd+K (NEW)
+│   ├── dashboard/
+│   │   ├── KpiCard.tsx                    ← (NEW)
+│   │   ├── MyDayWidget.tsx                ← Role-personalized (NEW)
+│   │   ├── PhaseFunnel.tsx                ← (NEW)
+│   │   ├── DepartmentWorkload.tsx         ← (NEW)
+│   │   ├── SlaBreachHeatmap.tsx           ← (NEW)
+│   │   ├── BudgetSnapshot.tsx             ← (NEW)
+│   │   └── ActivityTimeline.tsx
+│   └── forms/
+│       ├── _shared.tsx
+│       ├── F02_SocialResearch.tsx
+│       ├── F03_ResearchApproval.tsx
+│       ├── F03_1_ExecApproval.tsx         ← Adds Decline button
+│       ├── F03_2_FinalTransfer.tsx
+│       ├── F04_AssignDiagnosisEngineer.tsx
+│       ├── F08_DiagnosisBinder.tsx        ← Adds Not-Renovable Decline button
+│       ├── F18_EvacuationPledge.tsx
+│       ├── F22_AltHousing.tsx
+│       ├── F21_FurnitureInventory.tsx
+│       ├── F20_MaterialSupply.tsx
+│       ├── F84_ContractorPricing.tsx
+│       ├── F85_TenderingAward.tsx
+│       ├── F32_AssignSupervisor.tsx
+│       ├── F33_StartDocumentation.tsx
+│       ├── F35_FirstPayment.tsx
+│       ├── F34_MaterialTransfer.tsx
+│       ├── F19_InternalSupply.tsx
+│       ├── F14_SupervisionReport.tsx
+│       ├── F23_AdditionalWorks.tsx        ← Adds Deny Variation Decline
+│       ├── F15_InstallmentPayment.tsx
+│       ├── F07_HandoverCertificate.tsx
+│       ├── F52_MediaCoverage.tsx
+│       └── index.ts
+├── types/
+│   ├── firestore.ts                       ← All form data schemas (typed)
+│   ├── workflow.ts                        ← Cascade types
+│   └── ui.ts                              ← Component prop types
+└── firestore.rules
+40 source files. Honest count.
+
+Part I · Updated Claude Code Prompt (replaces the previous one)
+Use this final prompt in your repo:
+You are the lead architect finishing the Tarmeem ERP web app (React + TypeScript + Tailwind + Firebase). This prompt supersedes any earlier instructions. The earlier prompt was missing rejection handling, project lifecycle states, the visual identity system, responsive specifications, and the dashboard redesign. All are below. Execute every commit in order. Do not stop between commits.
+
+# CONTEXT — read before writing
+1. `src/lib/data.ts` — canonical dictionary (departments, roles, forms, phases). Single source of truth.
+2. `src/lib/firebase.ts`, `src/lib/sla.ts`, `src/lib/rbac.ts`, `src/lib/workflow.ts` — already created.
+3. The 5-phase workflow, RBAC matrix, and trigger cascades are defined in `data.ts` and `workflow.ts`.
+
+# NEW REQUIREMENTS (this prompt's additions)
+
+## A. Project lifecycle additions
+Extend `ProjectPhase` union in `data.ts` with: `'REJECTED' | 'CANCELLED' | 'ON_HOLD'`.
+Extend `ProjectRecord` with: `status: 'active' | 'on_hold'`, `rejectionReason?: string`, `cancellationReason?: string`, `archivedAt?: Timestamp`, `holdReason?: string`, `holdedAt?: Timestamp`, `resumedAt?: Timestamp`.
+Add an `archived_projects` collection (mirrors `projects` schema). Admin "Archive" moves docs there; "Restore" moves back.
+
+## B. Form action vocabulary — 4 verbs not 3
+`approveForm`, `rejectForm`, `declineForm` (NEW), `deferForm`.
+`declineForm` is gated to specific forms only:
+- F-03.1 declineForm → project.phase='REJECTED' + auto-complete all subsequent pending forms with "تم رفض الاستحقاق"
+- F-08 declineForm with reason='not-renovable' → project.phase='REJECTED'
+- F-23 declineForm → variation noted as denied, no project state change
+All declineForm cascades use `writeBatch`.
+
+For `rejectForm` semantic:
+- Sets status='rejected', logs an approval row with decision='rejected'
+- Adds a `reworkRole` field = the form's originator role
+- Creates an in-app notification to the originator: "نموذج {code} مرفوض للتعديل — السبب: {note}"
+- The originator gets an "Edit & Resubmit" button which, on save, resets status='pending', approvalIndex=0, adds an approval row decision='resubmitted'
+
+## C. Project-level actions menu
+Build `<ProjectActionsMenu />` component, shown on `ProjectDetail` as a "⋮" dropdown. Visibility rules:
+- "إيقاف مؤقت" (Hold): visible to managers + admins, only when status='active' and phase not in ['CLOSED','REJECTED','CANCELLED']
+- "استئناف": visible only when status='on_hold'
+- "إلغاء المشروع": admin only, requires reason in confirmation modal, writes cancellationReason
+- "أرشفة": admin only, when phase='CLOSED' and createdAt > 6 months ago
+- "إعادة فتح": admin only on terminal phases — returns project to last-active phase from audit log
+
+When Hold is applied: write a Firestore field `project.holdedAt = serverTimestamp()`. SLA calculator must check this and skip elapsed time during hold.
+
+## D. Reassignment
+Add a "إعادة إسناد" button on F-04, F-08, F-32, F-33, F-14 (any form with assigneeId). Visible to: form originator role + admin. Opens a modal to pick new assignee + reason. Writes an approval row `decision: 'reassigned'`.
+
+## E. Audit log (project-wide)
+New collection `audit_logs`, indexed on `projectRefId` and `createdAt`.
+Schema: `{ projectRefId, formId?, formCode?, action, actorId, actorName, actorRole, note?, beforeValue?, afterValue?, createdAt }`.
+Write entries from:
+- Every approveForm / rejectForm / declineForm / deferForm call
+- Project state changes (Hold, Resume, Cancel, Archive, Reopen)
+- User CRUD (admin actions)
+Add a "السجل" tab on ProjectDetail showing the unified timeline (newest first).
+
+## F. Universal comments
+New subcollection `forms/{id}/comments` with `{ id, authorId, authorName, body, createdAt }`.
+Build `<FormComments formId={...} />` and include it inside every form renderer's `<FormShell>`.
+Migrate F-20 chat from `data.messages` array to this subcollection (delete `data.messages` field after migration script in Commit 11).
+
+## G. File pipeline (Firebase Storage)
+Build `<FileUploader formId={...} projectRefId={...} />` component:
+- Drag-and-drop
+- Multi-file
+- Progress per file
+- Image thumbnails after upload
+- Saves to `gs://{bucket}/projects/{projectRefId}/forms/{formId}/{uuid}-{filename}`
+- Updates form.files[] with `{ name, url, size, mimeType, uploadedBy, uploadedAt, storagePath }`
+- Optional `accept` prop and `maxSize` prop
+Integrate into every form renderer where attachments are sensible (F-02, F-08, F-14, F-15, F-35, F-07).
+
+## H. Visual identity — Logo + Splash + Motion
+Add `framer-motion` to dependencies.
+
+### `src/components/brand/TarmeemLogo.tsx`
+5 variants: `icon | horizontal | stacked | full | monogram`.
+Color modes: `white | brand | mono`.
+Animated prop: when true, the crown gently pulses (scale 1→1.04→1, 3s loop, ease-in-out).
+SVG paths to match the brand assets in `/mnt/project/IMG_0895.jpg` (the canonical 3-row brick wall + 2-diamond crown). Bricks: 5 top row, 3 middle row, 4 bottom row, alternating purple and teal.
+
+### `src/components/brand/TarmeemSplash.tsx`
+Full-screen overlay. Choreography (1800ms total) using framer-motion:
+1. 0–300ms: dark background fades in (opacity 0→1)
+2. 300–800ms: bricks build bottom-up with 60ms stagger; each: scale 0.6→1, opacity 0→1, ease-out
+3. 700–1100ms: crown drops with bounce (cubic-bezier(0.34, 1.56, 0.64, 1))
+4. 1000–1400ms: wordmark fades in from translateY(20px)→0
+5. 1400–1800ms: subtle pulse on crown
+Calls `onComplete` after 1800ms. Used in App.tsx gated by `sessionStorage.tarmeem_splash_seen` (existing pattern, keep).
+
+### Loading patterns
+- `<Skeleton />` component: shimmer animation purple→teal gradient sweep, 1.5s loop, 5 variants (card, row, circle, text, button).
+- Button loading state: replaces children with `<TarmeemLogo variant="icon" size={16} animated />` plus "جارٍ المعالجة…".
+- Long operations (e.g., F-02 pipeline create): full-screen overlay with a 2-line "جارٍ إنشاء المشروع وتوليد النماذج (22)…" + indeterminate progress bar.
+
+## I. Theme system — make it ACTUALLY work
+1. Update `src/index.css` with the CSS variables block (light values on `:root`, dark on `.dark`) — exact values per the spec above.
+2. Update `tailwind.config.js` to expose those vars as utility colors: `surface`, `surface-up`, `surface-down`, `input-bg`, `border-subtle`, `border-default`, `fg`, `fg-muted`, `fg-faint`, `brand`, `brand-light`, `brand-teal`, `brand-accent`, `app-bg`.
+3. Refactor EVERY component to use these tokens instead of hardcoded hex. No `bg-[#0a0a0a]` anywhere except inside `index.css`.
+4. `ThemeProvider` defaults to dark; persists in localStorage as `tarmeem-theme`.
+5. ThemeToggle works org-wide; verify by toggling and watching every screen re-skin.
+
+## J. Responsive design — implement the breakpoint matrix above
+Specific changes:
+- Header: hide subtitle below `lg`, hide wordmark below `sm`.
+- Sidebar: 256px on `lg+`; collapse to icon-only (64px) on `md`; hidden on mobile (use bottom nav + hamburger for portals).
+- Phase tabs in ProjectDetail: `snap-x` horizontal scroll below `lg`; full row at `lg+`.
+- Project cards: 1 col (sm), 2 (md), 3 (lg), 4 (xl).
+- F-08 tabs: bottom-sheet style below `md`.
+- F-20 workspace: stacked single column on mobile, 3-col on `lg+`.
+- Add `<BottomSheet />` primitive (use `vaul` or build minimal version with framer-motion drag).
+- Add Floating Action Button for "+ حالة جديدة" on Projects screen, mobile only.
+- All touch targets ≥ 44×44px; inputs `h-12` mobile, `h-10` desktop.
+- Use `useMediaQuery` hook from `src/hooks/useMediaQuery.ts` for any JS-level decisions.
+
+## K. Dashboard 2.0
+Replace `src/components/Home.tsx` with the layout from the spec. Build the dashboard subcomponents in `src/components/dashboard/`:
+- `<KpiCard />`: value + δ vs last week + 7-day sparkline. Role-aware: shows different metrics per role.
+- `<MyDayWidget />`: role-personalized task list (see role mapping in the spec).
+- `<PhaseFunnel />`: horizontal stacked bar of all projects by phase; clicking a segment filters Projects list.
+- `<DepartmentWorkload />`: grouped bar chart, dept × phase.
+- `<SlaBreachHeatmap />`: 14-day × forms grid, color intensity = breaches. Managers + admins only.
+- `<BudgetSnapshot />`: committed / paid / outstanding / monthly trend. Finance + exec roles only.
+- Keep `<ActivityTimeline />` (current) and `<WeeklyStars />` (leaderboard).
+
+## L. Global search (Cmd+K)
+Add `cmdk` to dependencies. Build `<CommandPalette />` triggered by Cmd+K / Ctrl+K. Index: projects, forms, users. Show recent searches. Keyboard navigation.
+
+## M. Reports + Settings pages
+Add routes `/reports` and `/settings` to `routes.tsx`.
+- `/reports`: pre-built filters + export to Excel via SheetJS. Reports: SLA Breach, Department Performance, Financial Summary, Closed Projects YTD.
+- `/settings`: theme toggle, notification prefs, password change.
+
+## N. User account lifecycle hardening
+- `rejectUser`: MUST use `updateDoc` setting status='rejected' + rejectionReason + auditLog entry. NEVER `deleteDoc`. (Current `App.tsx` has a `deleteDoc` bug here — fix it.)
+- Deactivation flow: before allowing deactivation, surface a `<ReassignFormsModal />` listing the user's pending forms and forcing reassignment to another user (or admin override "leave unassigned"). Block deactivation if pending forms exist without explicit override.
+- Role changes write a beforeValue/afterValue audit log entry.
+- Super Admin promotion requires confirmation modal: "هذا المستخدم سيستطيع تجاوز جميع الصلاحيات. متابعة؟"
+
+## O. PDF exports
+Add `@react-pdf/renderer`. Two templates in `src/lib/exports.ts`:
+- `HandoverCertificatePDF` (F-07 approved): A4 portrait, Tarmeem logo header, beneficiary info, project details, signatures area.
+- `ProjectClosureReportPDF`: multi-page summary with all phase data, financial breakdown, photos.
+"تنزيل PDF" button on ProjectDetail visible after `phase='CLOSED'`.
+
+## P. Notifications layer
+- In-app: already working (after server-side filter fix).
+- Email digest: Cloud Function `dailyDigest` (Node.js, scheduled 7am Riyadh time). Sends per-user digest of pending tasks. Configurable via `user.preferences.emailDigest`.
+- Web Push: FCM integration with opt-in toggle in Settings.
+
+# CODE QUALITY
+- No `any` outside intentional discriminated-union form data fields.
+- Strict typed event handlers (`React.ChangeEvent<HTMLInputElement>`).
+- No hardcoded colors; use theme tokens.
+- Every Firestore write touching >1 doc uses `writeBatch` or `runTransaction`.
+- Every `onSnapshot` has explicit `limit()` + `orderBy()`.
+- All forms wrap submit in `try/finally`.
+
+# COMMITS (atomic, in order)
+1. Repo hygiene + .env.example + framer-motion/cmdk/sonner/vaul/@react-pdf/renderer/firebase-admin deps
+2. Types contracts (`src/types/`)
+3. Theme system (CSS vars + Tailwind config + ThemeProvider)
+4. Brand components (TarmeemLogo 5 variants, TarmeemSplash motion, ThemeToggle)
+5. UI primitives migrated to `src/components/ui/` using theme tokens
+6. Hooks (`useAuth`, `useFirestoreCollection`, `useNotifications`, `useFormComments`, `useFileUpload`, `useKeyboardShortcuts`, `useMediaQuery`)
+7. Auth.tsx + App.tsx rewrites (hooks, no God Function, lifecycle states)
+8. workflow.ts updates: rejection paths, decline paths, hold/resume SLA logic
+9. FormRenderers split into 22 files; every renderer fully implemented; FileUploader + FormComments mounted in each
+10. Forms.tsx, Departments.tsx, Projects.tsx, EmployeeProfile.tsx, Admin.tsx — theme-token-pure, responsive, lifecycle-aware
+11. Project subsystems: ProjectActionsMenu, ReassignFormsModal, audit log writer
+12. F-20 messages migration to subcollection
+13. Dashboard 2.0 components (`src/components/dashboard/*`)
+14. CommandPalette + Reports + Settings pages + routes.tsx
+15. PDF exports (`src/lib/exports.ts`)
+16. firestore.rules + Cloud Functions (dailyDigest, optional FCM)
+17. Smoke tests in `src/__tests__/`:
+    - workflow.test.ts (cascade triggers, decline paths, rejection rework)
+    - rbac.test.ts (every role × every form × awaits/origin)
+    - sla.test.ts (business-day math, hold-time skip)
+18. tsc --noEmit must pass with zero errors. Build must succeed.
+
+# FAILURE MODES TO AVOID
+- No skeleton renderers anywhere.
+- No `RoleKey` / `FormCode` redefined outside `data.ts`.
+- No `ADMIN` role (it's a flag).
+- No Fri/Sat counted as business days.
+- No hardcoded colors outside `index.css`.
+- No `deleteDoc` on users (`rejectUser` must `updateDoc`).
+- No global `onSnapshot` on notifications (must server-filter by recipients).
+- No silent skeleton fallbacks on forms — every form must be functional or visibly disabled with reason.
+
+When done, push as a single PR titled `feat: Tarmeem ERP v2 — lifecycle, design system, dashboard 2.0`. Post a summary listing files changed, LOC delta, any spec deviations + reason, and screenshots of: splash, dashboard (light + dark), F-08 binder, F-02 wizard, ProjectActionsMenu open, CommandPalette, mobile bottom-nav.
+
+Part J · What You Need to Confirm
+I'm asking for a yes on:
+	1.	The new "Decline" verb on F-03.1, F-08, F-23 — terminal "no" decisions distinct from "send back for rework"
+	2.	Project lifecycle additions: REJECTED, CANCELLED, ON_HOLD, archived collection
+	3.	Reassignment workflow on assignable forms
+	4.	Universal comments + universal file upload on every form
+	5.	Audit log collection + project timeline tab
+	6.	Dashboard 2.0 with role-aware "My Day" widget
+	7.	CSS variables + theme tokens approach (replaces scattered dark: classes)
+	8.	Logo + Motion splash + Skeleton loaders per the choreography spec
+	9.	Responsive breakpoint matrix (mobile-first, tablet middle ground, desktop full)
+	10.	Reports + Settings pages, Cmd+K palette, PDF exports
+If all 10 are a yes, run the Claude Code prompt above against your repo. It is now comprehensive, lifecycle-aware, design-systemed, and has no logical dead ends. If any of the 10 is a no — tell me which and why, and I'll revise before you run it.
+
+Claude Code Response:
+
+The expansion is right on the gaps. Six of ten land as proposed. Four need adjustments I'd like you to confirm before I burn code — each has a concrete alternative that gets you the same outcome with less surface area.
+
+## ✅ Accepting as proposed
+
+**#1 Decline verb.** Adding `'declined'` to `FormStatus`, distinct from `'rejected'`. Gated to F-03.1 / F-08 / F-23. `declineForm()` in `FormsApi`. F-03.1 + F-08 decline → `phase='REJECTED'` + downstream forms auto-complete with reason. F-23 decline → variation marked denied, project continues.
+
+**#3 Reassignment.** Button on F-04/F-08/F-32/F-33/F-14. Writes `decision: 'reassigned'` approval row, updates `assigneeId`, SLA keeps running.
+
+**#4 Universal comments + selective file upload.** Comments as `forms/{id}/comments` subcollection on every form. `<FileUploader />` built as a primitive but mounted only where attachments are real — F-02 (beneficiary docs), F-08 (diagnosis photos + croquis exports), F-14 (supervision photos), F-15/F-35 (transfer receipts), F-07 (handover photos). Not on F-03/F-03.1/F-32-type single-line approvals — adding an upload widget there is dead UI.
+
+**#7 CSS variables + theme tokens.** Yes — and this invalidates four files I shipped last turn. Better to redo once than to scatter `dark:` across 22 form renderers later.
+
+## ⚠️ Yes, with a specific adjustment — confirm each
+
+**#2 — Drop the separate `archived_projects` collection. Use `project.archived: boolean`.** The Projects list defaults to `where('archived','==',false)`; admin's "إظهار المؤرشف" toggle flips it. No migration on archive/restore, indexes still work, simpler audit. Separate collections only pay off at millions of docs. *Confirm flag, or insist on separate collection?*
+
+**#5 — Audit log: single-source, not double-write.**
+- Per-form decisions stay in `form.approvals[]` (already authoritative).
+- `audit_logs` collection writes **only** for project-level events: Hold, Resume, Cancel, Archive, Reopen, user CRUD, role changes, super-admin promotion.
+- The "السجل" tab on ProjectDetail merges both sources client-side into a unified timeline.
+
+Kills the duplication, keeps per-form atomicity, timeline still works. *Confirm?*
+
+**#6 — Dashboard 2.0 in two waves.** Eight widgets is its own product. MVP (ships in v2):
+- KpiStrip (4 cards, role-aware)
+- MyDayWidget (role-personalized task list)
+- PhaseFunnel (cheap, high-signal)
+- ActivityTimeline (already exists)
+
+Defer to v2.1 (after first real users hit it):
+- DepartmentWorkload stacked-bar
+- SlaBreachHeatmap (14-day grid)
+- BudgetSnapshot
+- WeeklyStars leaderboard
+
+We have 22 form renderers and the project lifecycle ahead of us. Half the dashboard now, full dashboard once we have feedback. *Accept split, or insist on full eight?*
+
+**#8 — Splash in pure CSS, not framer-motion.** framer-motion is ~50KB gzipped. The choreography you specified (brick stagger, crown drop, wordmark fade, pulse) is straight-line CSS keyframes — I'll ship it that way. Splash plays once per session anyway. If we later need real interactive motion (drag-to-dismiss sheets, gesture reorder), revisit then. Skeletons, logo variants, button spinner — all accepted as specced. *Confirm CSS-only?*
+
+**#9 — F-08 mobile: scroll-snap tabs, not bottom-sheet.** F-08 has 5 tabs with deep editors (croquis SVG canvas, works-array, furniture counter, photo grid). A bottom sheet for that loses context every switch and the canvas can't breathe inside a draggable container. Use the same `snap-x` sticky-top pattern as the Phase tabs in ProjectDetail.
+
+`<BottomSheet />` still gets built — just used for `<ProjectActionsMenu />`, per-card action menus on the Projects list, and the `+ حالة جديدة` FAB menu. Right tool for the right job. *Confirm?*
+
+**#10 — Reports + PDF split:**
+| Item | Track |
+|---|---|
+| Settings page (theme, notif prefs, password) | MVP ✅ |
+| Cmd+K command palette (`cmdk`) | MVP ✅ |
+| F-07 Handover Certificate PDF (single-page A4) | MVP ✅ — operational need, must be printable for the beneficiary |
+| Project Closure Report PDF (multi-page) | v2.1 — nice to have |
+| Reports page (SLA breach, dept perf, financial summary, YTD) | v2.1 — build after we have data worth reporting |
+
+*Accept this split, or insist on Reports page in MVP?*
+
+## Impact on what I shipped last turn
+
+If you confirm #7 (theme tokens), four files come back next turn rewritten:
+- `ThemeProvider.tsx` — still toggles `.dark`, but tokens live in CSS vars
+- `ui/index.tsx` — every primitive on `bg-surface`/`fg`/`border-subtle` etc., no inline hex
+- `TarmeemLogo.tsx` — expanded to the 5 variants (`icon | horizontal | stacked | full | monogram`)
+- `Auth.tsx` — token migration
+- `App.tsx` — token migration + `declineForm` added to `FormsApi` + `<ProjectActionsMenu />` mount in header
+
+The three hooks (`useAuth`, `useFirestoreCollection`, `useNotifications`) don't touch theming and stay as shipped.
+
+## Once you confirm — next turn ships
+
+1. `src/lib/data.ts` v2 — `'REJECTED'|'CANCELLED'` added to `ProjectPhase`, `project.status: 'active'|'on_hold'` field, `project.archived: boolean`, `'declined'` added to `FormStatus`, decline-eligible-forms registry
+2. `src/lib/workflow.ts` v2 — decline cascades for F-03.1 / F-08 / F-23, hold/resume hooks, reject-to-originator path
+3. `src/lib/sla.ts` v2 — subtracts hold elapsed time from business-day count
+4. `src/lib/audit.ts` — project-level audit writer
+5. `src/index.css` (CSS vars block) + `tailwind.config.js` update
+6. Re-shipped: `ThemeProvider`, `ui/index.tsx`, `TarmeemLogo`, `Auth`, `App` — theme-token-pure, with `declineForm` wired
+
+The renderer batch (`_shared.tsx` + F-03, F-03.1 with Decline, F-03.2, F-04) lands the turn after that — they depend on the new primitives (`FormComments`, `FileUploader`, `ProjectActionsMenu`, `BottomSheet`, `ConfirmDialog`) which all come with the foundation update.
+
+Six yes/no/override calls and we're moving.
+
+
+

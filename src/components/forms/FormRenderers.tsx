@@ -5,6 +5,7 @@
 import { FormF04Renderer } from './FormF04';
 import { F02Creator, F02Renderer } from './FormF02';
 import { F07Renderer } from './FormF07';
+import { F23Creator, F23Renderer } from './FormF23';
 
 import React, { useEffect, useState } from 'react';
 import {
@@ -874,86 +875,8 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
 
 /* ──────────────────────────────────────────────────────────────────
    F-23 — اعتماد بنود الأعمال الإضافية
+   Moved to FormF23.tsx — imported above. Decline-eligible; 2-stage approval.
    ────────────────────────────────────────────────────────────────── */
-
-export const F23Creator: FormCreator = ({ user, api, context, onClose }) => {
-  const [projectRefId, setProjectRefId] = useState<string>(context.projects[0]?.id || '');
-  const [items, setItems] = useState([{ id: '1', description: '', dimensions: '', price: 0, contractor: '' }]);
-  const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const submit = async () => {
-    const p = context.projects.find((x: ProjectRecord) => x.id === projectRefId);
-    if (!p) return;
-    setBusy(true);
-    try {
-      const total = items.reduce((s, i) => s + Number(i.price || 0), 0);
-      await api.createForm({
-        code: 'F-23', user, projectId: p.projectId, projectRefId: p.id,
-        beneficiaryName: p.beneficiaryName,
-        data: { items, reason, total },
-      });
-      onClose();
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <CreatorShell title="F-23 · اعتماد بنود الأعمال الإضافية" onClose={onClose}
-      footer={<button onClick={submit} disabled={busy} className="px-5 py-2 text-sm font-bold bg-[#4A1F66] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5"><Send className="w-4 h-4" /> رفع للسلسلة</button>}>
-      <Card title="المشروع" icon={Building2}>
-        <Select label="المشروع" options={context.projects.map((p: ProjectRecord) => ({ value: p.id, label: `${p.projectId} — ${p.beneficiaryName}` }))}
-          value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
-      </Card>
-      <Card title="البنود الإضافية" icon={Plus}>
-        {items.map((it, idx) => (
-          <div key={it.id} className="grid grid-cols-12 gap-2 items-end mb-2">
-            <Input className="col-span-5" label={idx === 0 ? 'وصف العمل' : ''} value={it.description} onChange={e => setItems(arr => arr.map(x => x.id === it.id ? { ...x, description: e.target.value } : x))} />
-            <Input className="col-span-2" label={idx === 0 ? 'الأبعاد' : ''} value={it.dimensions} onChange={e => setItems(arr => arr.map(x => x.id === it.id ? { ...x, dimensions: e.target.value } : x))} />
-            <Input className="col-span-3" label={idx === 0 ? 'المقاول' : ''} value={it.contractor} onChange={e => setItems(arr => arr.map(x => x.id === it.id ? { ...x, contractor: e.target.value } : x))} />
-            <Input className="col-span-2" label={idx === 0 ? 'السعر' : ''} type="number" value={it.price} onChange={e => setItems(arr => arr.map(x => x.id === it.id ? { ...x, price: Number(e.target.value || 0) } : x))} />
-          </div>
-        ))}
-        <button onClick={() => setItems(arr => [...arr, { id: Date.now() + '', description: '', dimensions: '', price: 0, contractor: '' }])}
-          className="px-3 py-1.5 rounded-lg bg-[#56B894] text-white text-xs font-bold flex items-center gap-1.5"><Plus className="w-3 h-3" /> إضافة بند</button>
-      </Card>
-      <Card title="مبرّر التغيير" icon={ClipboardList}>
-        <TextArea label="السبب" rows={3} value={reason} onChange={e => setReason(e.target.value)} />
-      </Card>
-    </CreatorShell>
-  );
-};
-
-export const F23Renderer: FormRenderer = ({ rec, user, api }) => {
-  const d = rec.data || {};
-  return (
-    <FormShell rec={rec} user={user} api={api}>
-      <Card title="البنود الإضافية" icon={Plus}>
-        <table className="w-full text-xs">
-          <thead className="bg-gray-50 dark:bg-slate-800">
-            <tr>
-              <th className="px-2 py-2 text-right">العمل</th>
-              <th className="px-2 py-2 text-right">الأبعاد</th>
-              <th className="px-2 py-2 text-right">المقاول</th>
-              <th className="px-2 py-2 text-right">السعر</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(d.items || []).map((it: any) => (
-              <tr key={it.id} className="border-t dark:border-slate-700">
-                <td className="px-2 py-1.5">{it.description}</td>
-                <td className="px-2 py-1.5">{it.dimensions}</td>
-                <td className="px-2 py-1.5">{it.contractor}</td>
-                <td className="px-2 py-1.5">{it.price} ر.س</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <p className="mt-3 text-sm font-bold text-purple-700 dark:text-purple-300">الإجمالي: {d.total || 0} ر.س</p>
-      </Card>
-      <Card title="المبرر" icon={ClipboardList}><ReadOnlyField label="" value={d.reason} /></Card>
-    </FormShell>
-  );
-};
 
 /* ──────────────────────────────────────────────────────────────────
    F-15 — طلب صرف دفعة

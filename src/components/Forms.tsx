@@ -69,6 +69,8 @@ export interface FormsApi {
   approveForm: (formId: string, user: UserProfile, note?: string, dataPatch?: Record<string, any>) => Promise<void>;
   rejectForm: (formId: string, user: UserProfile, note?: string) => Promise<void>;
   deferForm: (formId: string, user: UserProfile, note?: string) => Promise<void>;
+  /** رفض نهائي — متاح فقط لـ F-03.1 وF-08 وF-23 */
+  declineForm: (formId: string, user: UserProfile, note?: string) => Promise<void>;
   updateFormData: (formId: string, dataPatch: Record<string, any>) => Promise<void>;
   attachFiles: (formId: string, files: FormRecord['files']) => Promise<void>;
 }
@@ -89,6 +91,8 @@ export function formAwaitsRole(record: FormRecord, role: RoleKey): boolean {
 
 export function formAwaitsUser(record: FormRecord, user: UserProfile): boolean {
   if (record.status !== 'pending') return false;
+  // Super Admin يستطيع الاعتماد على أي نموذج معلّق (Decision 2)
+  if (user.isAdmin === true) return true;
   const nextRole = record.approvalChain[record.approvalIndex];
   if (nextRole !== user.role) return false;
   // إذا كان مُسنَداً لمستخدم محدد، فقط هو يستطيع الاعتماد
@@ -361,7 +365,7 @@ export const NewFormModal: React.FC<{
   onClose: () => void;
 }> = ({ user, api, users, context, creators, preselect, onClose }) => {
   const allowed = useMemo(
-    () => FORMS.filter(f => formCanBeOriginatedBy(f, user.role as RoleKey) || user.role === 'ADMIN'),
+    () => FORMS.filter(f => formCanBeOriginatedBy(f, user.role as RoleKey) || user.isAdmin === true),
     [user.role],
   );
   const [code, setCode] = useState<FormCode | null>(preselect && allowed.some(f => f.code === preselect) ? preselect : null);

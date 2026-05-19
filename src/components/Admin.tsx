@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import {
   ROLES_DEF, ROLE_BY_KEY, RoleKey, DEPARTMENTS, DEPT_BY_KEY,
-  REGION_LABELS, formatRelativeTime, isAdminEmail, roleName,
+  REGION_LABELS, formatRelativeTime, roleName,
 } from '../lib/data';
 import { Card, AccessDeniedCard, Pill, EmptyState, SearchBar } from './ui';
 import type { UserProfile } from './Auth';
@@ -66,7 +66,7 @@ function UserAdminForm({ user, mode, onSubmit, onSecondary, busy }: {
   onSecondary?: (reason: string) => void;
   busy: boolean;
 }) {
-  const startRole = (user.role && user.role !== 'PENDING' && user.role !== 'ADMIN' ? user.role as RoleKey : 'SOCIAL_RESEARCHER');
+  const startRole = (user.role && user.role !== 'PENDING' ? user.role as RoleKey : 'SOCIAL_RESEARCHER');
   const [role, setRole] = useState<RoleKey>(startRole);
   const [department, setDepartment] = useState(user.department || ROLE_BY_KEY[startRole]?.department || 'RESEARCH');
   const [region, setRegion] = useState(user.region || 'DAM');
@@ -188,7 +188,7 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
   const [mode, setMode] = useState<'approve' | 'edit' | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const isAdmin = currentUser.role === 'ADMIN' || isAdminEmail(currentUser.email);
+  const isAdmin = currentUser.isAdmin === true;
 
   const filtered = useMemo(() => {
     let list = users;
@@ -247,8 +247,7 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
     setBusy(true);
     try {
       for (const u of users) {
-        if (isAdminEmail(u.email)) continue;
-        if (u.role === 'ADMIN') continue;
+        if (u.isAdmin) continue;
         await resetUserRole(u.id, currentUser.id);
       }
     } finally { setBusy(false); }
@@ -269,8 +268,7 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
           </div>
         </div>
         <p className="text-[11px] text-gray-500 dark:text-slate-400 mt-3">
-          الأدمنز الافتراضيون يُمنحون الصلاحيات تلقائياً عند تسجيل الدخول: <code className="bg-gray-100 dark:bg-slate-700 px-1 rounded">a.alkhaldi@tarmeem.org</code>،{' '}
-          <code className="bg-gray-100 dark:bg-slate-700 px-1 rounded">s.aldossari@tarmeem.org</code>.
+          صلاحية المسؤول العام تُمنح عبر تعيين <code className="bg-gray-100 dark:bg-slate-700 px-1 rounded">isAdmin: true</code> مباشرةً على سجل المستخدم في Firestore.
         </p>
       </Card>
 
@@ -319,7 +317,7 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
                           </div>
                           <span className="font-semibold text-gray-800 dark:text-slate-100 truncate max-w-[140px] hover:underline">{u.fullName}</span>
                           {u.isManager && <Pill tone="purple">مدير</Pill>}
-                          {u.role === 'ADMIN' && <Pill tone="red">أدمن</Pill>}
+                          {u.isAdmin && <Pill tone="red">أدمن</Pill>}
                           {u.needsRoleReset && <Pill tone="amber">إعادة ضبط</Pill>}
                         </div>
                       </td>
@@ -341,7 +339,7 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
                                 className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-200 hover:bg-blue-100" title="تعديل">
                                 <Edit className="w-4 h-4" />
                               </button>
-                              {u.id !== currentUser.id && u.role !== 'ADMIN' && (
+                              {u.id !== currentUser.id && !u.isAdmin && (
                                 <button onClick={() => handleDeactivate(u)}
                                   className="p-1.5 rounded-lg bg-red-50 dark:bg-red-900/40 text-red-600 dark:text-red-200 hover:bg-red-100" title="تعطيل">
                                   <XCircle className="w-4 h-4" />

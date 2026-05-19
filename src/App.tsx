@@ -5,6 +5,7 @@ import {
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
   collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc, runTransaction,
+  query, where, orderBy, limit, writeBatch, serverTimestamp, arrayUnion,
 } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
 import { getUserProfile, AuthScreen, type UserProfile } from './components/Auth';
@@ -19,9 +20,10 @@ import { AdminUsersPortal } from './components/Admin';
 import { MasterProjectList, ProjectDetail } from './components/Projects';
 import { EmployeeProfile } from './components/EmployeeProfile';
 import {
-  DEPARTMENTS, DepartmentKey, RoleKey, FORM_BY_CODE, FormCode,
-  portalAccessForRole, roleName, isAdminEmail, formatProjectId,
+  DEPARTMENTS, DepartmentKey, RoleKey, ROLE_BY_KEY, FORM_BY_CODE, FormCode,
+  portalAccessForRole, roleName, formatProjectId,
 } from './lib/data';
+import { TRIGGER_MAP, DECLINE_MAP, applyCascade, DECLINE_ELIGIBLE_FORMS } from './lib/workflow';
 import type { FormRecord, FormsApi } from './components/Forms';
 import { FormDetailModal, NewFormModal } from './components/Forms';
 import { RENDERERS, CREATORS, ProjectRecord, FormsContext } from './components/forms/FormRenderers';
@@ -39,11 +41,11 @@ interface AppNotification {
   recipients: string[];
   readBy: string[];
   createdAt: string;
-  meta?: any;
+  meta?: Record<string, unknown>;
 }
 
 function App() {
-  const [firebaseUser, setFirebaseUser] = useState<any>(null);
+  const [firebaseUser, setFirebaseUser] = useState<import('firebase/auth').User | null>(null);
   const [rawUserProfile, setRawUserProfile] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
@@ -72,18 +74,6 @@ function App() {
       if (user) {
         const profile = await getUserProfile(user.uid);
         setRawUserProfile(profile);
-        // Auto-promote configured admin emails on first sign-in if profile exists but isn't admin
-        if (profile && isAdminEmail(user.email) && profile.role !== 'ADMIN') {
-          await updateDoc(doc(db, 'users', user.uid), {
-            role: 'ADMIN',
-            status: 'active',
-            isManager: true,
-            department: profile.department || 'EXEC',
-            auditLog: [...(profile.auditLog || []), {
-              at: new Date().toISOString(), actor: 'system', action: 'auto-promoted-admin', from: { role: profile.role }, to: { role: 'ADMIN' },
-            }],
-          });
-        }
       } else {
         setRawUserProfile(null);
       }
@@ -96,24 +86,32 @@ function App() {
   useEffect(() => {
     if (!firebaseUser) return;
 
-    const unsubUsers = onSnapshot(collection(db, 'users'), (snap) => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as UserProfile));
-      setUsers(list);
-      const me = list.find(u => u.id === firebaseUser.uid);
-      if (me) setRawUserProfile(me);
-    }, (err) => console.error('Users listener error:', err));
+    const unsubUsers = onSnapshot(
+      query(collection(db, 'users'), where('status', 'in', ['active', 'pending'])),
+      (snap) => {
+        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as UserProfile));
+        setUsers(list);
+        const me = list.find(u => u.id === firebaseUser.uid);
+        if (me) setRawUserProfile(me);
+      }, (err) => console.error('Users listener error:', err));
 
-    const unsubForms = onSnapshot(collection(db, 'forms'), (snap) => {
-      setForms(snap.docs.map(d => ({ id: d.id, ...d.data() } as FormRecord)));
-    }, (err) => console.error('Forms listener error:', err));
+    const unsubForms = onSnapshot(
+      query(collection(db, 'forms'), orderBy('updatedAt', 'desc'), limit(500)),
+      (snap) => {
+        setForms(snap.docs.map(d => ({ id: d.id, ...d.data() } as FormRecord)));
+      }, (err) => console.error('Forms listener error:', err));
 
-    const unsubProjects = onSnapshot(collection(db, 'projects'), (snap) => {
-      setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() } as ProjectRecord)));
-    }, (err) => console.error('Projects listener error:', err));
+    const unsubProjects = onSnapshot(
+      query(collection(db, 'projects'), orderBy('updatedAt', 'desc'), limit(500)),
+      (snap) => {
+        setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() } as ProjectRecord)));
+      }, (err) => console.error('Projects listener error:', err));
 
-    const unsubNotifs = onSnapshot(collection(db, 'notifications'), (snap) => {
-      setNotifications(snap.docs.map(d => ({ id: d.id, ...d.data() } as AppNotification)));
-    }, (err) => console.error('Notifications listener error:', err));
+    const unsubNotifs = onSnapshot(
+      query(collection(db, 'notifications'), where('recipients', 'array-contains', firebaseUser.uid)),
+      (snap) => {
+        setNotifications(snap.docs.map(d => ({ id: d.id, ...d.data() } as AppNotification)));
+      }, (err) => console.error('Notifications listener error:', err));
 
     return () => { unsubUsers(); unsubForms(); unsubProjects(); unsubNotifs(); };
   }, [firebaseUser]);
@@ -134,17 +132,9 @@ function App() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  /* ────────── Profile guard (Admin uppercase + email-based admin) ────────── */
-  const userProfile: UserProfile | null = useMemo(() => {
-    if (!rawUserProfile) return null;
-    const r = rawUserProfile.role as string;
-    if (isAdminEmail(rawUserProfile.email) || (typeof r === 'string' && r.toLowerCase() === 'admin')) {
-      return { ...rawUserProfile, role: 'ADMIN', status: 'active' } as UserProfile;
-    }
-    return rawUserProfile;
-  }, [rawUserProfile]);
+  const userProfile: UserProfile | null = rawUserProfile;
 
-  const isAdmin = userProfile?.role === 'ADMIN';
+  const isAdmin = userProfile?.isAdmin === true;
 
   /* ────────── Notifications ────────── */
   const dispatchNotification = useCallback(async (n: {
@@ -234,17 +224,6 @@ function App() {
     catch (e) { console.error('updateProject:', e); }
   }, []);
 
-  /** يحدّد المرحلة حسب اعتمادات النموذج المكتمل */
-  const phaseTransition = useCallback((code: FormCode): { phase: ProjectRecord['phase']; progress: number } | null => {
-    switch (code) {
-      case 'F-08': return { phase: 'DIAGNOSIS', progress: 25 };
-      case 'F-18': return { phase: 'EVACUATION', progress: 35 };
-      case 'F-85': return { phase: 'TENDERING', progress: 50 };
-      case 'F-14': return { phase: 'EXECUTION', progress: 65 };
-      case 'F-07': return { phase: 'CLOSED', progress: 100 };
-      default: return null;
-    }
-  }, []);
 
   const createForm: FormsApi['createForm'] = useCallback(async (input) => {
     try {
@@ -322,151 +301,108 @@ function App() {
     } catch (e) { console.error('createForm:', e); return null; }
   }, [dispatchNotification, usersByRole, usersByDeptManager, projects]);
 
-  /** إجراءات الاعتماد المركزية */
+  /** إجراءات الاعتماد المركزية — تستخدم TRIGGER_MAP عبر applyCascade (Decision 6) */
   const advanceForm = useCallback(async (
-    formId: string, user: UserProfile, decision: 'approved' | 'rejected' | 'deferred', note?: string,
-    dataPatch?: Record<string, any>,
+    formId: string, user: UserProfile, decision: 'approved' | 'rejected' | 'deferred' | 'declined', note?: string,
+    dataPatch?: Record<string, unknown>,
   ) => {
     const rec = forms.find(f => f.id === formId);
     if (!rec) return;
-    const myRole = user.role as RoleKey;
-    const expected = rec.approvalChain[rec.approvalIndex];
-    if (expected !== myRole && user.role !== 'ADMIN') return;
-    if (rec.assigneeId && rec.assigneeId !== user.id && user.role !== 'ADMIN') return;
 
-    const now = new Date().toISOString();
-    const newApproval = { role: expected, actorId: user.id, actorName: user.fullName, at: now, decision, note };
-    let nextStatus: FormRecord['status'] = rec.status;
-    let nextIndex = rec.approvalIndex;
+    const expected = rec.approvalChain[rec.approvalIndex] as RoleKey;
+    if (expected !== user.role && !user.isAdmin) return;
+    if (rec.assigneeId && rec.assigneeId !== user.id && !user.isAdmin) return;
 
-    if (decision === 'approved') {
-      nextIndex = rec.approvalIndex + 1;
-      nextStatus = nextIndex >= rec.approvalChain.length ? 'approved' : 'pending';
-    } else if (decision === 'rejected') {
-      nextStatus = 'rejected';
-    } else if (decision === 'deferred') {
-      nextStatus = 'deferred';
+    const approval = {
+      role: expected, actorId: user.id, actorName: user.fullName,
+      at: new Date().toISOString(), decision, note: note || '',
+    };
+
+    // LOAD-BEARING: reconstruct updatedRec with dataPatch BEFORE passing to TRIGGER_MAP.
+    // Without this, triggers read stale data from the pre-patch snapshot.
+    const updatedRec: FormRecord = {
+      ...rec,
+      data: { ...(rec.data || {}), ...(dataPatch || {}) },
+    };
+
+    // Reject semantics: multi-stage resets to index 0; single-stage goes to rejected.
+    if (decision === 'rejected') {
+      const isMultiStage = rec.approvalChain.length > 1;
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'forms', formId), isMultiStage
+        ? { status: 'pending', approvalIndex: 0, stepStartedAt: serverTimestamp(), approvals: arrayUnion(approval), updatedAt: serverTimestamp() }
+        : { status: 'rejected', approvals: arrayUnion(approval), updatedAt: serverTimestamp() },
+      );
+      await batch.commit();
+      if (isMultiStage) {
+        const firstRole = rec.approvalChain[0] as RoleKey;
+        const def = ROLE_BY_KEY[firstRole];
+        const recipients = users
+          .filter(u => u.status === 'active' && (u.role === firstRole || (u.isAdmin && def?.department && u.department === def.department)))
+          .map(u => u.id);
+        await dispatchNotification({ text: `أُعيد نموذج ${rec.code} ${rec.title} للتعديل`, subject: `${rec.code} — إعادة`, type: 'form_rejected', recipients: recipients.length ? recipients : users.filter(u => u.isAdmin && u.status === 'active').map(u => u.id), link: formId, meta: { formId, code: rec.code } });
+      } else {
+        await dispatchNotification({ text: `تم رفض نموذجك ${rec.code} ${rec.title}`, subject: `${rec.code} — مرفوض`, type: 'form_rejected', recipients: [rec.createdBy], link: formId, meta: { formId, code: rec.code } });
+      }
+      return;
     }
 
-    const patch: any = {
-      approvals: [...rec.approvals, newApproval],
+    if (decision === 'deferred') {
+      await updateDoc(doc(db, 'forms', formId), { status: 'deferred', approvals: arrayUnion(approval), updatedAt: serverTimestamp() });
+      await dispatchNotification({ text: `تم تأجيل نموذج ${rec.code} ${rec.title}`, subject: `${rec.code} — مؤجَّل`, type: 'form_deferred', recipients: [rec.createdBy], link: formId, meta: { formId, code: rec.code } });
+      return;
+    }
+
+    if (decision === 'declined') {
+      if (!DECLINE_ELIGIBLE_FORMS.includes(rec.code as FormCode)) return;
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'forms', formId), { status: 'declined', approvals: arrayUnion(approval), updatedAt: serverTimestamp() });
+      const ctx = { approvedRecord: updatedRec, forms, projects, users, dataPatch: dataPatch || {} };
+      const declineFn = DECLINE_MAP[rec.code as FormCode];
+      const result = declineFn ? declineFn(ctx) : {};
+      await applyCascade(result, ctx, batch);
+      return;
+    }
+
+    // decision === 'approved'
+    const nextIndex = rec.approvalIndex + 1;
+    const nextStatus: FormRecord['status'] = nextIndex >= rec.approvalChain.length ? 'approved' : 'pending';
+
+    const formPatch: Record<string, unknown> = {
+      approvals: arrayUnion(approval),
       approvalIndex: nextIndex,
       status: nextStatus,
-      updatedAt: now,
-      stepStartedAt: now,
+      updatedAt: serverTimestamp(),
+      stepStartedAt: serverTimestamp(),
     };
     if (dataPatch) {
-      patch.data = { ...(rec.data || {}), ...(dataPatch as any) };
-      // استخراج projectId/projectRefId من dataPatch
-      if (dataPatch.projectId) patch.projectId = dataPatch.projectId;
-      if (dataPatch.projectRefId) patch.projectRefId = dataPatch.projectRefId;
+      formPatch.data = { ...(rec.data || {}), ...dataPatch };
+      if (dataPatch.projectId) formPatch.projectId = dataPatch.projectId;
+      if (dataPatch.projectRefId) formPatch.projectRefId = dataPatch.projectRefId;
     }
 
-    try {
-      await updateDoc(doc(db, 'forms', formId), patch);
-    } catch (e) { console.error('advanceForm:', e); return; }
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'forms', formId), formPatch);
 
-    // إشعار المنشئ
-    if (decision !== 'approved' || nextStatus === 'approved') {
-      await dispatchNotification({
-        text: `${decision === 'approved' ? 'تم اعتماد' : decision === 'rejected' ? 'تم رفض' : 'تم تأجيل'} نموذجك ${rec.code} ${rec.title}`,
-        subject: `${rec.code} — ${decision}`,
-        type: `form_${decision}`,
-        recipients: [rec.createdBy],
-        link: formId,
-        meta: { formId, code: rec.code, decision },
-      });
-    }
-
-    // إشعار التالي
-    if (nextStatus === 'pending' && nextIndex < rec.approvalChain.length) {
-      const nextRole = rec.approvalChain[nextIndex];
-      const recipients = (rec.code === 'F-08' && rec.assigneeId) ? [rec.assigneeId] : usersByRole(nextRole);
-      await dispatchNotification({
-        text: `طلب بانتظار اعتمادك: ${rec.code} ${rec.title}`,
-        subject: `${rec.code} — ${rec.title}`,
-        type: 'form_pending',
-        recipients,
-        link: formId,
-        meta: { formId, code: rec.code },
-      });
-    }
-
-    // عند الاعتماد النهائي
     if (nextStatus === 'approved') {
-      // تحديث المرحلة ونسبة المشروع (إن وجد)
-      if (rec.projectRefId) {
-        const t = phaseTransition(rec.code);
-        if (t) await updateProject(rec.projectRefId, { phase: t.phase, progressPct: t.progress });
-        // F-08: إذا safetyHazard=true ⇒ يفتح F-18 و F-22
-        if (rec.code === 'F-08' && rec.data?.safetyHazard) {
-          await createForm({
-            code: 'F-18', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
-            beneficiaryName: rec.beneficiaryName, notes: 'أُطلق تلقائياً من F-08 (سلامة).',
-            triggeredBy: rec.id,
-          });
-        }
-        // F-14: عند milestone تطلق F-15
-        if (rec.code === 'F-14' && rec.data?.milestone) {
-          await createForm({
-            code: 'F-15', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
-            beneficiaryName: rec.beneficiaryName,
-            data: { milestone: rec.data.milestone, amount: 0 },
-            notes: `أُطلق تلقائياً عند بلوغ المحطة ${rec.data.milestone}`,
-            triggeredBy: rec.id,
-          });
-        }
-        if (rec.code === 'F-14' && rec.data?.scopeChange) {
-          await createForm({
-            code: 'F-23', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
-            beneficiaryName: rec.beneficiaryName,
-            data: { items: [], reason: 'تغيير نطاق ميداني' },
-            notes: 'أُطلق تلقائياً من F-14 (تغيير نطاق).',
-            triggeredBy: rec.id,
-          });
-        }
-        // F-85: تحدّث contractor & price على المشروع
-        if (rec.code === 'F-85') {
-          await updateProject(rec.projectRefId, {
-            contractorName: rec.data?.winnerContractor,
-            awardedPrice: rec.data?.winnerPrice,
-          });
-        }
-        // F-07: media trigger
-        if (rec.code === 'F-07' && rec.data?.mediaRequested) {
-          await createForm({
-            code: 'F-52', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
-            beneficiaryName: rec.beneficiaryName,
-            data: { type: 'قبل/بعد', details: 'تم طلب التوثيق من شهادة التسليم.' },
-            notes: 'أُطلق تلقائياً من F-07.',
-            triggeredBy: rec.id,
-          });
-        }
-      }
-
-      // F-18: ينشئ F-22 آلياً
-      if (rec.code === 'F-18') {
-        await createForm({
-          code: 'F-22', user, projectId: rec.projectId, projectRefId: rec.projectRefId,
-          beneficiaryName: rec.beneficiaryName,
-          data: { evacDate: rec.data?.evacDate, returnDate: rec.data?.returnDate, city: '' },
-          notes: 'أُطلق تلقائياً مع F-18.',
-          triggeredBy: rec.id,
-        });
-      }
-
-      // التحريك التلقائي حسب triggers الموجودة في FORMS
-      const def = FORM_BY_CODE[rec.code];
-      for (const trig of (def?.triggers || [])) {
-        // F-03 → F-08 يُعالَج خصيصاً (يحتاج إسناد المهندس عبر F-03 transfer)
-        if (rec.code === 'F-03' && trig === 'F-08') {
-          // F-08 سيُنشأ يدوياً عبر F03Renderer.transferToProjects عبر createProject + createForm
-          continue;
-        }
-        // عام: ينشئ النموذج كمسودة لاحقة (نظري — في هذا المسار نُترك يدوياً)
-      }
+      const ctx = { approvedRecord: updatedRec, forms, projects, users, dataPatch: dataPatch || {} };
+      const triggerFn = TRIGGER_MAP[rec.code as FormCode];
+      const result = triggerFn ? triggerFn(ctx) : {};
+      await applyCascade(result, ctx, batch);
+    } else {
+      await batch.commit();
+      // إشعار الخطوة التالية
+      const nextRole = rec.approvalChain[nextIndex] as RoleKey;
+      const def = ROLE_BY_KEY[nextRole];
+      const roleRecipients = users.filter(u => u.status === 'active' && (u.role === nextRole || (u.isAdmin && def?.department && u.department === def.department))).map(u => u.id);
+      const recipients = rec.assigneeId ? [rec.assigneeId] : (roleRecipients.length ? roleRecipients : users.filter(u => u.isAdmin && u.status === 'active').map(u => u.id));
+      await dispatchNotification({ text: `طلب بانتظار اعتمادك: ${rec.code} ${rec.title}`, subject: `${rec.code} — ${rec.title}`, type: 'form_pending', recipients, link: formId, meta: { formId, code: rec.code } });
     }
-  }, [forms, dispatchNotification, usersByRole, phaseTransition, updateProject, createForm]);
+
+    if (nextStatus === 'approved') {
+      await dispatchNotification({ text: `تم اعتماد نموذج ${rec.code} ${rec.title} بالكامل`, subject: `${rec.code} — معتمد`, type: 'form_approved', recipients: [rec.createdBy], link: formId, meta: { formId, code: rec.code } });
+    }
+  }, [forms, projects, users, dispatchNotification, updateProject]);
 
   const updateFormData: FormsApi['updateFormData'] = useCallback(async (formId, dataPatch) => {
     const rec = forms.find(f => f.id === formId);
@@ -486,6 +422,7 @@ function App() {
     approveForm: (id, user, note, patch) => advanceForm(id, user, 'approved', note, patch),
     rejectForm: (id, user, note) => advanceForm(id, user, 'rejected', note),
     deferForm: (id, user, note) => advanceForm(id, user, 'deferred', note),
+    declineForm: (id, user, note) => advanceForm(id, user, 'declined', note),
     updateFormData,
     attachFiles,
   }), [forms, createForm, advanceForm, updateFormData, attachFiles]);
@@ -583,7 +520,7 @@ function App() {
   const allowedDepts: DepartmentKey[] = useMemo(() => {
     if (!userProfile) return [];
     if (isAdmin) return DEPARTMENTS.map(d => d.key);
-    if (userProfile.role === 'PENDING') return [];
+    if (!userProfile.role || userProfile.role === 'PENDING') return [];
     return portalAccessForRole(userProfile.role as RoleKey);
   }, [userProfile, isAdmin]);
 

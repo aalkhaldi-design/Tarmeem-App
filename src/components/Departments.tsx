@@ -63,7 +63,7 @@ const DepartmentPortalLayout: React.FC<PortalProps & { dept: DepartmentKey; extr
       rejected: records.filter(f => f.status === 'rejected').length,
     };
 
-    const creatable = ownedForms.filter(f => formCanBeOriginatedBy(f, myRole) || user.role === 'ADMIN');
+    const creatable = ownedForms.filter(f => formCanBeOriginatedBy(f, myRole) || user.isAdmin === true);
 
     return (
       <div dir="rtl" className="space-y-5">

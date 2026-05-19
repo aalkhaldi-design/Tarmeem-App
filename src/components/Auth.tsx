@@ -3,14 +3,16 @@ import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'fire
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { TarmeemLogo } from './ui';
-import { ROLES_DEF, ROLE_BY_KEY, RoleKey, DEPARTMENTS, REGION_LABELS, isAdminEmail } from '../lib/data';
+import { ROLES_DEF, ROLE_BY_KEY, RoleKey, DEPARTMENTS, REGION_LABELS } from '../lib/data';
 
 export interface UserProfile {
   id: string;
   email: string;
   fullName: string;
-  /** أحد مفاتيح الأدوار (RoleKey) أو 'ADMIN' للمسؤول العام */
-  role: RoleKey | 'ADMIN' | 'PENDING';
+  /** أحد مفاتيح الأدوار الرسمية أو 'PENDING' للحسابات المعلّقة */
+  role: RoleKey | 'PENDING';
+  /** علامة المسؤول العام — مستقلة عن الدور الوظيفي (Decision 2) */
+  isAdmin?: boolean;
   /** مفتاح الإدارة الأساسية للمستخدم (قد يكون فارغاً للمعلّقين) */
   department: string;
   region: string;
@@ -41,22 +43,6 @@ export async function createUserProfile(
   uid: string, email: string, fullName: string,
   requestedRole: RoleKey | null, region: string,
 ): Promise<void> {
-  // إذا كان البريد ضمن قائمة الأدمنز الافتراضيين، أنشئه أدمن مباشرة
-  if (isAdminEmail(email)) {
-    const profile: UserProfile = {
-      id: uid, email: email.toLowerCase().trim(), fullName,
-      role: 'ADMIN', department: 'EXEC', region,
-      isManager: true, status: 'active',
-      registeredAt: new Date().toISOString(),
-      lastSeenAt: new Date().toISOString(),
-      approvedBy: 'system', approvedAt: new Date().toISOString(),
-      deactivatedAt: null, deactivatedBy: null,
-      notificationPrefs: { inApp: true, email: true },
-      auditLog: [{ at: new Date().toISOString(), actor: 'system', action: 'auto-admin', from: null, to: { role: 'ADMIN' } }],
-    };
-    await setDoc(doc(db, 'users', uid), profile);
-    return;
-  }
   const def = requestedRole ? ROLE_BY_KEY[requestedRole] : null;
   const profile: UserProfile = {
     id: uid, email: email.toLowerCase().trim(), fullName,

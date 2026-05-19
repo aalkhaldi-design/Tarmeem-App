@@ -2,6 +2,7 @@
    نماذج F-XX — مكوّنات المعاينة والإنشاء
    كل نموذج يحترم سلسلة الاعتماد الخاصّة به ويمتلك UX خاص
    ────────────────────────────────────────────────────────────────── */
+import { FormF04Renderer } from './FormF04';
 
 import React, { useEffect, useState } from 'react';
 import {
@@ -1405,6 +1406,7 @@ const CreatorShell: React.FC<{ title: string; onClose: () => void; footer: React
 export const RENDERERS: Record<string, FormRenderer | undefined> = {
   'F-02': F02Renderer,
   'F-03': F03Renderer,
+  'F-04': FormF04Renderer,
   'F-08': F08Renderer,
   'F-18': F18Renderer,
   'F-22': F22Renderer,

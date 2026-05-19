@@ -152,21 +152,21 @@ export const roleDepartment = (key: string): DepartmentKey | null =>
 /* ──────────────────────────────────────────────────────────────────
    البريد الإلكتروني للمسؤولين الافتراضيين (الأدمنز)
    ────────────────────────────────────────────────────────────────── */
-export const ADMIN_EMAILS = ['a.alkhaldi@tarmeem.org', 's.aldossari@tarmeem.org'];
-export const isAdminEmail = (email: string | null | undefined) =>
-  !!email && ADMIN_EMAILS.includes(email.toLowerCase().trim());
+// Admin status is determined by the isAdmin boolean flag on UserProfile, not by email.
+// Seeding isAdmin on a specific account is a one-time Firestore write, not a runtime check.
 
 /* ──────────────────────────────────────────────────────────────────
    النماذج (14 نموذجاً للمسار السريع)
    ────────────────────────────────────────────────────────────────── */
 
 export type FormCode =
-  | 'F-02' | 'F-03' | 'F-08'
-  | 'F-18' | 'F-22' | 'F-21' | 'F-20' | 'F-19'
-  | 'F-85' | 'F-14' | 'F-23' | 'F-15'
+  | 'F-02' | 'F-03' | 'F-03.1' | 'F-03.2'
+  | 'F-04' | 'F-08' | 'F-18' | 'F-22' | 'F-21' | 'F-20'
+  | 'F-84' | 'F-85' | 'F-32' | 'F-33' | 'F-35' | 'F-34'
+  | 'F-19' | 'F-14' | 'F-23' | 'F-15'
   | 'F-07' | 'F-52';
 
-export type FormStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'deferred' | 'completed';
+export type FormStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'deferred' | 'completed' | 'declined';
 
 export const FORM_STATUS_LABELS: Record<FormStatus, string> = {
   draft: 'مسودة',
@@ -175,6 +175,7 @@ export const FORM_STATUS_LABELS: Record<FormStatus, string> = {
   rejected: 'مرفوض',
   deferred: 'مؤجَّل',
   completed: 'مكتمل',
+  declined: 'مرفوض نهائياً',
 };
 
 export const FORM_STATUS_COLORS: Record<FormStatus, string> = {
@@ -184,6 +185,7 @@ export const FORM_STATUS_COLORS: Record<FormStatus, string> = {
   rejected: 'bg-red-100 text-red-700',
   deferred: 'bg-blue-100 text-blue-700',
   completed: 'bg-emerald-100 text-emerald-700',
+  declined: 'bg-red-200 text-red-800',
 };
 
 export interface FormDef {
@@ -221,18 +223,16 @@ export const FORMS: FormDef[] = [
     code: 'F-03', title: 'اعتماد استحقاق الخدمة', titleEn: 'Eligibility Decision',
     category: 'BENEFICIARY', ownerDept: 'RESEARCH',
     originRoles: ['RESEARCH_MANAGER'],
-    approvalChain: ['RESEARCH_MANAGER', 'EXEC_DIRECTOR', 'RESEARCH_MANAGER'],
-    bridgesTo: ['EXEC', 'PROJECTS'],
-    triggers: ['F-08'],
+    approvalChain: ['RESEARCH_MANAGER'],
     slaDays: 3,
-    description: 'مدير البحث ➡️ المدير التنفيذي ➡️ مدير البحث (للتحويل إلى المشاريع). يولّد رقم المشروع TRM-YYYY-NNN ويُطلق F-08.',
+    description: 'مدير البحث الاجتماعي يعتمد قرار الاستحقاق. يُطلق F-03.1 لاعتماد المدير التنفيذي.',
   },
   /* F-08 */
   {
     code: 'F-08', title: 'كراسة تشخيص المبنى', titleEn: 'Building Diagnosis Report',
     category: 'BENEFICIARY', ownerDept: 'PROJECTS',
     originRoles: ['DIAGNOSIS_ENGINEER'],
-    approvalChain: ['DIAGNOSIS_ENGINEER', 'HEAD_DIAGNOSIS', 'PROJECTS_MANAGER'],
+    approvalChain: ['DIAGNOSIS_ENGINEER', 'HEAD_DIAGNOSIS'],
     triggers: ['F-20'],
     slaDays: 7,
     description: 'مهندس التشخيص ميدانياً ➡️ رئيس قسم التشخيص/الإشراف ➡️ مدير المشاريع. عند safetyHazard=true يُفتَح F-18 و F-22.',
@@ -242,20 +242,19 @@ export const FORMS: FormDef[] = [
     code: 'F-18', title: 'تعهد إخلاء المنزل', titleEn: 'Evacuation Pledge',
     category: 'BENEFICIARY', ownerDept: 'RESEARCH',
     originRoles: ['SOCIAL_RESEARCHER', 'RESEARCH_MANAGER'],
-    approvalChain: ['SOCIAL_RESEARCHER', 'RESEARCH_MANAGER', 'PROJECTS_MANAGER'],
-    triggers: ['F-22'],
+    approvalChain: ['SOCIAL_RESEARCHER'],
     slaDays: 5,
-    description: 'يدخل الموظف تواريخ الإخلاء ويرفع التعهد الموقّع. يُلغى تعطيل المقاول ويُفتح بدء التنفيذ.',
+    description: 'يدخل الموظف تواريخ الإخلاء ويرفع التعهد الموقّع.',
   },
   /* F-22 */
   {
     code: 'F-22', title: 'طلب توفير سكن بديل وأثاث', titleEn: 'Alternative Housing Request',
-    category: 'BENEFICIARY', ownerDept: 'PARTNERSHIP',
-    originRoles: ['SOCIAL_RESEARCHER', 'RESEARCH_MANAGER'],
-    approvalChain: ['RESEARCH_MANAGER', 'PARTNERSHIP_MANAGER'],
-    bridgesTo: ['RESEARCH'],
+    category: 'BENEFICIARY', ownerDept: 'RESEARCH',
+    originRoles: ['SOCIAL_RESEARCHER'],
+    approvalChain: ['SOCIAL_RESEARCHER'],
+    bridgesTo: ['PARTNERSHIP'],
     slaDays: 3,
-    description: 'يُولَّد آلياً مع F-18. يخرج كخطاب رسمي للجهة الشريكة لتأمين السكن البديل.',
+    description: 'يُولَّد آلياً عند safetyHazard=true من F-08. يخرج كخطاب رسمي للجهة الشريكة لتأمين السكن البديل.',
   },
   /* F-21 */
   {
@@ -321,23 +320,20 @@ export const FORMS: FormDef[] = [
   /* F-15 */
   {
     code: 'F-15', title: 'طلب صرف دفعة', titleEn: 'Installment Disbursement Request',
-    category: 'EXECUTION', ownerDept: 'PROJECTS',
-    originRoles: ['PROJECTS_MANAGER', 'DIAGNOSIS_ENGINEER'],
-    approvalChain: ['PROJECTS_MANAGER', 'FINANCE_HEAD', 'EXEC_DIRECTOR'],
-    bridgesTo: ['FINANCE', 'EXEC'],
-    slaDays: 2,
-    description: 'مدير المشاريع ➡️ رئيس المالية ➡️ المدير التنفيذي.',
+    category: 'EXECUTION', ownerDept: 'FINANCE',
+    originRoles: [],
+    approvalChain: ['ACCOUNTANT', 'EXEC_DIRECTOR', 'ACCOUNTANT'],
+    slaDays: 4,
+    description: 'يُولَّد آلياً عند بلوغ نسب التقدم (60%/90%/100%) في F-14. محاسب ➡️ مدير تنفيذي ➡️ محاسب (تحويل).',
   },
   /* F-07 */
   {
     code: 'F-07', title: 'شهادة تسليم المنزل', titleEn: 'Home Handover Certificate',
-    category: 'BENEFICIARY', ownerDept: 'PROJECTS',
-    originRoles: ['DIAGNOSIS_ENGINEER'],
-    approvalChain: ['DIAGNOSIS_ENGINEER', 'PROJECTS_MANAGER', 'RESEARCH_MANAGER'],
-    bridgesTo: ['COMMS'],
-    triggers: ['F-52'],
-    slaDays: 3,
-    description: 'المهندس المشرف يرفع الشهادة الموقعة. تُغلق المشروع. عند mediaRequested=true يُطلق F-52.',
+    category: 'BENEFICIARY', ownerDept: 'RESEARCH',
+    originRoles: ['RESEARCH_MANAGER'],
+    approvalChain: ['RESEARCH_MANAGER'],
+    slaDays: 2,
+    description: 'مدير البحث الاجتماعي يرفع شهادة التسليم. تُغلق المشروع. عند mediaRequested=true يُطلق F-52.',
   },
   /* F-52 */
   {
@@ -347,6 +343,80 @@ export const FORMS: FormDef[] = [
     approvalChain: ['PR_OFFICER'],
     slaDays: 7,
     description: 'يطلبه فريق المشاريع ➡️ ينفّذه الاتصال المؤسسي ويرفع الروابط/المخرجات.',
+  },
+  /* F-03.1 */
+  {
+    code: 'F-03.1', title: 'اعتماد المدير التنفيذي', titleEn: 'Executive Director Approval',
+    category: 'BENEFICIARY', ownerDept: 'EXEC',
+    originRoles: ['EXEC_DIRECTOR'],
+    approvalChain: ['EXEC_DIRECTOR'],
+    bridgesTo: ['RESEARCH'],
+    slaDays: 3,
+    description: 'المدير التنفيذي يعتمد قرار استحقاق الخدمة. يُطلق F-03.2 للإحالة النهائية.',
+  },
+  /* F-03.2 */
+  {
+    code: 'F-03.2', title: 'الاعتماد النهائي للإحالة', titleEn: 'Final Transfer Approval',
+    category: 'BENEFICIARY', ownerDept: 'RESEARCH',
+    originRoles: ['RESEARCH_MANAGER'],
+    approvalChain: ['RESEARCH_MANAGER'],
+    bridgesTo: ['PROJECTS'],
+    slaDays: 2,
+    description: 'مدير البحث يُحيل المشروع رسمياً إلى إدارة المشاريع. يُطلق F-04 لتعيين مهندس التشخيص.',
+  },
+  /* F-04 */
+  {
+    code: 'F-04', title: 'تعيين مهندس التشخيص', titleEn: 'Assign Diagnosis Engineer',
+    category: 'BENEFICIARY', ownerDept: 'PROJECTS',
+    originRoles: ['HEAD_DIAGNOSIS'],
+    approvalChain: ['HEAD_DIAGNOSIS'],
+    slaDays: 2,
+    description: 'رئيس قسم التشخيص يعيّن المهندس المختص. يُطلق F-08 (كراسة التشخيص) مسنداً للمهندس.',
+  },
+  /* F-32 */
+  {
+    code: 'F-32', title: 'تعيين المهندس المشرف', titleEn: 'Assign Supervising Engineer',
+    category: 'EXECUTION', ownerDept: 'PROJECTS',
+    originRoles: ['HEAD_SUPERVISION'],
+    approvalChain: ['HEAD_SUPERVISION'],
+    slaDays: 2,
+    description: 'رئيس قسم الإشراف يعيّن المهندس المشرف. يُطلق F-33 (توثيق البدء) مسنداً للمشرف.',
+  },
+  /* F-33 */
+  {
+    code: 'F-33', title: 'توثيق البدء', titleEn: 'Start Documentation',
+    category: 'EXECUTION', ownerDept: 'PROJECTS',
+    originRoles: ['DIAGNOSIS_ENGINEER'],
+    approvalChain: ['DIAGNOSIS_ENGINEER'],
+    slaDays: 2,
+    description: 'المهندس المشرف يوثّق بدء التنفيذ. يُطلق F-14 (أول تقرير إشراف) وF-19 وF-34.',
+  },
+  /* F-34 */
+  {
+    code: 'F-34', title: 'إحالة حصر المواد', titleEn: 'Material Transfer',
+    category: 'EXECUTION', ownerDept: 'PROJECTS',
+    originRoles: ['DIAGNOSIS_ENGINEER', 'HEAD_SUPERVISION'],
+    approvalChain: ['DIAGNOSIS_ENGINEER'],
+    slaDays: 3,
+    description: 'يُولَّد آلياً من F-33 بنقل بيانات F-20. المهندس يوثّق إحالة حصر المواد للمقاول.',
+  },
+  /* F-84 */
+  {
+    code: 'F-84', title: 'تسعيرات المقاولين', titleEn: 'Contractor Pricing',
+    category: 'EXECUTION', ownerDept: 'PROJECTS',
+    originRoles: ['HEAD_DIAGNOSIS', 'DIAGNOSIS_ENGINEER'],
+    approvalChain: ['DIAGNOSIS_ENGINEER'],
+    slaDays: 4,
+    description: 'المهندس يجمع عروض الأسعار من المقاولين. عند الاعتماد يُطلق F-85 لقرار الترسية.',
+  },
+  /* F-35 */
+  {
+    code: 'F-35', title: 'طلب دفعة أولى (30%)', titleEn: 'First Payment Request (30%)',
+    category: 'EXECUTION', ownerDept: 'FINANCE',
+    originRoles: ['ACCOUNTANT'],
+    approvalChain: ['ACCOUNTANT', 'EXEC_DIRECTOR', 'ACCOUNTANT'],
+    slaDays: 4,
+    description: 'يُطلق آلياً عند ترسية F-85. محاسب يُعدّ الدفعة الأولى ➡️ مدير تنفيذي ➡️ محاسب (تحويل).',
   },
 ];
 

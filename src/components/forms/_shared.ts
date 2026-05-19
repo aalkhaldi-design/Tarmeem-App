@@ -1,6 +1,6 @@
 /**
  * _shared.ts
- * Common types & interfaces for all form renderers
+ * Common types, interfaces, and authoritative registries for all form renderers.
  */
 
 import type { FormRecord } from '../Forms';
@@ -42,8 +42,8 @@ export function isFormAtStep(rec: FormRecord, step: number): boolean {
 export function canApproveForm(rec: FormRecord, user: UserProfile): boolean {
   if (rec.status === 'approved' || rec.status === 'rejected') return false;
   const expectedRole = rec.approvalChain[rec.approvalIndex];
-  if (user.role !== expectedRole && user.role !== 'ADMIN') return false;
-  if (rec.assigneeId && rec.assigneeId !== user.id && user.role !== 'ADMIN') return false;
+  if (user.role !== expectedRole && !user.isAdmin) return false;
+  if (rec.assigneeId && rec.assigneeId !== user.id && !user.isAdmin) return false;
   return true;
 }
 
@@ -52,7 +52,7 @@ export function canApproveForm(rec: FormRecord, user: UserProfile): boolean {
  */
 export function isFormEditable(rec: FormRecord, user: UserProfile): boolean {
   if (rec.status === 'approved' || rec.status === 'rejected') return false;
-  if (user.role === 'ADMIN') return true;
+  if (user.isAdmin) return true;
   if (rec.createdBy === user.id && rec.approvalIndex === 0) return true;
   if (rec.assigneeId === user.id) return true;
   return false;
@@ -66,27 +66,40 @@ export function getCurrentApprovalStep(rec: FormRecord): { role: string; index: 
   return { role, index: rec.approvalIndex };
 }
 
-/**
- * Helper to check if form requires specific department
- */
-export function requiredDeptForApprovalStep(code: string, stepIndex: number): string | null {
-  // Map form codes to required departments for each approval step
-  const deptMap: Record<string, Record<number, string>> = {
-    'F-03': {
-      0: 'RESEARCH',        // Step 0: Research Manager
-      1: 'EXECUTIVE',       // Step 1: Executive Director
-      2: 'RESEARCH',        // Step 2: Back to Research Manager for final sign-off
-    },
-    'F-08': {
-      0: 'DIAGNOSIS',       // Diagnosis Engineer
-    },
-    'F-14': {
-      0: 'SUPERVISION',     // Supervising Engineer
-    },
-    'F-85': {
-      0: 'PROCUREMENT',     // Procurement Manager
-    },
-  };
+/* ──────────────────────────────────────────────────────────────────
+   ACTIVATE_DATA_PROPAGATIONS — authoritative cross-form propagation registry
+   When a trigger needs to seed downstream form data, the keys it propagates
+   must be listed here. Add new keys here before adding them to a trigger.
+   ────────────────────────────────────────────────────────────────── */
+export const ACTIVATE_DATA_PROPAGATIONS = {
+  'F-03 → F-03.1': ['managerNotes', 'eligibilityVerdict'],
+  'F-84 → F-85':   ['f84_bids', 'f84_pricingNotes'],
+  'F-33 → F-14':   ['f08_works', 'visitNumber'],
+  'F-33 → F-34':   ['f20_items', 'f20_directNotes', 'f20_inkindNotes', 'f20_partnershipNotes'],
+} as const;
 
+/* ──────────────────────────────────────────────────────────────────
+   RENDERER_CONTRACT — exact top-level keys each renderer must write to form.data
+   Triggers read these keys. Renderers must not bury them under nested objects.
+   ────────────────────────────────────────────────────────────────── */
+export const RENDERER_CONTRACT = {
+  'F-04': ['engineerId'],
+  'F-08': ['safetyHazard'],     // TOP LEVEL only — NOT data.basic.safetyHazard
+  'F-85': ['winnerContractor', 'winnerPrice'],
+  'F-32': ['engineerId'],
+  'F-14': ['overallProgress', 'requestScopeChange'],
+  'F-07': ['mediaRequested'],
+} as const;
+
+/** Maps form codes to the department that must act at a given approval step index. */
+export function requiredDeptForApprovalStep(code: string, stepIndex: number): string | null {
+  const deptMap: Record<string, Record<number, string>> = {
+    'F-03':   { 0: 'RESEARCH' },
+    'F-03.1': { 0: 'EXEC' },
+    'F-03.2': { 0: 'RESEARCH' },
+    'F-08':   { 0: 'PROJECTS', 1: 'PROJECTS' },
+    'F-14':   { 0: 'PROJECTS', 1: 'PROJECTS' },
+    'F-85':   { 0: 'PROJECTS' },
+  };
   return deptMap[code]?.[stepIndex] ?? null;
 }

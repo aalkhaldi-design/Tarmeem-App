@@ -6,6 +6,7 @@ import { FormF04Renderer } from './FormF04';
 import { F02Creator, F02Renderer } from './FormF02';
 import { F07Renderer } from './FormF07';
 import { F23Creator, F23Renderer } from './FormF23';
+import { F52Creator, F52Renderer } from './FormF52';
 
 import React, { useEffect, useState } from 'react';
 import {
@@ -941,75 +942,9 @@ export const F15Renderer: FormRenderer = ({ rec, user, api }) => {
 
 /* ──────────────────────────────────────────────────────────────────
    F-52 — طلب تصوير وتوثيق
+   Moved to FormF52.tsx — imported above. COMMS delivery section
+   unlocks post-approval for PR_OFFICER / COMMS department users.
    ────────────────────────────────────────────────────────────────── */
-
-export const F52Creator: FormCreator = ({ user, api, context, onClose }) => {
-  const [projectRefId, setProjectRefId] = useState<string>(context.projects[0]?.id || '');
-  const [type, setType] = useState('قبل/بعد');
-  const [details, setDetails] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const submit = async () => {
-    const p = context.projects.find((x: ProjectRecord) => x.id === projectRefId);
-    if (!p) return;
-    setBusy(true);
-    try {
-      await api.createForm({
-        code: 'F-52', user, projectId: p.projectId, projectRefId: p.id,
-        beneficiaryName: p.beneficiaryName,
-        data: { type, details },
-      });
-      onClose();
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <CreatorShell title="F-52 · طلب تصوير وتوثيق" onClose={onClose}
-      footer={<button onClick={submit} disabled={busy} className="px-5 py-2 text-sm font-bold bg-[#4A1F66] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5"><Send className="w-4 h-4" /> رفع للاتصال المؤسسي</button>}>
-      <Card title="المشروع" icon={Building2}>
-        <Select label="المشروع" options={context.projects.map((p: ProjectRecord) => ({ value: p.id, label: `${p.projectId} — ${p.beneficiaryName}` }))}
-          value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
-      </Card>
-      <Card title="تفاصيل المهمة" icon={Camera}>
-        <Select label="نوع التغطية" options={['قبل/بعد', 'فيديو ميداني', 'مقابلة مع المستفيد', 'تصوير حدث']} value={type} onChange={e => setType(e.target.value)} />
-        <TextArea className="mt-3" label="تفاصيل" rows={3} value={details} onChange={e => setDetails(e.target.value)} />
-      </Card>
-    </CreatorShell>
-  );
-};
-
-export const F52Renderer: FormRenderer = ({ rec, user, api }) => {
-  const d = rec.data || {};
-  const [links, setLinks] = useState<string>(d.links || '');
-  const [files, setFiles] = useState(rec.files || []);
-  const isPR = formAwaitsUser(rec, user) && user.role === 'PR_OFFICER';
-  return (
-    <FormShell rec={rec} user={user} api={api}>
-      <Card title="تفاصيل التغطية" icon={Camera}>
-        <ReadOnlyField label="نوع التغطية" value={d.type} />
-        <ReadOnlyField className="mt-3" label="تفاصيل" value={d.details} />
-      </Card>
-      <Card title="المخرجات الإعلامية" icon={CheckCircle2}>
-        {isPR ? (
-          <>
-            <TextArea label="روابط النشر" rows={3} value={links} onChange={e => setLinks(e.target.value)} placeholder="https://..." />
-            <FileUploader files={files}
-              onAdd={f => setFiles([...files, ...Array.from(f).map(file => ({ name: file.name }))])}
-              onRemove={i => setFiles(files.filter((_, idx) => idx !== i))}
-              label="رفع المخرجات (صور/فيديوهات)" />
-            <button onClick={() => api.updateFormData(rec.id, { links }).then(() => api.attachFiles(rec.id, files))}
-              className="mt-3 px-4 py-1.5 rounded-lg bg-[#56B894] text-white text-xs font-bold">حفظ المخرجات</button>
-          </>
-        ) : (
-          <>
-            <ReadOnlyField label="روابط النشر" value={d.links} />
-            {(rec.files || []).length > 0 && <FileUploader files={rec.files || []} onAdd={() => {}} onRemove={() => {}} label="" />}
-          </>
-        )}
-      </Card>
-    </FormShell>
-  );
-};
 
 /* ──────────────────────────────────────────────────────────────────
    Reusable Creator Shell

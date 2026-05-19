@@ -58,6 +58,24 @@ export function portalAccessForRole(role: RoleKey | 'PENDING' | 'SYSTEM'): Depar
 }
 
 /**
+ * Edit-access gate — broader than formAwaitsUser (approve gate).
+ *
+ * Returns true when a user may edit form.data fields without necessarily being
+ * the approver. Covers: creator at step 0, helpers listed in form.data.helpers[],
+ * and the approver (who can always edit what they're about to approve).
+ * Blocked for terminal states: approved, rejected, declined.
+ */
+export function formIsEditableByUser(rec: FormRecord, user: UserProfile): boolean {
+  if (rec.status === 'approved' || rec.status === 'rejected' || rec.status === 'declined') return false;
+  if (user.isAdmin === true) return true;
+  if (formAwaitsUser(rec, user)) return true;
+  if (rec.createdBy === user.id && rec.approvalIndex === 0) return true;
+  const helpers = (rec.data?.helpers as string[] | undefined) || [];
+  if (helpers.includes(user.id)) return true;
+  return false;
+}
+
+/**
  * FORM_REJECT_TARGET — who owns the resubmit after rejection.
  * Single-stage forms bounce to the role listed here.
  * Multi-stage forms ignore this map (they reset to approvalIndex=0 and notify the first chain role).

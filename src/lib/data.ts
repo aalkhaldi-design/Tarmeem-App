@@ -474,16 +474,10 @@ export const formatCurrency = (val: number | null | undefined) => {
   return Number(val).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ر.س';
 };
 
-/** SLA: returns remaining days and tone given approval start time and slaDays */
-export function slaStatus(startedAtIso: string, slaDays: number | undefined) {
-  if (!startedAtIso || !slaDays) return { text: 'بدون SLA', tone: 'neutral' as const, remaining: 0 };
-  const start = new Date(startedAtIso).getTime();
-  const elapsed = Math.floor((Date.now() - start) / (1000 * 60 * 60 * 24));
-  const remaining = slaDays - elapsed;
-  if (remaining < 0) return { text: `متأخر ${Math.abs(remaining)} يوم`, tone: 'late' as const, remaining };
-  if (remaining === 0) return { text: 'اليوم الأخير', tone: 'warn' as const, remaining };
-  return { text: `متبقّي ${remaining} يوم`, tone: 'ok' as const, remaining };
-}
+// slaStatus lives in src/lib/sla.ts (Decision 4 — Saudi business-day calculator).
+// Re-exported here so existing callers (Forms.tsx, etc.) need no import-path change.
+export { slaStatus } from './sla';
+export type { SlaStatus, SlaTone } from './sla';
 
 /* ──────────────────────────────────────────────────────────────────
    قوائم منسدلة افتراضية

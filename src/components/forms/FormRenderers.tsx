@@ -1800,7 +1800,7 @@ export const CREATORS: Record<string, FormCreator | undefined> = {
   'F-85':   F85Creator,
   'F-14':   F14Creator,
   'F-23':   F23Creator,
-  'F-15':   F15Creator,
+  // F-15 يُولَّد آلياً من TRIGGER_MAP (F-14 milestones) — لا Creator يدوي
   'F-07':   F07Creator,
   'F-52':   F52Creator,
   // F-22 ينشأ تلقائياً مع F-18 — لا يحتاج Creator يدوي

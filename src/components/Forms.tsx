@@ -112,20 +112,14 @@ export function formCanBeOriginatedBy(form: FormDef, role: RoleKey): boolean {
 
 export function formAwaitsRole(record: FormRecord, role: RoleKey): boolean {
   if (record.status !== 'pending') return false;
+  if (record.approvalIndex >= record.approvalChain.length) return false;
   const next = record.approvalChain[record.approvalIndex];
   return next === role;
 }
 
-export function formAwaitsUser(record: FormRecord, user: UserProfile): boolean {
-  if (record.status !== 'pending') return false;
-  // Super Admin يستطيع الاعتماد على أي نموذج معلّق (Decision 2)
-  if (user.isAdmin === true) return true;
-  const nextRole = record.approvalChain[record.approvalIndex];
-  if (nextRole !== user.role) return false;
-  // إذا كان مُسنَداً لمستخدم محدد، فقط هو يستطيع الاعتماد
-  if (record.assigneeId && record.assigneeId !== user.id) return false;
-  return true;
-}
+// Canonical implementation lives in src/lib/rbac.ts (manager override + helper override).
+// Re-exported here so all existing callers keep their import paths unchanged.
+export { formAwaitsUser, formIsEditableByUser } from '../lib/rbac';
 
 /* ──────────────────────────────────────────────────────────────────
    Compact summary card
@@ -135,7 +129,9 @@ export const FormCard: React.FC<{
   rec: FormRecord; onOpen: () => void; highlight?: boolean;
 }> = ({ rec, onOpen, highlight }) => {
   const def = FORM_BY_CODE[rec.code];
-  const nextRole = rec.approvalChain[rec.approvalIndex];
+  const nextRole = rec.approvalIndex < rec.approvalChain.length
+    ? rec.approvalChain[rec.approvalIndex]
+    : null;
   const sla = slaStatus(rec.stepStartedAt || rec.updatedAt, def?.slaDays);
   return (
     <button onClick={onOpen}

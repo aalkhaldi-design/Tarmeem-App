@@ -53,9 +53,11 @@ service cloud.firestore {
       // Create: admins or PROJECTS department members
       allow create: if authed() && (isAdmin() || userDept() == 'PROJECTS');
 
-      // Update: admins, PROJECTS members, or the workflow engine (any authenticated user
-      // whose write comes from an applyCascade batch — enforced by form-level rules)
-      allow update: if authed() && (isAdmin() || userDept() == 'PROJECTS' || userDept() == 'RESEARCH');
+      // Update: any authenticated user — applyCascade runs client-side in the browser
+      // and touches projects from any department (e.g. FINANCE approving F-15 → HANDOVER,
+      // EXEC approving F-03.1 → REJECTED). The form-level rules already gate who can
+      // advance a form; project mutations are an inseparable part of that atomic batch.
+      allow update: if authed();
 
       allow delete: if isAdmin();
     }
@@ -107,8 +109,10 @@ service cloud.firestore {
         && uid() in resource.data.recipients
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy']);
 
-      // Create/delete only from trusted app code (admin SDK or applyCascade)
-      allow create: if isAdmin();
+      // Create: any authenticated user — applyCascade calls addDoc on notifications
+      // client-side after every form approval, regardless of the approving user's role.
+      // Privacy is enforced on read (recipients array-contains check above).
+      allow create: if authed();
       allow delete: if isAdmin();
     }
 

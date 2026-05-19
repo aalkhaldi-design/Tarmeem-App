@@ -4,6 +4,7 @@
    ────────────────────────────────────────────────────────────────── */
 import { FormF04Renderer } from './FormF04';
 import { F02Creator, F02Renderer } from './FormF02';
+import { F07Renderer } from './FormF07';
 
 import React, { useEffect, useState } from 'react';
 import {
@@ -1012,84 +1013,8 @@ export const F15Renderer: FormRenderer = ({ rec, user, api }) => {
 
 /* ──────────────────────────────────────────────────────────────────
    F-07 — شهادة تسليم المنزل
+   Moved to FormF07.tsx — imported above. No manual creator (system-activated).
    ────────────────────────────────────────────────────────────────── */
-
-export const F07Creator: FormCreator = ({ user, api, context, onClose }) => {
-  const [projectRefId, setProjectRefId] = useState<string>(context.projects[0]?.id || '');
-  const [data, setData] = useState({
-    actualStartDate: '', actualEndDate: '', supervisingEngineer: user.fullName,
-    contractorName: '', insulationGuarantee: '', mediaRequested: false,
-  });
-  const [files, setFiles] = useState<{ name: string; url?: string }[]>([]);
-  const [busy, setBusy] = useState(false);
-
-  const submit = async () => {
-    const p = context.projects.find((x: ProjectRecord) => x.id === projectRefId);
-    if (!p) return;
-    setBusy(true);
-    try {
-      await api.createForm({
-        code: 'F-07', user, projectId: p.projectId, projectRefId: p.id,
-        beneficiaryName: p.beneficiaryName, data, files,
-      });
-      onClose();
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <CreatorShell title="F-07 · شهادة تسليم المنزل" onClose={onClose}
-      footer={<button onClick={submit} disabled={busy} className="px-5 py-2 text-sm font-bold bg-[#4A1F66] text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5"><Send className="w-4 h-4" /> رفع الشهادة</button>}>
-      <Card title="المشروع" icon={Building2}>
-        <Select label="المشروع" options={context.projects.map((p: ProjectRecord) => ({ value: p.id, label: `${p.projectId} — ${p.beneficiaryName}` }))}
-          value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
-      </Card>
-      <Card title="بيانات التسليم" icon={CheckCircle2}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <Input type="date" label="تاريخ بدء التنفيذ" value={data.actualStartDate} onChange={e => setData(d => ({ ...d, actualStartDate: e.target.value }))} />
-          <Input type="date" label="تاريخ التسليم الفعلي" value={data.actualEndDate} onChange={e => setData(d => ({ ...d, actualEndDate: e.target.value }))} />
-          <Input label="المهندس المشرف" value={data.supervisingEngineer} onChange={e => setData(d => ({ ...d, supervisingEngineer: e.target.value }))} />
-          <Input label="المقاول المنفذ" value={data.contractorName} onChange={e => setData(d => ({ ...d, contractorName: e.target.value }))} className="md:col-span-2" />
-          <Input label="ضمان العزل (إن وجد)" value={data.insulationGuarantee} onChange={e => setData(d => ({ ...d, insulationGuarantee: e.target.value }))} placeholder="مثال: 10 سنوات" />
-        </div>
-      </Card>
-      <Card title="رفع الشهادة" icon={FileSignature}>
-        <FileUploader files={files}
-          onAdd={f => setFiles([...files, ...Array.from(f).map(file => ({ name: file.name }))])}
-          onRemove={i => setFiles(files.filter((_, idx) => idx !== i))}
-          label="ارفع شهادة التسليم الموقعة" accept=".pdf,.jpg,.jpeg,.png" />
-      </Card>
-      <Card title="التغطية الإعلامية" icon={Camera}>
-        <label className="flex items-start gap-2 cursor-pointer p-2 rounded-lg border border-gray-200 dark:border-slate-700">
-          <input type="checkbox" checked={data.mediaRequested} onChange={e => setData(d => ({ ...d, mediaRequested: e.target.checked }))} className="mt-1" />
-          <span className="text-sm">طلب تغطية إعلامية وتوثيق (سيُفتح F-52 آلياً)</span>
-        </label>
-      </Card>
-    </CreatorShell>
-  );
-};
-
-export const F07Renderer: FormRenderer = ({ rec, user, api }) => {
-  const d = rec.data || {};
-  return (
-    <FormShell rec={rec} user={user} api={api}>
-      <Card title="بيانات التسليم" icon={CheckCircle2}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <ReadOnlyField label="بدء التنفيذ" value={d.actualStartDate} />
-          <ReadOnlyField label="تاريخ التسليم" value={d.actualEndDate} />
-          <ReadOnlyField label="المهندس المشرف" value={d.supervisingEngineer} />
-          <ReadOnlyField label="المقاول" value={d.contractorName} />
-          <ReadOnlyField label="ضمان العزل" value={d.insulationGuarantee} />
-        </div>
-      </Card>
-      {(rec.files || []).length > 0 && (
-        <Card title="الشهادة" icon={FileSignature}>
-          <FileUploader files={rec.files || []} onAdd={() => {}} onRemove={() => {}} label="" />
-        </Card>
-      )}
-      {d.mediaRequested && <Pill tone="purple">تم طلب تغطية إعلامية — F-52</Pill>}
-    </FormShell>
-  );
-};
 
 /* ──────────────────────────────────────────────────────────────────
    F-52 — طلب تصوير وتوثيق
@@ -1582,7 +1507,7 @@ export const CREATORS: Record<string, FormCreator | undefined> = {
   'F-14':   F14Creator,
   'F-23':   F23Creator,
   // F-15 يُولَّد آلياً من TRIGGER_MAP (F-14 milestones) — لا Creator يدوي
-  'F-07':   F07Creator,
+  // F-07 يُفعَّل آلياً من TRIGGER_MAP (F-15 final payment) — لا Creator يدوي
   'F-52':   F52Creator,
   // F-22 ينشأ تلقائياً مع F-18 — لا يحتاج Creator يدوي
 };

@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Building2, Users as UsersIcon, Stethoscope, Wallet, Truck, HeartHandshake,
   Megaphone, Handshake, Mic2, FileText, Plus, Activity, Inbox,
-  Shield,
+  Shield, Settings,
 } from 'lucide-react';
 import {
   DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, RoleKey, formsByDepartment,
@@ -204,7 +204,7 @@ export const DEPT_PORTALS: Record<DepartmentKey, React.FC<PortalProps>> = {
    Sidebar / Mobile nav
    ────────────────────────────────────────────────────────────────── */
 
-export type ActivePortal = DepartmentKey | 'HOME' | 'ADMIN' | 'PROJECTS_LIST' | 'PROFILE';
+export type ActivePortal = DepartmentKey | 'HOME' | 'ADMIN' | 'PROJECTS_LIST' | 'PROFILE' | 'SETTINGS';
 
 export const PortalSidebar: React.FC<{
   active: ActivePortal;
@@ -231,6 +231,7 @@ export const PortalSidebar: React.FC<{
         ))}
         <div className="my-2 px-3 text-[10px] font-bold text-gray-400 uppercase tracking-wider">حسابي</div>
         <NavItem active={active === 'PROFILE'} onClick={() => onChange('PROFILE')} icon={UsersIcon} label="ملفي الشخصي" badge={inboxCount} />
+        <NavItem active={active === 'SETTINGS'} onClick={() => onChange('SETTINGS')} icon={Settings} label="الإعدادات" />
         {isAdmin && <NavItem active={active === 'ADMIN'} onClick={() => onChange('ADMIN')} icon={Shield} label="لوحة الإدارة" />}
       </nav>
     </aside>
@@ -259,6 +260,7 @@ export const PortalMobileNav: React.FC<{
     { key: 'PROJECTS_LIST', label: 'المشاريع', icon: Building2 },
     ...DEPARTMENTS.filter(d => allowedDepts.includes(d.key)).map(d => ({ key: d.key as ActivePortal, label: d.shortName, icon: DEPT_ICON[d.key] })),
     { key: 'PROFILE', label: 'ملفي', icon: UsersIcon },
+    { key: 'SETTINGS', label: 'الإعدادات', icon: Settings },
   ];
   if (isAdmin) items.push({ key: 'ADMIN', label: 'الإدارة', icon: Shield });
 

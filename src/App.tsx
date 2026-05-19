@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  Bell, WifiOff, User as UserIcon, AlertTriangle, ClipboardList, CheckCircle2,
+  Bell, WifiOff, User as UserIcon, AlertTriangle, ClipboardList, CheckCircle2, Search,
 } from 'lucide-react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
@@ -13,6 +13,8 @@ import { TarmeemLogo, TarmeemSplash, ThemeProvider, ThemeToggle } from './compon
 import {
   DashboardHome, PendingAccountScreen, DeactivatedAccountScreen,
 } from './components/Home';
+import { SettingsPage } from './components/Settings';
+import { GlobalSearch } from './components/GlobalSearch';
 import {
   DEPT_PORTALS, PortalSidebar, PortalMobileNav, type ActivePortal,
 } from './components/Departments';
@@ -64,6 +66,7 @@ function App() {
   const [showNewForm, setShowNewForm] = useState(false);
   const [newFormPreselect, setNewFormPreselect] = useState<FormCode | undefined>(undefined);
 
+  const [showSearch, setShowSearch] = useState(false);
   const [splashVisible, setSplashVisible] = useState(() => !sessionStorage.getItem('tarmeem_splash_seen'));
   useEffect(() => { if (!splashVisible) sessionStorage.setItem('tarmeem_splash_seen', 'true'); }, [splashVisible]);
 
@@ -130,6 +133,13 @@ function App() {
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
+  }, []);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setShowSearch(true); }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
   }, []);
 
   const userProfile: UserProfile | null = rawUserProfile;
@@ -601,6 +611,15 @@ function App() {
         />
       );
     }
+    if (active === 'SETTINGS') {
+      return (
+        <SettingsPage
+          user={userProfile}
+          notifications={notifications}
+          markAllRead={() => markAllNotificationsRead(userProfile.id)}
+        />
+      );
+    }
     const Portal = DEPT_PORTALS[active as DepartmentKey];
     if (Portal) return <Portal user={userProfile} users={users} api={formsApi}
       onOpenForm={openForm} onCreateForm={(c) => openCreator(c)} />;
@@ -672,6 +691,12 @@ function App() {
           </div>
 
           <div className="flex items-center gap-2">
+            <button onClick={() => setShowSearch(true)}
+              className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 text-white/70 text-xs font-bold transition">
+              <Search className="w-3.5 h-3.5" />
+              <span>بحث</span>
+              <span className="text-[10px] opacity-60 border border-white/20 rounded px-1">⌘K</span>
+            </button>
             <ThemeToggle />
             <div className="relative" ref={bellRef}>
               <button onClick={() => setBellOpen(v => !v)} className="relative p-1.5 hover:bg-white/10 rounded-lg transition">
@@ -762,6 +787,18 @@ function App() {
         <NewFormModal user={userProfile} api={formsApi} users={users}
           context={formsContext} creators={CREATORS} preselect={newFormPreselect}
           onClose={() => { setShowNewForm(false); setNewFormPreselect(undefined); }} />
+      )}
+      {showSearch && userProfile && (
+        <GlobalSearch
+          projects={projects}
+          forms={forms}
+          users={users}
+          user={userProfile}
+          onOpenProject={(id) => { openProject(id); }}
+          onOpenForm={(id) => { openForm(id); }}
+          onOpenProfile={(id) => { openProfile(id); }}
+          onClose={() => setShowSearch(false)}
+        />
       )}
     </div>
   );

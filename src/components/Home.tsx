@@ -1,14 +1,18 @@
 import React, { useMemo } from 'react';
 import {
-  Home as HomeIcon, Activity, Inbox, FileText, ArrowLeft, CheckCircle, Building2,
-  Target, TrendingUp, AlertTriangle, MapPin,
+  Home as HomeIcon, FileText, Building2,
+  Target, MapPin,
 } from 'lucide-react';
+import {
+  KpiStrip, MyDayWidget, PhaseFunnel,
+  ActivityTimeline, SlaBreachHeatmap, BudgetSnapshot,
+} from './Dashboard';
 import {
   DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, regionLabel, FORM_STATUS_LABELS,
   FORM_STATUS_COLORS, roleName,
 } from '../lib/data';
-import { Card, TarmeemLogo, ProgressBar, Pill, DonutChart, BarChart, Sparkline, EmptyState } from './ui';
-import { FormsApi, formAwaitsUser } from './Forms';
+import { Card, TarmeemLogo, ProgressBar, Pill, Sparkline, EmptyState } from './ui';
+import { FormsApi } from './Forms';
 import type { ProjectRecord } from './forms/FormRenderers';
 import type { UserProfile } from './Auth';
 
@@ -33,38 +37,12 @@ interface HomeProps {
 export const DashboardHome: React.FC<HomeProps> = ({ user, api, projects, goToPortal, goToProjects, goToProject, allowedDepts }) => {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'صباح الخير' : hour < 18 ? 'مساء الخير' : 'مساء النور';
-  const inbox = useMemo(() => api.forms.filter(f => formAwaitsUser(f, user)), [api.forms, user]);
   const myCreated = useMemo(() => api.forms.filter(f => f.createdBy === user.id), [api.forms, user.id]);
 
   const dept = DEPT_BY_KEY[user.department as DepartmentKey];
 
-  const stats = useMemo(() => {
-    const completed = projects.filter(p => p.phase === 'CLOSED').length;
-    const active = projects.filter(p => p.phase !== 'CLOSED').length;
-    return { total: projects.length, completed, active };
-  }, [projects]);
-
-  const target500Pct = Math.min(Math.round((stats.completed / 500) * 100) || 0, 100);
-
-  const phaseSegments = useMemo(() => {
-    const counts: Record<string, number> = {};
-    projects.forEach(p => { counts[p.phase] = (counts[p.phase] || 0) + 1; });
-    const colors: Record<string, string> = {
-      RESEARCH: '#0EA5E9', DIAGNOSIS: '#7C3AED', EVACUATION: '#F59E0B',
-      TENDERING: '#EAB308', EXECUTION: '#56B894', HANDOVER: '#16A34A', CLOSED: '#6B7280',
-    };
-    const labels: Record<string, string> = {
-      RESEARCH: 'البحث', DIAGNOSIS: 'التشخيص', EVACUATION: 'الإخلاء',
-      TENDERING: 'الترسية', EXECUTION: 'التنفيذ', HANDOVER: 'التسليم', CLOSED: 'مغلق',
-    };
-    return Object.entries(counts).map(([k, v]) => ({ label: labels[k] || k, value: v, color: colors[k] || '#888' }));
-  }, [projects]);
-
-  const regionCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    projects.forEach(p => { const r = regionLabel(p.region || 'DAM'); counts[r] = (counts[r] || 0) + 1; });
-    return counts;
-  }, [projects]);
+  const completedCount = useMemo(() => projects.filter(p => p.phase === 'CLOSED').length, [projects]);
+  const target500Pct = Math.min(Math.round((completedCount / 500) * 100) || 0, 100);
 
   // 6-month sparkline of new projects
   const monthlyTrend = useMemo(() => {
@@ -112,14 +90,14 @@ export const DashboardHome: React.FC<HomeProps> = ({ user, api, projects, goToPo
                 transform="rotate(-90 72 72)" strokeLinecap="round" className="transition-all duration-1000" />
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-3xl font-bold text-[#4A1F66] dark:text-purple-300">{stats.completed}</span>
+              <span className="text-3xl font-bold text-[#4A1F66] dark:text-purple-300">{completedCount}</span>
               <span className="text-xs text-gray-500 dark:text-slate-400">من 500</span>
             </div>
           </div>
           <div className="flex-1">
             <p className="text-lg font-bold text-gray-800 dark:text-slate-100">اكتمل {target500Pct}% من الهدف</p>
             <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">
-              متبقّي <span className="font-bold text-[#4A1F66] dark:text-purple-300">{Math.max(500 - stats.completed, 0)}</span> منزل لتحقيق الهدف.
+              متبقّي <span className="font-bold text-[#4A1F66] dark:text-purple-300">{Math.max(500 - completedCount, 0)}</span> منزل لتحقيق الهدف.
             </p>
             <div className="mt-3"><ProgressBar value={target500Pct} /></div>
           </div>
@@ -130,44 +108,16 @@ export const DashboardHome: React.FC<HomeProps> = ({ user, api, projects, goToPo
         </div>
       </Card>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatPill icon={Building2} label="إجمالي المشاريع" value={stats.total} tone="bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200" />
-        <StatPill icon={Activity} label="مشاريع نشطة" value={stats.active} tone="bg-teal-50 text-teal-700 dark:bg-teal-900/30 dark:text-teal-200" />
-        <StatPill icon={CheckCircle} label="منازل مسلّمة" value={stats.completed} tone="bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-200" />
-        <StatPill icon={Inbox} label="بانتظار اعتمادي" value={inbox.length} tone="bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200" />
-      </div>
+      <KpiStrip projects={projects} forms={api.forms} user={user} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card title="توزيع المشاريع حسب المرحلة" icon={TrendingUp} className="lg:col-span-2">
-          {phaseSegments.length === 0 ? <EmptyState icon={Building2} title="لا توجد مشاريع بعد" /> : (
-            <div className="flex flex-col md:flex-row gap-6 items-center">
-              <DonutChart segments={phaseSegments} size={200} />
-              <div className="flex-1 w-full">
-                <BarChart data={regionCounts} label="حسب المنطقة" />
-              </div>
-            </div>
-          )}
-        </Card>
-        <Card title={`صندوق الوارد (${inbox.length})`} icon={Inbox} accent="teal">
-          {inbox.length === 0 ? (
-            <EmptyState icon={CheckCircle} title="لا توجد طلبات معلّقة" />
-          ) : (
-            <div className="space-y-2 max-h-72 overflow-y-auto">
-              {inbox.slice(0, 6).map(f => (
-                <button key={f.id} onClick={() => f.projectRefId ? goToProject(f.projectRefId) : goToPortal(f.ownerDept)}
-                  className="w-full text-right p-2 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 transition flex items-start gap-2">
-                  <Pill tone="purple">{f.code}</Pill>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-gray-800 dark:text-slate-100 truncate">{f.title}</p>
-                    <p className="text-[10px] text-gray-500 dark:text-slate-400">{f.beneficiaryName || f.projectId || '—'}</p>
-                  </div>
-                  <ArrowLeft className="w-4 h-4 text-gray-400" />
-                </button>
-              ))}
-            </div>
-          )}
-        </Card>
+        <div className="lg:col-span-2">
+          <PhaseFunnel projects={projects} />
+        </div>
+        <MyDayWidget forms={api.forms} user={user} goToProject={goToProject} />
       </div>
+
+      <ActivityTimeline forms={api.forms} goToProject={goToProject} />
 
       <Card title="بوابات المؤسسة" icon={Building2}>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -228,6 +178,11 @@ export const DashboardHome: React.FC<HomeProps> = ({ user, api, projects, goToPo
         )}
       </Card>
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <SlaBreachHeatmap forms={api.forms} user={user} goToProject={goToProject} />
+        <BudgetSnapshot forms={api.forms} user={user} />
+      </div>
+
       <div className="flex items-center justify-between px-4 py-3 mt-4 border-t border-gray-200 dark:border-slate-700">
         <div className="flex items-center gap-2">
           <TarmeemLogo variant="icon" size={18} />
@@ -238,18 +193,6 @@ export const DashboardHome: React.FC<HomeProps> = ({ user, api, projects, goToPo
     </div>
   );
 };
-
-const StatPill: React.FC<{ icon: React.ElementType; label: string; value: any; tone: string }> = ({ icon: Icon, label, value, tone }) => (
-  <div className={`rounded-xl p-4 flex items-center gap-3 ${tone}`}>
-    <div className="w-10 h-10 rounded-lg bg-white/40 dark:bg-white/5 flex items-center justify-center">
-      <Icon className="w-5 h-5" />
-    </div>
-    <div>
-      <p className="text-2xl font-bold leading-none">{value}</p>
-      <p className="text-xs font-semibold opacity-80 mt-0.5">{label}</p>
-    </div>
-  </div>
-);
 
 export const PendingAccountScreen: React.FC<{ email: string; onSignOut: () => void }> = ({ email, onSignOut }) => (
   <div className="min-h-screen bg-gray-50 dark:bg-slate-950 flex items-center justify-center p-4" dir="rtl">

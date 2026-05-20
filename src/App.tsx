@@ -311,6 +311,40 @@ function App() {
     } catch (e) { console.error('createForm:', e); return null; }
   }, [dispatchNotification, usersByRole, usersByDeptManager, projects]);
 
+  /** Big Bang: ينشئ نموذج مسودة دون اعتماد ابتدائي ولا إشعارات — يُفعَّل لاحقاً عبر applyCascade.activate */
+  const createDraftForm: FormsApi['createDraftForm'] = useCallback(async (input) => {
+    try {
+      const def = FORM_BY_CODE[input.code];
+      if (!def) return null;
+      const rec: Omit<FormRecord, 'id'> = {
+        code: def.code,
+        title: def.title,
+        projectId: input.projectId || null,
+        projectRefId: input.projectRefId || null,
+        beneficiaryName: input.beneficiaryName || '',
+        status: 'draft',
+        approvalIndex: 0,
+        approvalChain: def.approvalChain,
+        approvals: [],
+        createdBy: input.user.id,
+        createdByName: input.user.fullName,
+        createdByRole: input.user.role as RoleKey,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ownerDept: def.ownerDept,
+        bridgesTo: def.bridgesTo || [],
+        notes: '',
+        data: {},
+        triggeredBy: null,
+        assigneeId: null,
+        files: [],
+      };
+      const ref = await addDoc(collection(db, 'forms'), rec);
+      await updateDoc(ref, { id: ref.id });
+      return ref.id;
+    } catch (e) { console.error('createDraftForm:', e); return null; }
+  }, []);
+
   /** إجراءات الاعتماد المركزية — تستخدم TRIGGER_MAP عبر applyCascade (Decision 6) */
   const advanceForm = useCallback(async (
     formId: string, user: UserProfile, decision: 'approved' | 'rejected' | 'deferred' | 'declined', note?: string,
@@ -429,13 +463,14 @@ function App() {
   const formsApi: FormsApi = useMemo(() => ({
     forms,
     createForm,
+    createDraftForm,
     approveForm: (id, user, note, patch) => advanceForm(id, user, 'approved', note, patch),
     rejectForm: (id, user, note) => advanceForm(id, user, 'rejected', note),
     deferForm: (id, user, note) => advanceForm(id, user, 'deferred', note),
     declineForm: (id, user, note) => advanceForm(id, user, 'declined', note),
     updateFormData,
     attachFiles,
-  }), [forms, createForm, advanceForm, updateFormData, attachFiles]);
+  }), [forms, createForm, createDraftForm, advanceForm, updateFormData, attachFiles]);
 
   /* ────────── Forms context for renderers ────────── */
   const formsContext: FormsContext = useMemo(() => ({
@@ -587,6 +622,7 @@ function App() {
     if (active === 'PROJECTS_LIST') {
       return activeProject ? (
         <ProjectDetail project={activeProject} user={userProfile} users={users} api={formsApi}
+          context={formsContext}
           onBack={() => setActiveProjectId(null)} onOpenForm={openForm} />
       ) : (
         <MasterProjectList user={userProfile} api={formsApi} projects={projects} users={users} onOpenProject={openProject} />
@@ -634,37 +670,6 @@ function App() {
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
         @media print { .print-hide { display: none !important; } }
-        .brick { opacity: 0; transform-origin: center center; animation: brickPopUp 500ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
-        .diamond { opacity: 0; transform-origin: center center; animation: diamondDrop 450ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
-        .brick[data-i="3"]  { animation-delay: 80ms; }
-        .brick[data-i="2"]  { animation-delay: 160ms; }
-        .brick[data-i="4"]  { animation-delay: 160ms; }
-        .brick[data-i="1"]  { animation-delay: 260ms; }
-        .brick[data-i="6"]  { animation-delay: 420ms; }
-        .brick[data-i="5"]  { animation-delay: 560ms; }
-        .brick[data-i="7"]  { animation-delay: 560ms; }
-        .brick[data-i="10"] { animation-delay: 720ms; }
-        .brick[data-i="11"] { animation-delay: 720ms; }
-        .brick[data-i="9"]  { animation-delay: 820ms; }
-        .brick[data-i="12"] { animation-delay: 820ms; }
-        .brick[data-i="8"]  { animation-delay: 940ms; }
-        .diamond[data-i="1"] { animation-delay: 1100ms; }
-        .diamond[data-i="2"] { animation-delay: 1180ms; }
-        @keyframes brickPopUp { 0% { opacity: 0; transform: translateY(20px) scale(0.7); } 60% { opacity: 1; transform: translateY(-3px) scale(1.05); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
-        @keyframes diamondDrop { 0% { opacity: 0; transform: translateY(-15px) scale(0.5); } 60% { opacity: 1; transform: translateY(2px) scale(1.05); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
-        .splash-tagline { opacity: 0; animation: taglineFadeUp 600ms ease-out 1700ms forwards; }
-        .splash-tagline-en { opacity: 0; animation: taglineFadeUp 600ms ease-out 1900ms forwards; }
-        @keyframes taglineFadeUp { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
-        .splash-overlay.exiting { animation: crashFade 600ms cubic-bezier(0.6, 0.04, 0.98, 0.34) forwards; }
-        @keyframes crashFade { 0% { opacity: 1; transform: scale(1) rotate(0deg); } 20% { opacity: 1; transform: scale(1.04) rotate(0.5deg); } 40% { opacity: 1; transform: scale(0.96) rotate(-0.5deg); } 100% { opacity: 0; transform: scale(0.85) rotate(0deg); } }
-        .logo-breathe-on-hover:hover { animation: breathe 2s ease-in-out infinite; }
-        @keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }
-        @media (prefers-reduced-motion: reduce) {
-          .brick, .diamond, .splash-tagline, .splash-tagline-en { animation: none !important; opacity: 1 !important; }
-          .splash-overlay.exiting { animation: simpleFade 300ms ease-out forwards; }
-          @keyframes simpleFade { to { opacity: 0; } }
-          .logo-breathe-on-hover:hover { animation: none; }
-        }
       `}} />
 
       {splashVisible && <TarmeemSplash onComplete={() => setSplashVisible(false)} />}

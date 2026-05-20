@@ -12,6 +12,7 @@ import {
   CheckCircle, Activity, XCircle, ShieldAlert,
 } from 'lucide-react';
 import { Card, Input, TextArea, FileUploader } from '../ui';
+import { SaudiRiyalGlassIcon } from '../../lib/data';
 import { FormRenderer, FormCreator, formIsEditableByUser, formAwaitsUser } from '../Forms';
 import type { FormRecord, FormsApi } from '../Forms';
 import type { UserProfile } from '../Auth';
@@ -194,7 +195,7 @@ export const F23Creator: FormCreator = ({ user, api, context, onClose }) => {
                   <Input className="col-span-3" label={idx === 0 ? 'المقاول' : ''}
                     value={it.contractor} placeholder="اسم المقاول"
                     onChange={e => updateItem(it.id, { contractor: e.target.value })} />
-                  <Input className="col-span-2" label={idx === 0 ? 'السعر (ر.س)' : ''}
+                  <Input className="col-span-2" label={idx === 0 ? <span className="flex items-center gap-1">السعر <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span> : ''}
                     type="number" value={it.price || ''}
                     onChange={e => updateItem(it.id, { price: Number(e.target.value || 0) })} />
                   <button
@@ -211,8 +212,8 @@ export const F23Creator: FormCreator = ({ user, api, context, onClose }) => {
               className="mt-3 flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-[#43bba1] text-white hover:bg-[#3aa592] transition">
               <Plus className="w-3 h-3" /> إضافة بند
             </button>
-            <div className="mt-3 text-sm font-bold text-[#4A1F66] dark:text-purple-300">
-              الإجمالي: {computeTotal(items).toLocaleString('ar-SA')} ر.س
+            <div className="mt-3 text-sm font-bold text-[#4A1F66] dark:text-purple-300 flex items-center gap-1">
+              الإجمالي: {computeTotal(items).toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" />
             </div>
           </Card>
 
@@ -323,7 +324,7 @@ export const F23Renderer: FormRenderer = ({ rec, user, api }) => {
                   <Input className="col-span-3" label={idx === 0 ? 'المقاول' : ''}
                     value={it.contractor}
                     onChange={e => updateItem(it.id, { contractor: e.target.value })} />
-                  <Input className="col-span-2" label={idx === 0 ? 'السعر (ر.س)' : ''}
+                  <Input className="col-span-2" label={idx === 0 ? <span className="flex items-center gap-1">السعر <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span> : ''}
                     type="number" value={it.price || ''}
                     onChange={e => updateItem(it.id, { price: Number(e.target.value || 0) })} />
                   <button
@@ -340,8 +341,8 @@ export const F23Renderer: FormRenderer = ({ rec, user, api }) => {
               className="mt-3 flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-[#43bba1] text-white hover:bg-[#3aa592] transition">
               <Plus className="w-3 h-3" /> إضافة بند
             </button>
-            <div className="mt-3 text-sm font-bold text-[#4A1F66] dark:text-purple-300">
-              الإجمالي: {computeTotal(draft.items).toLocaleString('ar-SA')} ر.س
+            <div className="mt-3 text-sm font-bold text-[#4A1F66] dark:text-purple-300 flex items-center gap-1">
+              الإجمالي: {computeTotal(draft.items).toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" />
             </div>
           </Card>
 
@@ -388,13 +389,13 @@ export const F23Renderer: FormRenderer = ({ rec, user, api }) => {
                     <td className="px-3 py-2 border border-subtle">{it.description || '—'}</td>
                     <td className="px-3 py-2 border border-subtle">{it.dimensions || '—'}</td>
                     <td className="px-3 py-2 border border-subtle">{it.contractor || '—'}</td>
-                    <td className="px-3 py-2 border border-subtle font-bold">{Number(it.price || 0).toLocaleString('ar-SA')} ر.س</td>
+                    <td className="px-3 py-2 border border-subtle font-bold">{Number(it.price || 0).toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-3.5 h-3.5 inline" /></td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            <div className="mt-3 text-sm font-bold text-[#4A1F66] dark:text-purple-300">
-              الإجمالي: {Number(d.total || 0).toLocaleString('ar-SA')} ر.س
+            <div className="mt-3 text-sm font-bold text-[#4A1F66] dark:text-purple-300 flex items-center gap-1">
+              الإجمالي: {Number(d.total || 0).toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" />
             </div>
           </Card>
 

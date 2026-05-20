@@ -20,7 +20,7 @@ import {
   Card, Input, Select, TextArea, ReadOnlyField, FileUploader, Pill, NumberCounter,
   ProgressBar,
 } from '../ui';
-import { DEFAULT_LISTS, FormCode } from '../../lib/data';
+import { DEFAULT_LISTS, FormCode, SaudiRiyalGlassIcon } from '../../lib/data';
 import {
   FormCreator, FormRenderer, formAwaitsUser, FormRecord,
 } from '../Forms';
@@ -471,7 +471,7 @@ export const F21Creator: FormCreator = ({ user, api, context, onClose }) => {
       {catalog.map(item => (
         <div key={item.key} className={`border rounded-lg p-2 ${qty[item.key] > 0 ? 'bg-purple-50 dark:bg-purple-900/30 border-purple-300' : 'border-gray-200 dark:border-slate-700'}`}>
           <p className="text-xs font-bold text-gray-700 dark:text-slate-200 mb-1">{item.label}</p>
-          <p className="text-[10px] text-gray-400">{item.avgPrice} ر.س / وحدة</p>
+          <p className="text-[10px] text-gray-400 flex items-center gap-1">{item.avgPrice} <SaudiRiyalGlassIcon className="w-3 h-3 inline" /> / وحدة</p>
           <NumberCounter value={qty[item.key] || 0} onChange={v => setQty({ ...qty, [item.key]: v })} />
         </div>
       ))}
@@ -487,11 +487,11 @@ export const F21Creator: FormCreator = ({ user, api, context, onClose }) => {
       </Card>
       <Card title="الأثاث" icon={HomeIcon}>
         <QtyGrid catalog={FURNITURE_CATALOG} qty={furniture} setQty={setFurniture} />
-        <p className="text-xs font-bold text-purple-700 mt-3">إجمالي الأثاث: {totalFurniture} ر.س</p>
+        <p className="text-xs font-bold text-purple-700 mt-3 flex items-center gap-1">إجمالي الأثاث: {totalFurniture} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></p>
       </Card>
       <Card title="الأجهزة" icon={Activity}>
         <QtyGrid catalog={APPLIANCE_CATALOG} qty={appliances} setQty={setAppliances} />
-        <p className="text-xs font-bold text-purple-700 mt-3">إجمالي الأجهزة: {totalAppliance} ر.س</p>
+        <p className="text-xs font-bold text-purple-700 mt-3 flex items-center gap-1">إجمالي الأجهزة: {totalAppliance} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></p>
       </Card>
     </CreatorShell>
   );
@@ -503,9 +503,9 @@ export const F21Renderer: FormRenderer = ({ rec, user, api }) => {
     <FormShell rec={rec} user={user} api={api}>
       <Card title="ملخص الحصر" icon={ClipboardList}>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <ReadOnlyField label="إجمالي الأثاث" value={`${d.totalFurniture || 0} ر.س`} />
-          <ReadOnlyField label="إجمالي الأجهزة" value={`${d.totalAppliance || 0} ر.س`} />
-          <ReadOnlyField label="الإجمالي العام" value={`${d.total || 0} ر.س`} />
+          <ReadOnlyField label="إجمالي الأثاث" value={<span className="flex items-center gap-1">{Number(d.totalFurniture || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
+          <ReadOnlyField label="إجمالي الأجهزة" value={<span className="flex items-center gap-1">{Number(d.totalAppliance || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
+          <ReadOnlyField label="الإجمالي العام" value={<span className="flex items-center gap-1">{Number(d.total || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
         </div>
       </Card>
       <Card title="الأثاث" icon={HomeIcon}>
@@ -667,7 +667,7 @@ export const F19Creator: FormCreator = ({ user, api, context, onClose }) => {
           value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
           <Input label="اسم المقاول" value={contractor} onChange={e => setContractor(e.target.value)} />
-          <Input type="number" label="القيمة الإجمالية (ر.س)" value={amount} onChange={e => setAmount(e.target.value)} />
+          <Input type="number" label={<span className="flex items-center gap-1">القيمة الإجمالية <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} value={amount} onChange={e => setAmount(e.target.value)} />
           <Select label="آلية التوريد" options={['شراء مباشر', 'عقد مع مورد', 'مستودع الجمعية']} value={supplyMethod} onChange={e => setSupplyMethod(e.target.value)} />
         </div>
         <TextArea className="mt-3" label="تفاصيل المواد" rows={3} value={items} onChange={e => setItems(e.target.value)} />
@@ -683,7 +683,7 @@ export const F19Renderer: FormRenderer = ({ rec, user, api }) => {
       <Card title="تفاصيل التعميد" icon={Truck}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <ReadOnlyField label="المقاول" value={d.contractor} />
-          <ReadOnlyField label="القيمة" value={`${d.amount || 0} ر.س`} />
+          <ReadOnlyField label="القيمة" value={<span className="flex items-center gap-1">{Number(d.amount || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
           <ReadOnlyField label="آلية التوريد" value={d.supplyMethod} />
         </div>
         <ReadOnlyField className="mt-3" label="تفاصيل المواد" value={d.items} />
@@ -735,7 +735,7 @@ export const F85Creator: FormCreator = ({ user, api, context, onClose }) => {
           {bids.map(b => (
             <div key={b.id} className={`grid grid-cols-12 gap-2 items-end p-2 rounded-lg border ${winnerId === b.id ? 'border-amber-300 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-200 dark:border-slate-700'}`}>
               <Input className="col-span-5" label="اسم المقاول" value={b.contractor} onChange={e => updateBid(b.id, 'contractor', e.target.value)} />
-              <Input className="col-span-3" type="number" label="السعر (ر.س)" value={b.price} onChange={e => updateBid(b.id, 'price', Number(e.target.value || 0))} />
+              <Input className="col-span-3" type="number" label={<span className="flex items-center gap-1">السعر <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} value={b.price} onChange={e => updateBid(b.id, 'price', Number(e.target.value || 0))} />
               <Input className="col-span-3" label="ملاحظات" value={b.notes || ''} onChange={e => updateBid(b.id, 'notes', e.target.value)} />
               <button onClick={() => setWinnerId(b.id)} className={`col-span-1 h-9 rounded-lg text-xs font-bold ${winnerId === b.id ? 'bg-amber-500 text-white' : 'bg-gray-100 dark:bg-slate-700'}`}>
                 <Trophy className="w-4 h-4 mx-auto" />
@@ -767,14 +767,14 @@ export const F85Renderer: FormRenderer = ({ rec, user, api }) => {
             {(d.bids || []).map((b: BidRow) => (
               <tr key={b.id} className="border-t dark:border-slate-700">
                 <td className="px-2 py-1.5 font-bold">{b.contractor}</td>
-                <td className="px-2 py-1.5">{b.price} ر.س</td>
+                <td className="px-2 py-1.5"><span className="inline-flex items-center gap-1">{b.price} <SaudiRiyalGlassIcon className="w-3.5 h-3.5 inline" /></span></td>
                 <td className="px-2 py-1.5 text-gray-500">{b.notes}</td>
                 <td className="px-2 py-1.5">{d.winnerId === b.id && <Pill tone="amber"><Trophy className="w-3 h-3" /> الفائز</Pill>}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        <p className="mt-3 text-sm font-bold text-purple-700 dark:text-purple-300">قيمة الترسية: {d.winnerPrice || 0} ر.س — {d.winnerContractor}</p>
+        <p className="mt-3 text-sm font-bold text-purple-700 dark:text-purple-300 flex items-center gap-1">قيمة الترسية: {d.winnerPrice || 0} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /> — {d.winnerContractor}</p>
       </Card>
     </FormShell>
   );
@@ -912,7 +912,7 @@ export const F15Creator: FormCreator = ({ user, api, context, onClose }) => {
           value={projectRefId} onChange={e => setProjectRefId(e.target.value)} />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
           <Select label="محطة الإنجاز" options={['30%', '60%', '90%', '100%']} value={milestone} onChange={e => setMilestone(e.target.value)} />
-          <Input type="number" label="قيمة الدفعة (ر.س)" value={amount} onChange={e => setAmount(e.target.value)} />
+          <Input type="number" label={<span className="flex items-center gap-1">قيمة الدفعة <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} value={amount} onChange={e => setAmount(e.target.value)} />
         </div>
         <TextArea className="mt-3" label="ملاحظات" rows={2} value={notes} onChange={e => setNotes(e.target.value)} />
       </Card>
@@ -927,7 +927,7 @@ export const F15Renderer: FormRenderer = ({ rec, user, api }) => {
       <Card title="بيانات الدفعة" icon={DollarSign}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <ReadOnlyField label="محطة الإنجاز" value={d.milestone} />
-          <ReadOnlyField label="القيمة" value={`${d.amount || 0} ر.س`} />
+          <ReadOnlyField label="القيمة" value={<span className="flex items-center gap-1">{Number(d.amount || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
         </div>
         <ReadOnlyField className="mt-3" label="ملاحظات" value={rec.notes} />
       </Card>
@@ -1294,7 +1294,7 @@ export const F34Creator: FormCreator = ({ user, api, context, onClose }) => {
       </Card>
       <Card title="ملخص المواد" icon={ShoppingCart}>
         <TextArea label="وصف المواد المطلوبة" rows={4} value={materialSummary} onChange={e => setMaterialSummary(e.target.value)} />
-        <Input className="mt-3" type="number" label="التكلفة التقديرية (ر.س)" value={totalCost}
+        <Input className="mt-3" type="number" label={<span className="flex items-center gap-1">التكلفة التقديرية <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} value={totalCost}
           onChange={e => setTotalCost(Number(e.target.value || 0))} />
       </Card>
     </CreatorShell>

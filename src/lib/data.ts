@@ -500,3 +500,7 @@ export const DEFAULT_LISTS = {
   educationLevels: ['لا يوجد تعليم', 'ابتدائية', 'متوسطه', 'ثانوية العامة', 'دبلوم', 'بكالوريوس', 'ماجستير', 'دكتوراه'],
   furnitureCondition: ['جيد', 'سيئ', 'يحتاج صيانة', 'يحتاج إضافة'],
 };
+
+/* SaudiRiyalGlassIcon lives in ./icons.tsx (JSX requires .tsx file extension).
+   Re-exported here so existing callers `from '../../lib/data'` keep working. */
+export { SaudiRiyalGlassIcon } from './icons';

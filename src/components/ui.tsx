@@ -94,17 +94,19 @@ export const TarmeemLogo = ({ variant = 'icon', size = 32, color = 'auto', class
 export const TarmeemSplash = ({ onComplete }: { onComplete: () => void }) => {
   const [exiting, setExiting] = useState(false);
   useEffect(() => {
-    const exitTimer = setTimeout(() => setExiting(true), 2700);
-    const completeTimer = setTimeout(() => onComplete(), 3300);
+    const exitTimer = setTimeout(() => setExiting(true), 1700);
+    const completeTimer = setTimeout(() => onComplete(), 2300);
     return () => { clearTimeout(exitTimer); clearTimeout(completeTimer); };
   }, [onComplete]);
 
   return (
-    <div dir="ltr" className={`splash-overlay ${exiting ? 'exiting' : ''}`} style={{
-      position: 'fixed', inset: 0, background: 'white', zIndex: 9999,
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
-      justifyContent: 'center', textAlign: 'center', gap: '24px',
-    }}>
+    <div dir="ltr"
+      className={`splash-overlay bg-white dark:bg-slate-950 ${exiting ? 'exiting' : ''}`}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        justifyContent: 'center', textAlign: 'center', gap: '24px',
+      }}>
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
         <TarmeemLogo variant="icon" size={200} animated={true} />
       </div>
@@ -163,7 +165,7 @@ export const Pill = ({ tone = 'gray', children, className = '' }: {
 export const Input = ({
   label, type = 'text', value, onChange, placeholder, className = '', readOnly = false, required = false, dir,
 }: {
-  label?: string; type?: string; value?: string | number; onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  label?: React.ReactNode; type?: string; value?: string | number; onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   placeholder?: string; className?: string; readOnly?: boolean; required?: boolean; dir?: 'ltr' | 'rtl';
 }) => (
   <div className={`flex flex-col gap-1 ${className}`}>

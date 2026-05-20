@@ -6,16 +6,17 @@
 
 import React, { useState } from 'react';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { writeBatch, doc, collection } from 'firebase/firestore';
 import {
   X, Send, Users as UsersIcon, Home as HomeIcon, Activity,
   Briefcase, DollarSign, FileSignature, ShieldCheck, Save, FileText,
 } from 'lucide-react';
 import { Card, Input, Select, TextArea, ReadOnlyField, FileUploader } from '../ui';
-import { DEFAULT_LISTS, SaudiRiyalGlassIcon, FormCode } from '../../lib/data';
+import { DEFAULT_LISTS, SaudiRiyalGlassIcon, FormCode, FORM_BY_CODE, RoleKey } from '../../lib/data';
 import { FormCreator, FormRenderer, formIsEditableByUser } from '../Forms';
 import type { FormRecord } from '../Forms';
 import { FormShell, SectionTitle } from './FormShell';
-import { storage } from '../../lib/firebase';
+import { storage, db } from '../../lib/firebase';
 
 /* ─── Domain types ───────────────────────────────────────────────── */
 
@@ -125,7 +126,7 @@ export const F02Creator: FormCreator = ({ user, api, context, onClose }) => {
     if (!data.pledge || !data.personal.fullName || !data.personal.idNumber) return;
     setBusy(true);
     try {
-      // 1) إنشاء المشروع + توليد TRM-ID
+      // 1) إنشاء المشروع + توليد TRM-ID (runTransaction-safe)
       const { projectId } = await context.generateProjectId();
       const projectRefId = await context.createProject({
         projectId,
@@ -139,33 +140,77 @@ export const F02Creator: FormCreator = ({ user, api, context, onClose }) => {
       });
       if (!projectRefId) throw new Error('Failed to create project');
 
-      // 2) إرسال F-02 المعبَّأة
-      await api.createForm({
-        code: 'F-02', user,
+      // 2) Atomic Big Bang — F-02 (pending) + 20 drafts in a single batch
+      const batch = writeBatch(db);
+      const now = new Date().toISOString();
+      const beneficiaryName = data.personal.fullName;
+
+      // F-02 itself — pending at stage 1 (researcher already filled stage 0)
+      const f02Def = FORM_BY_CODE['F-02'];
+      const f02Ref = doc(collection(db, 'forms'));
+      batch.set(f02Ref, {
+        code: 'F-02', title: f02Def.title,
         projectId, projectRefId,
-        beneficiaryName: data.personal.fullName,
-        notes:           data.researcher.opinion,
+        beneficiaryName,
+        status: 'pending', approvalIndex: 1,
+        approvalChain: f02Def.approvalChain,
+        approvals: [{
+          role: 'SOCIAL_RESEARCHER' as RoleKey,
+          actorId: user.id, actorName: user.fullName,
+          at: now, decision: 'approved' as const,
+          note: 'تم تعبئة الاستمارة وتقديمها',
+        }],
+        createdBy: user.id, createdByName: user.fullName,
+        createdByRole: user.role as RoleKey,
+        createdAt: now, updatedAt: now,
+        stepStartedAt: now,
+        ownerDept: f02Def.ownerDept,
+        bridgesTo: f02Def.bridgesTo || [],
+        notes: data.researcher.opinion || '',
         data,
+        assigneeId: null, files: [],
+        triggeredBy: null,
       });
 
-      // 3) Big Bang — توليد بقية النماذج كمسودات تنتظر التفعيل
-      const BIG_BANG_CODES: FormCode[] = [
+      // 20 drafts for the rest of the workflow
+      const DRAFT_CODES: FormCode[] = [
         'F-03', 'F-03.1', 'F-03.2',
         'F-04', 'F-08', 'F-18', 'F-22', 'F-21', 'F-20',
         'F-84', 'F-85', 'F-32', 'F-33', 'F-35', 'F-34',
         'F-19', 'F-14', 'F-23',
         'F-07', 'F-52',
       ];
-      for (const code of BIG_BANG_CODES) {
-        await api.createDraftForm({
-          code, user,
-          projectId, projectRefId,
-          beneficiaryName: data.personal.fullName,
+      for (const code of DRAFT_CODES) {
+        const def = FORM_BY_CODE[code];
+        if (!def) continue;
+        const ref = doc(collection(db, 'forms'));
+        batch.set(ref, {
+          code, title: def.title,
+          projectId, projectRefId, beneficiaryName,
+          status: 'draft', approvalIndex: 0,
+          approvalChain: def.approvalChain,
+          approvals: [],
+          createdBy: user.id, createdByName: user.fullName,
+          createdByRole: user.role as RoleKey,
+          createdAt: now, updatedAt: now,
+          stepStartedAt: null,
+          ownerDept: def.ownerDept,
+          bridgesTo: def.bridgesTo || [],
+          notes: '',
+          data: {},
+          assigneeId: null, files: [],
+          triggeredBy: null,
         });
       }
 
+      await batch.commit();
       onClose();
-    } finally { setBusy(false); }
+    } catch (e) {
+      console.error('Big Bang failed:', e);
+      alert('تعذّر إنشاء المشروع. حاول مرة أخرى.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const STEPS = ['البيانات الأساسية', 'العمل والدخل', 'الأسرة والسكن', 'الباحث والاعتماد'];

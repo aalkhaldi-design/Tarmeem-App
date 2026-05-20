@@ -9,6 +9,7 @@ import type { FormRecord } from './Forms';
 import type { ProjectRecord, FormsContext } from './forms/FormRenderers';
 import { RENDERERS } from './forms/FormRenderers';
 import type { UserProfile } from './Auth';
+import { ProjectActionsMenu } from './ProjectActionsMenu';
 
 const PHASE_LABELS: Record<ProjectRecord['phase'], string> = {
   RESEARCH: 'البحث الاجتماعي',
@@ -218,7 +219,10 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, user, use
             <p className="text-white/80 text-sm mt-1 flex items-center gap-2"><MapPin className="w-4 h-4" /> {project.city} {project.neighborhood ? `· ${project.neighborhood}` : ''}</p>
           </div>
           <div className="text-right">
-            <Pill tone={PHASE_TONES[project.phase]}>{PHASE_LABELS[project.phase]}</Pill>
+            <div className="flex items-center justify-end gap-2">
+              <Pill tone={PHASE_TONES[project.phase]}>{PHASE_LABELS[project.phase]}</Pill>
+              <ProjectActionsMenu project={project} user={user} context={context} />
+            </div>
             <p className="text-xs text-white/70 mt-2">آخر تحديث {new Date(project.updatedAt).toLocaleDateString('ar-SA')}</p>
           </div>
         </div>

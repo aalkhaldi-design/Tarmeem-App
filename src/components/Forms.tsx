@@ -1,13 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import {
   Send, CheckCircle, XCircle, Clock, ArrowLeft, AlertTriangle, Inbox, Plus,
-  GitBranch, ListChecks, X, Activity,
+  GitBranch, ListChecks, X, Activity, Ban,
 } from 'lucide-react';
 import {
   FORMS, FORM_BY_CODE, FORM_STATUS_LABELS,
   FormCode, FormDef, FormStatus, RoleKey, roleName,
   DepartmentKey, departmentName, slaStatus,
 } from '../lib/data';
+import { DECLINE_ELIGIBLE_FORMS } from '../lib/workflow';
 import { Card, Pill, EmptyState } from './ui';
 import type { UserProfile } from './Auth';
 
@@ -504,11 +505,14 @@ export const ApprovalActions: React.FC<{
   const [busy, setBusy] = useState(false);
   const awaits = formAwaitsUser(rec, user);
   if (!awaits) return null;
-  const act = async (kind: 'approve' | 'reject' | 'defer') => {
+  const canDecline = DECLINE_ELIGIBLE_FORMS.includes(rec.code as FormCode);
+  const act = async (kind: 'approve' | 'reject' | 'defer' | 'decline') => {
+    if ((kind === 'decline' || kind === 'reject') && !note.trim()) return;
     setBusy(true);
     try {
       if (kind === 'approve') await api.approveForm(rec.id, user, note);
       else if (kind === 'reject') await api.rejectForm(rec.id, user, note);
+      else if (kind === 'decline') await api.declineForm(rec.id, user, note);
       else await api.deferForm(rec.id, user, note);
       onAfter?.();
     } finally { setBusy(false); }
@@ -521,10 +525,21 @@ export const ApprovalActions: React.FC<{
       </div>
       <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="ملاحظتك (اختياري)"
         className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-[#56B894]" />
+      {canDecline && (
+        <p className="text-[10px] text-red-700 dark:text-red-300 -mt-1">
+          «رفض نهائي» قرار لا رجعة فيه ويتطلب كتابة السبب.
+        </p>
+      )}
       <div className="flex gap-2 flex-wrap">
         <button onClick={() => act('approve')} disabled={busy} className="flex-1 min-w-[120px] py-2 bg-green-600 text-white rounded-lg font-bold text-sm hover:bg-green-700 transition flex items-center justify-center gap-1.5"><CheckCircle className="w-4 h-4" /> {approveLabel}</button>
         {allowDefer && <button onClick={() => act('defer')} disabled={busy} className="px-4 py-2 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-200 rounded-lg font-bold text-sm transition flex items-center gap-1.5"><Clock className="w-4 h-4" /> تأجيل</button>}
         <button onClick={() => act('reject')} disabled={busy} className="flex-1 min-w-[120px] py-2 bg-red-600 text-white rounded-lg font-bold text-sm hover:bg-red-700 transition flex items-center justify-center gap-1.5"><XCircle className="w-4 h-4" /> رفض</button>
+        {canDecline && (
+          <button onClick={() => act('decline')} disabled={busy || !note.trim()}
+            className="flex-1 min-w-[120px] py-2 bg-red-700 text-white rounded-lg font-bold text-sm hover:bg-red-800 disabled:opacity-40 transition flex items-center justify-center gap-1.5">
+            <Ban className="w-4 h-4" /> رفض نهائي
+          </button>
+        )}
       </div>
     </div>
   );

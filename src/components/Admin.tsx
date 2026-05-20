@@ -315,9 +315,14 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
   const usersByDept = useMemo(() => {
     const map: Record<string, UserProfile[]> = {};
     for (const u of users) {
-      if (u.status !== 'active' || !u.department) continue;
+      if (u.status !== 'active') continue;
       if (!matchesSearch(u)) continue;
-      (map[u.department] ||= []).push(u);
+      // Group by role's canonical department, falling back to u.department.
+      // This keeps users in the right bucket even when u.department drifts
+      // from ROLE_BY_KEY[u.role].department after a partial edit.
+      const dept = ROLE_BY_KEY[u.role as RoleKey]?.department || u.department;
+      if (!dept) continue;
+      (map[dept] ||= []).push(u);
     }
     for (const k of Object.keys(map)) {
       map[k].sort((a, b) => {

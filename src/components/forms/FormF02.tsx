@@ -11,7 +11,7 @@ import {
   Briefcase, DollarSign, FileSignature, ShieldCheck, Save, FileText,
 } from 'lucide-react';
 import { Card, Input, Select, TextArea, ReadOnlyField, FileUploader } from '../ui';
-import { DEFAULT_LISTS } from '../../lib/data';
+import { DEFAULT_LISTS, SaudiRiyalGlassIcon, FormCode } from '../../lib/data';
 import { FormCreator, FormRenderer, formIsEditableByUser } from '../Forms';
 import type { FormRecord } from '../Forms';
 import { FormShell, SectionTitle } from './FormShell';
@@ -105,7 +105,7 @@ function sumValues(obj: Record<string, unknown>): number {
    F02Creator — 4-step wizard modal
    ═══════════════════════════════════════════════════════════════════ */
 
-export const F02Creator: FormCreator = ({ user, api, onClose }) => {
+export const F02Creator: FormCreator = ({ user, api, context, onClose }) => {
   const today = new Date().toISOString().split('T')[0];
   const [data, setData] = useState<F02Data>(() => ({
     ...EMPTY_F02,
@@ -125,13 +125,45 @@ export const F02Creator: FormCreator = ({ user, api, onClose }) => {
     if (!data.pledge || !data.personal.fullName || !data.personal.idNumber) return;
     setBusy(true);
     try {
+      // 1) إنشاء المشروع + توليد TRM-ID
+      const { projectId } = await context.generateProjectId();
+      const projectRefId = await context.createProject({
+        projectId,
+        beneficiaryName: data.personal.fullName,
+        city:            data.personal.city || '',
+        neighborhood:    data.personal.neighborhood || '',
+        caseRef:         data.caseRef,
+        phase:           'RESEARCH',
+        progressPct:     5,
+        createdBy:       user.id,
+      });
+      if (!projectRefId) throw new Error('Failed to create project');
+
+      // 2) إرسال F-02 المعبَّأة
       await api.createForm({
-        code: 'F-02',
-        user,
+        code: 'F-02', user,
+        projectId, projectRefId,
         beneficiaryName: data.personal.fullName,
         notes:           data.researcher.opinion,
         data,
       });
+
+      // 3) Big Bang — توليد بقية النماذج كمسودات تنتظر التفعيل
+      const BIG_BANG_CODES: FormCode[] = [
+        'F-03', 'F-03.1', 'F-03.2',
+        'F-04', 'F-08', 'F-18', 'F-22', 'F-21', 'F-20',
+        'F-84', 'F-85', 'F-32', 'F-33', 'F-35', 'F-34',
+        'F-19', 'F-14', 'F-23',
+        'F-07', 'F-52',
+      ];
+      for (const code of BIG_BANG_CODES) {
+        await api.createDraftForm({
+          code, user,
+          projectId, projectRefId,
+          beneficiaryName: data.personal.fullName,
+        });
+      }
+
       onClose();
     } finally { setBusy(false); }
   };
@@ -197,7 +229,7 @@ export const F02Creator: FormCreator = ({ user, api, onClose }) => {
                   <Select label="العمل الحالي"  options={['يعمل', 'لا يعمل']} value={data.work.currentJob}    onChange={e => upd('work', 'currentJob',    e.target.value)} />
                 </div>
               </Card>
-              <Card title="الدخل والديون الشهرية (ر.س)" icon={DollarSign} accent="teal">
+              <Card title="الدخل والديون الشهرية" icon={DollarSign} accent="teal">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <SectionTitle title="الدخل" />
@@ -205,7 +237,7 @@ export const F02Creator: FormCreator = ({ user, api, onClose }) => {
                       <Input key={k} type="number" label={INCOME_LABELS[k]} value={data.income[k]}
                         onChange={e => upd('income', k, Number(e.target.value || 0))} />
                     ))}
-                    <p className="text-xs font-bold text-green-700 dark:text-green-400 mt-2">الإجمالي: {totalIncome.toLocaleString('ar-SA')} ر.س</p>
+                    <p className="text-xs font-bold text-green-700 dark:text-green-400 mt-2 flex items-center gap-1">الإجمالي: {totalIncome.toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></p>
                   </div>
                   <div>
                     <SectionTitle title="الديون" />
@@ -213,7 +245,7 @@ export const F02Creator: FormCreator = ({ user, api, onClose }) => {
                       <Input key={k} type="number" label={DEBT_LABELS[k]} value={data.debts[k]}
                         onChange={e => upd('debts', k, Number(e.target.value || 0))} />
                     ))}
-                    <p className="text-xs font-bold text-red-700 dark:text-red-400 mt-2">الإجمالي: {totalDebts.toLocaleString('ar-SA')} ر.س</p>
+                    <p className="text-xs font-bold text-red-700 dark:text-red-400 mt-2 flex items-center gap-1">الإجمالي: {totalDebts.toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></p>
                   </div>
                 </div>
               </Card>
@@ -378,7 +410,7 @@ export const F02Renderer: FormRenderer = ({ rec, user, api }) => {
           </Card>
 
           {/* Section 3: Income & Debts */}
-          <Card title="الدخل والديون الشهرية (ر.س)" icon={DollarSign} accent="teal">
+          <Card title="الدخل والديون الشهرية" icon={DollarSign} accent="teal">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
                 <SectionTitle title="الدخل" />
@@ -386,7 +418,7 @@ export const F02Renderer: FormRenderer = ({ rec, user, api }) => {
                   <Input key={k} type="number" label={INCOME_LABELS[k]} value={draft.income[k]}
                     onChange={e => upd('income', k, Number(e.target.value || 0))} />
                 ))}
-                <p className="text-xs font-bold text-green-700 dark:text-green-400 mt-2">الإجمالي: {totalIncome.toLocaleString('ar-SA')} ر.س</p>
+                <p className="text-xs font-bold text-green-700 dark:text-green-400 mt-2 flex items-center gap-1">الإجمالي: {totalIncome.toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></p>
               </div>
               <div>
                 <SectionTitle title="الديون" />
@@ -394,7 +426,7 @@ export const F02Renderer: FormRenderer = ({ rec, user, api }) => {
                   <Input key={k} type="number" label={DEBT_LABELS[k]} value={draft.debts[k]}
                     onChange={e => upd('debts', k, Number(e.target.value || 0))} />
                 ))}
-                <p className="text-xs font-bold text-red-700 dark:text-red-400 mt-2">الإجمالي: {totalDebts.toLocaleString('ar-SA')} ر.س</p>
+                <p className="text-xs font-bold text-red-700 dark:text-red-400 mt-2 flex items-center gap-1">الإجمالي: {totalDebts.toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></p>
               </div>
             </div>
           </Card>
@@ -498,13 +530,13 @@ export const F02Renderer: FormRenderer = ({ rec, user, api }) => {
                       d.income[k] > 0 ? (
                         <tr key={k} className="border-b border-subtle last:border-0">
                           <td className="py-1 text-fg-muted">{label}</td>
-                          <td className="py-1 text-left font-mono text-fg">{d.income[k].toLocaleString('ar-SA')} ر.س</td>
+                          <td className="py-1 text-left font-mono text-fg">{d.income[k].toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-3.5 h-3.5 inline" /></td>
                         </tr>
                       ) : null
                     )}
                     <tr>
                       <td className="py-1.5 font-bold text-green-700 dark:text-green-400">الإجمالي</td>
-                      <td className="py-1.5 text-left font-mono font-bold text-green-700 dark:text-green-400">{revIncome.toLocaleString('ar-SA')} ر.س</td>
+                      <td className="py-1.5 text-left font-mono font-bold text-green-700 dark:text-green-400">{revIncome.toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></td>
                     </tr>
                   </tbody>
                 </table>
@@ -517,13 +549,13 @@ export const F02Renderer: FormRenderer = ({ rec, user, api }) => {
                       d.debts[k] > 0 ? (
                         <tr key={k} className="border-b border-subtle last:border-0">
                           <td className="py-1 text-fg-muted">{label}</td>
-                          <td className="py-1 text-left font-mono text-fg">{d.debts[k].toLocaleString('ar-SA')} ر.س</td>
+                          <td className="py-1 text-left font-mono text-fg">{d.debts[k].toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-3.5 h-3.5 inline" /></td>
                         </tr>
                       ) : null
                     )}
                     <tr>
                       <td className="py-1.5 font-bold text-red-700 dark:text-red-400">الإجمالي</td>
-                      <td className="py-1.5 text-left font-mono font-bold text-red-700 dark:text-red-400">{revDebts.toLocaleString('ar-SA')} ر.س</td>
+                      <td className="py-1.5 text-left font-mono font-bold text-red-700 dark:text-red-400">{revDebts.toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></td>
                     </tr>
                   </tbody>
                 </table>

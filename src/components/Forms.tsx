@@ -93,6 +93,14 @@ export interface FormsApi {
     assigneeId?: string | null;
     files?: FormRecord['files'];
   }) => Promise<string | null>;
+  /** ينشئ نموذج مسودة دون اعتماد ابتدائي ولا إشعارات — يُستخدم في Big Bang عند إنشاء المشروع */
+  createDraftForm: (input: {
+    code: FormCode;
+    user: UserProfile;
+    projectId?: string | null;
+    projectRefId?: string | null;
+    beneficiaryName?: string;
+  }) => Promise<string | null>;
   approveForm: (formId: string, user: UserProfile, note?: string, dataPatch?: Record<string, any>) => Promise<void>;
   rejectForm: (formId: string, user: UserProfile, note?: string) => Promise<void>;
   deferForm: (formId: string, user: UserProfile, note?: string) => Promise<void>;

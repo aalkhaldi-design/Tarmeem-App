@@ -1,11 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Building2, MapPin, FileText, Activity, ArrowLeft,
+  Building2, MapPin, FileText, Activity, ArrowLeft, ChevronDown, ChevronUp, Lock,
 } from 'lucide-react';
 import { Card, Pill, ProgressBar, SearchBar, EmptyState } from './ui';
-import { FORM_BY_CODE, roleName } from '../lib/data';
-import { FormCard, FormsApi, formAwaitsUser } from './Forms';
-import type { ProjectRecord } from './forms/FormRenderers';
+import { FORM_BY_CODE, FormCode, roleName, SaudiRiyalGlassIcon } from '../lib/data';
+import { FormsApi, formAwaitsUser } from './Forms';
+import type { FormRecord } from './Forms';
+import type { ProjectRecord, FormsContext } from './forms/FormRenderers';
+import { RENDERERS } from './forms/FormRenderers';
 import type { UserProfile } from './Auth';
 
 const PHASE_LABELS: Record<ProjectRecord['phase'], string> = {
@@ -16,9 +18,11 @@ const PHASE_LABELS: Record<ProjectRecord['phase'], string> = {
   EXECUTION: 'التنفيذ والإشراف',
   HANDOVER: 'التسليم',
   CLOSED: 'مغلق',
+  REJECTED: 'مرفوض',
+  CANCELLED: 'ملغى',
 };
 
-const PHASE_TONES: Record<ProjectRecord['phase'], 'gray' | 'amber' | 'blue' | 'purple' | 'green' | 'teal'> = {
+const PHASE_TONES: Record<ProjectRecord['phase'], 'gray' | 'amber' | 'blue' | 'purple' | 'green' | 'teal' | 'red'> = {
   RESEARCH: 'blue',
   DIAGNOSIS: 'purple',
   EVACUATION: 'amber',
@@ -26,6 +30,8 @@ const PHASE_TONES: Record<ProjectRecord['phase'], 'gray' | 'amber' | 'blue' | 'p
   EXECUTION: 'teal',
   HANDOVER: 'green',
   CLOSED: 'gray',
+  REJECTED: 'red',
+  CANCELLED: 'gray',
 };
 
 interface MasterProjectListProps {
@@ -120,15 +126,85 @@ interface ProjectDetailProps {
   user: UserProfile;
   users: UserProfile[];
   api: FormsApi;
+  context: FormsContext;
   onBack: () => void;
   onOpenForm: (id: string) => void;
 }
 
-export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, user, users, api, onBack, onOpenForm }) => {
-  const projectForms = api.forms.filter(f => f.projectRefId === project.id);
+type PhaseIdx = 1 | 2 | 3 | 4 | 5;
+
+const PHASE_FORMS: Record<PhaseIdx, FormCode[]> = {
+  1: ['F-02', 'F-03', 'F-03.1', 'F-03.2'],
+  2: ['F-04', 'F-08', 'F-18', 'F-22', 'F-21', 'F-20'],
+  3: ['F-84', 'F-85', 'F-32', 'F-33', 'F-35'],
+  4: ['F-34', 'F-19', 'F-14', 'F-23', 'F-15'],
+  5: ['F-07', 'F-52'],
+};
+
+const PHASE_TITLES: Record<PhaseIdx, string> = {
+  1: 'الدراسة والاعتماد',
+  2: 'التشخيص والتجهيز',
+  3: 'الترسية والبدء',
+  4: 'التنفيذ والصرف',
+  5: 'الإغلاق',
+};
+
+const PROJECT_PHASE_TO_TAB: Record<ProjectRecord['phase'], PhaseIdx> = {
+  RESEARCH:   1,
+  DIAGNOSIS:  2,
+  EVACUATION: 2,
+  TENDERING:  3,
+  EXECUTION:  4,
+  HANDOVER:   5,
+  CLOSED:     5,
+  REJECTED:   1,
+  CANCELLED:  1,
+};
+
+export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, user, users, api, context, onBack }) => {
+  const projectForms = useMemo(
+    () => api.forms.filter(f => f.projectRefId === project.id),
+    [api.forms, project.id],
+  );
   const filesAll = projectForms.flatMap(f => (f.files || []).map(file => ({ ...file, formCode: f.code })));
   const diagnosisEng = users.find(u => u.id === project.diagnosisEngineerId);
   const supervisingEng = users.find(u => u.id === project.supervisingEngineerId);
+
+  const [activePhase, setActivePhase] = useState<PhaseIdx>(() => PROJECT_PHASE_TO_TAB[project.phase] || 1);
+  const [unfolded, setUnfolded] = useState<string[]>([]);
+  const toggle = (id: string) =>
+    setUnfolded(arr => arr.includes(id) ? arr.filter(x => x !== id) : [...arr, id]);
+
+  // F-08 safety hazard gates F-18 / F-22 visibility
+  const safetyHazard = useMemo(() => {
+    const f08 = projectForms.find(f => f.code === 'F-08');
+    return !!(f08?.data as { safetyHazard?: boolean } | undefined)?.safetyHazard;
+  }, [projectForms]);
+
+  // Build ordered form list for the active phase
+  const phaseForms = useMemo<FormRecord[]>(() => {
+    const codes = PHASE_FORMS[activePhase];
+    const buckets: FormRecord[] = [];
+    for (const code of codes) {
+      if ((code === 'F-18' || code === 'F-22') && !safetyHazard) continue;
+      const matches = projectForms.filter(f => f.code === code);
+      if (code === 'F-14') {
+        matches.sort((a, b) => {
+          const va = Number((a.data as { visitNumber?: number } | undefined)?.visitNumber || 1);
+          const vb = Number((b.data as { visitNumber?: number } | undefined)?.visitNumber || 1);
+          return va - vb;
+        });
+      } else if (code === 'F-15') {
+        matches.sort((a, b) => {
+          const pa = Number((a.data as { paymentIndex?: number } | undefined)?.paymentIndex || 1);
+          const pb = Number((b.data as { paymentIndex?: number } | undefined)?.paymentIndex || 1);
+          return pa - pb;
+        });
+      }
+      buckets.push(...matches);
+    }
+    return buckets;
+  }, [projectForms, activePhase, safetyHazard]);
 
   return (
     <div dir="rtl" className="space-y-4">
@@ -175,22 +251,55 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, user, use
           {project.contractorName ? (
             <>
               <p className="text-sm font-bold">{project.contractorName}</p>
-              {project.awardedPrice && <p className="text-[11px] text-gray-500 dark:text-slate-400">{project.awardedPrice} ر.س</p>}
+              {project.awardedPrice && (
+                <p className="text-[11px] text-gray-500 dark:text-slate-400 flex items-center gap-1">
+                  {project.awardedPrice.toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-3.5 h-3.5 inline" />
+                </p>
+              )}
             </>
           ) : <p className="text-xs text-gray-400">لم تتم الترسية بعد</p>}
         </div>
       </div>
 
-      <Card title={`نماذج المشروع (${projectForms.length})`} icon={FileText}>
-        {projectForms.length === 0 ? (
-          <EmptyState icon={FileText} title="لا توجد نماذج بعد" />
+      {/* Phase tracker */}
+      <div className="flex w-full gap-2 rounded-2xl bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 p-2 shadow-sm">
+        {([1, 2, 3, 4, 5] as PhaseIdx[]).map(p => {
+          const isActive = p === activePhase;
+          return (
+            <button key={p} onClick={() => setActivePhase(p)}
+              className={`transition-all duration-500 rounded-xl text-center px-3 py-2.5 font-bold text-xs
+                ${isActive ? 'flex-[4] bg-gradient-to-l from-[#4A1F66] to-[#6B3D87] text-white shadow' : 'flex-[1] bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 hover:text-gray-700'}`}>
+              {isActive ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center text-[11px]">{p}</span>
+                  <span>{PHASE_TITLES[p]}</span>
+                </span>
+              ) : (
+                <span>{p}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Phase forms accordion */}
+      <Card title={`نماذج ${PHASE_TITLES[activePhase]} (${phaseForms.length})`} icon={FileText}>
+        {phaseForms.length === 0 ? (
+          <EmptyState icon={FileText} title="لا توجد نماذج في هذه المرحلة" />
         ) : (
           <div className="space-y-2">
-            {projectForms
-              .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-              .map(f => (
-                <FormCard key={f.id} rec={f} highlight={formAwaitsUser(f, user)} onOpen={() => onOpenForm(f.id)} />
-              ))}
+            {phaseForms.map(f => (
+              <FormAccordionItem
+                key={f.id}
+                rec={f}
+                user={user}
+                users={users}
+                api={api}
+                context={context}
+                open={unfolded.includes(f.id)}
+                onToggle={() => toggle(f.id)}
+              />
+            ))}
           </div>
         )}
       </Card>
@@ -216,6 +325,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, user, use
       <Card title="الجدول الزمني" icon={Activity}>
         <ol className="space-y-2">
           {projectForms
+            .filter(f => f.status !== 'draft')
             .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
             .map(f => (
               <li key={f.id} className="flex items-start gap-3 p-2 rounded-lg border border-gray-200 dark:border-slate-700">
@@ -234,6 +344,91 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, user, use
             ))}
         </ol>
       </Card>
+    </div>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
+   FormAccordionItem — collapsible form row with inline renderer
+   ────────────────────────────────────────────────────────────────── */
+
+const FormAccordionItem: React.FC<{
+  rec: FormRecord;
+  user: UserProfile;
+  users: UserProfile[];
+  api: FormsApi;
+  context: FormsContext;
+  open: boolean;
+  onToggle: () => void;
+}> = ({ rec, user, users, api, context, open, onToggle }) => {
+  const def = FORM_BY_CODE[rec.code];
+  const Renderer = RENDERERS[rec.code];
+  const awaits = formAwaitsUser(rec, user);
+  const isClosed = rec.status === 'approved' || rec.status === 'completed';
+  const visitN = (rec.data as { visitNumber?: number } | undefined)?.visitNumber;
+  const paymentIdx = (rec.data as { paymentIndex?: number } | undefined)?.paymentIndex;
+  const suffix =
+    rec.code === 'F-14' && visitN ? ` · زيارة ${visitN}` :
+    rec.code === 'F-15' && paymentIdx ? ` · دفعة ${paymentIdx}` :
+    '';
+  const statusTone =
+    rec.status === 'approved'  ? 'green'  :
+    rec.status === 'completed' ? 'green'  :
+    rec.status === 'rejected'  ? 'red'    :
+    rec.status === 'declined'  ? 'red'    :
+    rec.status === 'pending'   ? 'amber'  :
+    rec.status === 'deferred'  ? 'blue'   :
+    'gray';
+  const statusLabel: Record<FormRecord['status'], string> = {
+    draft:     'مسودة',
+    pending:   'بانتظار الاعتماد',
+    approved:  'معتمد',
+    rejected:  'مرفوض',
+    deferred:  'مؤجَّل',
+    completed: 'مكتمل',
+    declined:  'مرفوض نهائياً',
+  };
+
+  return (
+    <div className={`rounded-xl border-2 transition overflow-hidden bg-white dark:bg-slate-800
+      ${isClosed ? 'border-[#43bba1]' : 'border-[#6B3D87]/40'}`}>
+      <button onClick={onToggle}
+        className="w-full text-right flex items-start gap-3 p-3 hover:bg-gray-50 dark:hover:bg-slate-700/40 transition">
+        <div className="w-10 h-10 rounded-lg bg-[#4A1F66]/10 dark:bg-purple-900/40 text-[#4A1F66] dark:text-purple-300 flex items-center justify-center font-bold text-[11px] shrink-0">
+          {rec.code}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-bold text-gray-800 dark:text-slate-100 truncate">{rec.title || def?.title}{suffix}</span>
+            <Pill tone={statusTone}>{statusLabel[rec.status]}</Pill>
+            {awaits && <Pill tone="amber">بانتظار اعتمادك</Pill>}
+          </div>
+          {rec.status === 'pending' && rec.approvalIndex < rec.approvalChain.length && (
+            <p className="text-[11px] text-gray-500 dark:text-slate-400 mt-0.5">
+              التالي: {roleName(rec.approvalChain[rec.approvalIndex])}
+            </p>
+          )}
+          {rec.status === 'draft' && (
+            <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-0.5 flex items-center gap-1">
+              <Lock className="w-3 h-3" /> مقفل — يفتح تلقائياً عند تفعيل النموذج
+            </p>
+          )}
+        </div>
+        <div className="shrink-0 text-gray-400 mt-1">
+          {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </div>
+      </button>
+      {open && (
+        <div className="border-t border-gray-200 dark:border-slate-700 p-3 bg-gray-50/50 dark:bg-slate-900/40">
+          {Renderer ? (
+            <Renderer rec={rec} user={user} api={api} users={users} context={context} onClose={onToggle} />
+          ) : (
+            <p className="text-xs text-gray-500 dark:text-slate-400 text-center py-6">
+              لا يوجد عرض مخصص لهذا النموذج. افتح من صندوق الوارد للوصول إلى الإجراءات.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 };

@@ -64,6 +64,7 @@ export function getCurrentApprovalStep(rec: FormRecord): { role: string; index: 
    must be listed here. Add new keys here before adding them to a trigger.
    ────────────────────────────────────────────────────────────────── */
 export const ACTIVATE_DATA_PROPAGATIONS = {
+  'F-02 → F-03':   ['managerNotes', 'eligibilityVerdict'],
   'F-03 → F-03.1': ['managerNotes', 'eligibilityVerdict'],
   'F-84 → F-85':   ['f84_bids', 'f84_pricingNotes'],
   'F-33 → F-14':   ['f08_works', 'visitNumber'],

@@ -45,7 +45,13 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
 
   'F-02': (ctx) => {
     const f03 = ctx.forms.find(f => f.code === 'F-03' && f.projectRefId === ctx.approvedRecord.projectRefId);
-    return { activate: f03 ? [{ formId: f03.id }] : [] };
+    const src = (ctx.approvedRecord.data || {}) as { managerNotes?: string; eligibilityVerdict?: string };
+    return {
+      activate: f03 ? [{
+        formId: f03.id,
+        data: { managerNotes: src.managerNotes, eligibilityVerdict: src.eligibilityVerdict },
+      }] : [],
+    };
   },
 
   'F-03': (ctx) => {

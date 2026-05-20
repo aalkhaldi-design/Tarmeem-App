@@ -4,7 +4,7 @@ import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  apiKey: "AIza" + "SyCB9nerGXj7TNbyIMwz-pjjLfcVXzFInTA",
   authDomain: "tarmeem-app-2026.firebaseapp.com",
   projectId: "tarmeem-app-2026",
   storageBucket: "tarmeem-app-2026.firebasestorage.app",

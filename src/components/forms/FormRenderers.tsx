@@ -13,7 +13,7 @@ import {
   X, Send, Plus, Building2, Users as UsersIcon, Home as HomeIcon, Activity,
   ClipboardList, Calculator, Trophy, ShieldCheck, Camera, Truck, ShoppingCart,
   DollarSign, Briefcase, FileSignature, AlertTriangle, CheckCircle2,
-  Calendar,
+  Calendar, PenTool, Edit3, Eye, Sofa, ChevronUp, ChevronDown, Trash2,
 } from 'lucide-react';
 
 import {
@@ -22,9 +22,11 @@ import {
 } from '../ui';
 import { DEFAULT_LISTS, FormCode, SaudiRiyalGlassIcon } from '../../lib/data';
 import {
-  FormCreator, FormRenderer, formAwaitsUser, FormRecord,
+  FormCreator, FormRenderer, formAwaitsUser, formIsEditableByUser, FormRecord,
 } from '../Forms';
 import { FormShell, SectionTitle } from './FormShell';
+import { CroquisEditorModal, type Point, type Fixture } from './CroquisEditor';
+import { CroquisMiniViewer } from './CroquisMiniViewer';
 import type { UserProfile } from '../Auth';
 
 /* ──────────────────────────────────────────────────────────────────
@@ -288,31 +290,681 @@ export const F08Creator: FormCreator = ({ user, api, context, onClose }) => {
   );
 };
 
-export const F08Renderer: FormRenderer = ({ rec, user, api }) => {
-  const d = rec.data || {};
+/* ──────────────────────────────────────────────────────────────────
+   F-08 — كراسة تشخيص المبنى (5-tab binder with Croquis integration)
+   Ported from docs/raw/geminiconversation__1_.txt lines 30742–31250.
+   Approval chain unchanged: [DIAGNOSIS_ENGINEER, HEAD_DIAGNOSIS].
+   FormShell wraps the binder so reject/decline/defer still work.
+   ────────────────────────────────────────────────────────────────── */
+
+interface F08Croquis {
+  id: number;
+  floorNum: string;
+  roomName: string;
+  paths: Point[][];
+  fixtures: Fixture[];
+  area: string;       // calculated by editor, "12.34"
+  title?: string;     // derived "floor - room" for the simpler API surface
+}
+
+export const F08Renderer: FormRenderer = ({ rec, user, api, context, users }) => {
+  const canEdit = formIsEditableByUser(rec, user);
+  const awaitsMe = formAwaitsUser(rec, user);
+
+  const [step, setStep] = useState(0);
+  const [activeCroquisId, setActiveCroquisId] = useState<number | null>(null);
+  const [activeNoteKey, setActiveNoteKey] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const [data, setData] = useState<any>(() => ({
+    autoFilled: false,
+    familyName: '', contactNum: '', caseRef: '', projectId: '', partner: '',
+    cityNeighborhood: '', partnerRep: '', partnerRepNum: '',
+    visitDate: new Date().toISOString().split('T')[0],
+    type: 'منزل', area: '', age: '', team: '',
+    diagnosisResult: 'قابل للترميم', diagnosisResultOther: '',
+    noEvacuation: false, safetyHazard: false, summary: '',
+    works: [],
+    housingType: 'منزل', housingCondition: 'ترميم',
+    familyCountFemale: 0, familyCountMale: 0,
+    furnitureFixed: { bedSingle: 0, bed15: 0, bedDouble: 0, mattressSingle: 0, mattress15: 0, mattressDouble: 0, sofaMeters: 0, floorSeating: 0, carpet: 0, wardrobe2: 0, wardrobe3: 0, wardrobe4: 0, nightstand: 0, vanity: 0 },
+    furnitureCustom: [],
+    furnitureNotes: {},
+    appliancesFixed: { acSplit1: 0, acSplit15: 0, acWindow15: 0, washer: 0, stove: 0, fridge: 0, vacuum: 0, waterCooler: 0 },
+    appliancesCustom: [],
+    appliancesNotes: {},
+    croquisList: [] as F08Croquis[],
+    diagnosisNotes: '', pledge: false,
+    ...(rec.data || {}),
+  }));
+
+  // Auto-fill from F-02 + F-04 on first mount (verbatim Gemini logic)
+  useEffect(() => {
+    if (data.autoFilled) return;
+    const project = context?.projects?.find((p: any) => p.id === rec.projectRefId);
+    const f02 = api.forms.find(f => f.code === 'F-02' && f.projectRefId === rec.projectRefId);
+    const f04 = api.forms.find(f => f.code === 'F-04' && f.projectRefId === rec.projectRefId);
+    let teamStr = '';
+    if (f04) {
+      const head = users.find(u => u.id === f04.createdBy)?.fullName || '';
+      const eng = users.find(u => u.id === (f04.data as any)?.engineerId)?.fullName || '';
+      const helpers = (((f04.data as any)?.helpers as string[] | undefined) || [])
+        .map(hid => users.find(u => u.id === hid)?.fullName)
+        .filter(Boolean)
+        .join('، ');
+      teamStr = `رئيس التشخيص: ${head} | مهندس التشخيص: ${eng}` + (helpers ? ` | الفزعة: ${helpers}` : '');
+    }
+    setData((prev: any) => ({
+      ...prev,
+      familyName: prev.familyName || rec.beneficiaryName || '',
+      contactNum: prev.contactNum || (f02?.data as any)?.personal?.mobile1 || '',
+      caseRef: prev.caseRef || (f02?.data as any)?.caseRef || '',
+      projectId: prev.projectId || project?.projectId || '',
+      cityNeighborhood: prev.cityNeighborhood || `${(f02?.data as any)?.personal?.city || ''} - ${(f02?.data as any)?.personal?.neighborhood || ''}`,
+      team: prev.team || teamStr,
+      autoFilled: true,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ───── Works (Tab 2) CRUD ───── */
+  const addWorkSpace = () => setData((prev: any) => ({
+    ...prev,
+    works: [...prev.works, {
+      id: Date.now(), name: '', isExpanded: true, images: [],
+      civilFixed: { ceiling: '', concrete: '', ceramic: '', insulation: '', plaster: '', paint: '', aluminum: '', wood: '' },
+      civilCustom: [], civilNotes: '',
+      electricalFixed: { ceilingLight: 0, breaker: 0, normalSocket: 0, spotlight: 0 },
+      electricalCustom: [], electricalNotes: '',
+      plumbingFixed: { westernToilet: 0, arabicToilet: 0, ceramicSink: 0, heater: 0 },
+      plumbingCustom: [], plumbingNotes: '',
+    }],
+  }));
+  const removeWorkSpace = (id: number) => setData((prev: any) => ({ ...prev, works: prev.works.filter((w: any) => w.id !== id) }));
+  const toggleExpand = (id: number) => setData((prev: any) => ({ ...prev, works: prev.works.map((w: any) => w.id === id ? { ...w, isExpanded: !w.isExpanded } : w) }));
+  const updateWorkSpace = (id: number, category: string | null, field: string, value: any) => setData((prev: any) => ({
+    ...prev,
+    works: prev.works.map((w: any) => {
+      if (w.id !== id) return w;
+      if (category) return { ...w, [category]: { ...w[category], [field]: value } };
+      return { ...w, [field]: value };
+    }),
+  }));
+  const addSpaceCustomField = (spaceId: number, category: 'civilCustom' | 'electricalCustom' | 'plumbingCustom') => setData((prev: any) => ({
+    ...prev,
+    works: prev.works.map((w: any) => w.id === spaceId
+      ? { ...w, [category]: [...w[category], { id: Date.now(), name: '', value: category === 'civilCustom' ? '' : 0 }] }
+      : w),
+  }));
+  const updateSpaceCustomField = (spaceId: number, category: string, fieldId: number, key: string, val: any) => setData((prev: any) => ({
+    ...prev,
+    works: prev.works.map((w: any) => w.id === spaceId
+      ? { ...w, [category]: w[category].map((f: any) => f.id === fieldId ? { ...f, [key]: val } : f) }
+      : w),
+  }));
+  const removeSpaceCustomField = (spaceId: number, category: string, fieldId: number) => setData((prev: any) => ({
+    ...prev,
+    works: prev.works.map((w: any) => w.id === spaceId
+      ? { ...w, [category]: w[category].filter((f: any) => f.id !== fieldId) }
+      : w),
+  }));
+
+  /* ───── Tab 3 helpers ───── */
+  const updateNestedData = (group: string, key: string, val: any) =>
+    setData((prev: any) => ({ ...prev, [group]: { ...prev[group], [key]: val } }));
+  const toggleNote = (key: string) => setActiveNoteKey(prev => prev === key ? null : key);
+
+  /* ───── Croquis (Tab 4) CRUD ───── */
+  const addCroquis = () => {
+    const newCroquis: F08Croquis = { id: Date.now(), floorNum: '', roomName: '', paths: [], fixtures: [], area: '0' };
+    setData((prev: any) => ({ ...prev, croquisList: [...(prev.croquisList || []), newCroquis] }));
+    setActiveCroquisId(newCroquis.id);
+  };
+  const updateCroquis = (id: number, key: keyof F08Croquis, value: any) =>
+    setData((prev: any) => ({ ...prev, croquisList: prev.croquisList.map((c: F08Croquis) => c.id === id ? { ...c, [key]: value } : c) }));
+  const removeCroquis = (id: number) =>
+    setData((prev: any) => ({ ...prev, croquisList: prev.croquisList.filter((c: F08Croquis) => c.id !== id) }));
+  const saveCroquisFromEditor = (paths: Point[][], fixtures: Fixture[], area: string) => {
+    setData((prev: any) => ({
+      ...prev,
+      croquisList: prev.croquisList.map((c: F08Croquis) => c.id === activeCroquisId
+        ? { ...c, paths, fixtures, area, title: [c.floorNum, c.roomName].filter(Boolean).join(' - ') }
+        : c),
+    }));
+    setActiveCroquisId(null);
+  };
+
+  const activeCroquis = (data.croquisList as F08Croquis[]).find(c => c.id === activeCroquisId);
+
+  const save = async () => {
+    setSaving(true);
+    try { await api.updateFormData(rec.id, data); }
+    finally { setSaving(false); }
+  };
+
+  const steps = ['الأساسية', 'حصر الأعمال', 'الأثاث والأجهزة', 'كروكي المبنى', 'الاعتماد والرفع'];
+
   return (
     <FormShell rec={rec} user={user} api={api}>
-      <Card title="بيانات الزيارة" icon={Calendar}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <ReadOnlyField label="تاريخ الزيارة" value={d.visitDate} />
-          <ReadOnlyField label="فريق التشخيص" value={d.team} />
-          <ReadOnlyField label="المساحة التقريبية" value={d.area} />
-          <ReadOnlyField label="العمر التقديري" value={d.age} />
+      {/* Full-screen Croquis editor overlay */}
+      {activeCroquis && (
+        <CroquisEditorModal
+          initialPaths={activeCroquis.paths || []}
+          initialFixtures={activeCroquis.fixtures || []}
+          readOnly={!canEdit}
+          onSave={saveCroquisFromEditor}
+          onClose={() => setActiveCroquisId(null)}
+        />
+      )}
+
+      {/* Tab strip — sticky scroll-snap */}
+      <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-surface dark:bg-slate-900 border-b border-subtle dark:border-slate-700 flex gap-2 overflow-x-auto snap-x snap-mandatory hide-scrollbar">
+        {steps.map((s, i) => (
+          <button key={i} onClick={() => setStep(i)}
+            className={`snap-start flex-shrink-0 min-w-[120px] py-2 px-3 rounded-xl text-xs font-bold transition-all
+              ${i === step ? 'bg-[#4A1F66] text-white shadow' : 'bg-gray-100 dark:bg-slate-800 text-fg-muted dark:text-slate-400'}`}>
+            {i + 1}. {s}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab 1 — الأساسية */}
+      {step === 0 && (
+        <div className="space-y-4">
+          <Card title="بيانات الأسرة والمنزل (تُجلب من F-02)" icon={HomeIcon}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <Input readOnly={!canEdit} label="اسم الأسرة" value={data.familyName} onChange={(e) => setData({ ...data, familyName: e.target.value })} />
+              <Input readOnly={!canEdit} label="رقم التواصل" value={data.contactNum} onChange={(e) => setData({ ...data, contactNum: e.target.value })} />
+              <Input readOnly={!canEdit} label="رقم المشروع" value={data.projectId} onChange={(e) => setData({ ...data, projectId: e.target.value })} />
+              <Input readOnly={!canEdit} label="رقم الحالة المرجعي" value={data.caseRef} onChange={(e) => setData({ ...data, caseRef: e.target.value })} />
+              <Input readOnly={!canEdit} label="الجهة الشريكة" value={data.partner} onChange={(e) => setData({ ...data, partner: e.target.value })} />
+              <Input readOnly={!canEdit} label="المدينة - الحي" value={data.cityNeighborhood} onChange={(e) => setData({ ...data, cityNeighborhood: e.target.value })} />
+              <Input readOnly={!canEdit} label="ممثل الجهة الشريكة" value={data.partnerRep} onChange={(e) => setData({ ...data, partnerRep: e.target.value })} />
+              <Input readOnly={!canEdit} label="رقم تواصل الممثل" value={data.partnerRepNum} onChange={(e) => setData({ ...data, partnerRepNum: e.target.value })} />
+            </div>
+          </Card>
+
+          <Card title="زيارة التشخيص" icon={Activity}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+              <Input type="date" readOnly={!canEdit} label="تاريخ الزيارة" value={data.visitDate} onChange={(e) => setData({ ...data, visitDate: e.target.value })} />
+              <Select readOnly={!canEdit} label="نوع المبنى" options={['منزل', 'شقة', 'ملحق', 'شعبي']} value={data.type} onChange={(e) => setData({ ...data, type: e.target.value })} />
+              <Input readOnly={!canEdit} label="المساحة التقريبية (م²)" value={data.area} onChange={(e) => setData({ ...data, area: e.target.value })} />
+              <Input readOnly={!canEdit} label="العمر التقديري (سنوات)" value={data.age} onChange={(e) => setData({ ...data, age: e.target.value })} />
+              <Input className="md:col-span-2" readOnly={!canEdit} label="فريق التشخيص (يُجلب من F-04)" value={data.team} onChange={(e) => setData({ ...data, team: e.target.value })} />
+            </div>
+
+            <label className="block text-xs font-bold text-fg-muted mb-2">النتيجة المبدئية للزيارة:</label>
+            <div className="flex flex-wrap gap-4 mb-4 p-3 rounded-lg border border-subtle bg-surface-up">
+              {['قابل للترميم', 'غير قابل للترميم', 'يحوّل صيانة', 'أخرى'].map(res => (
+                <label key={res} className="flex items-center gap-2 cursor-pointer text-sm font-semibold">
+                  <input disabled={!canEdit} type="radio" checked={data.diagnosisResult === res}
+                    onChange={() => setData({ ...data, diagnosisResult: res })}
+                    className="w-4 h-4 accent-[#43bba1]" />
+                  {res}
+                </label>
+              ))}
+              {data.diagnosisResult === 'أخرى' && (
+                <div className="w-full mt-2">
+                  <Input readOnly={!canEdit} placeholder="حدد النتيجة..." value={data.diagnosisResultOther}
+                    onChange={(e) => setData({ ...data, diagnosisResultOther: e.target.value })} />
+                </div>
+              )}
+            </div>
+
+            <div className={`mt-3 p-3 rounded-lg flex items-start gap-3 transition border-2 ${data.noEvacuation ? 'bg-[#05110e] border-[#43bba1]/50' : 'bg-surface-up border-subtle'}`}>
+              <input disabled={!canEdit} type="checkbox" checked={data.noEvacuation}
+                onChange={(e) => setData({ ...data, noEvacuation: e.target.checked, safetyHazard: false })}
+                className="w-5 h-5 mt-0.5 rounded accent-[#43bba1] cursor-pointer" />
+              <label className="cursor-pointer select-none font-bold text-sm text-[#43bba1] mt-1">المبنى ليس بحاجة إخلاء</label>
+            </div>
+
+            <div className={`mt-3 p-3 rounded-lg flex items-start gap-3 transition border-2 ${data.safetyHazard ? 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-700' : 'bg-surface-up border-subtle'}`}>
+              <input disabled={!canEdit || data.noEvacuation} type="checkbox" checked={data.safetyHazard}
+                onChange={(e) => setData({ ...data, safetyHazard: e.target.checked })}
+                className="w-5 h-5 mt-0.5 rounded accent-red-500 cursor-pointer" />
+              <label className="cursor-pointer select-none font-bold text-sm text-red-700 dark:text-red-300 mt-1">
+                خطر سلامة — يحتاج إخلاء (سيُفعّل F-18 و F-22 تلقائياً)
+              </label>
+            </div>
+
+            <TextArea readOnly={!canEdit} className="mt-4" label="ملخص تقييم المبنى المبدئي" rows={4}
+              placeholder="ملاحظات عامة حول التقييم..." value={data.summary}
+              onChange={(e) => setData({ ...data, summary: e.target.value })} />
+          </Card>
         </div>
-        <ReadOnlyField className="mt-3" label="ملخص التقييم" value={d.summary} />
-      </Card>
-      <Card title="الملاحظات الفنية" icon={ClipboardList}>
-        <ReadOnlyField label="الأعمال المدنية" value={d.civilNotes} />
-        <ReadOnlyField className="mt-2" label="الأعمال الكهربائية" value={d.elecNotes} />
-        <ReadOnlyField className="mt-2" label="أعمال السباكة" value={d.plumbingNotes} />
-      </Card>
-      <Card title="السلامة" icon={AlertTriangle}>
-        <div className={`p-3 rounded-lg ${d.safetyHazard ? 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-200' : 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-200'} text-sm font-bold flex items-center gap-2`}>
-          {d.safetyHazard ? <AlertTriangle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
-          {d.safetyHazard ? 'منزل غير صالح للسكن أثناء الترميم — سيُفتح F-18 و F-22.' : 'المنزل صالح لاستمرار السكن أثناء الترميم.'}
+      )}
+
+      {/* Tab 2 — حصر الأعمال */}
+      {step === 1 && (
+        <Card title="حصر كميات الأعمال (البنود المبدئية)" icon={ClipboardList}>
+          <div className="space-y-4">
+            {(data.works || []).length === 0 ? (
+              <div className="p-6 rounded-lg text-center border-2 border-dashed border-subtle text-fg-muted">
+                <ClipboardList className="w-10 h-10 mx-auto mb-2 opacity-60" />
+                <h3 className="text-sm font-bold">لا توجد مساحات مضافة</h3>
+              </div>
+            ) : (
+              (data.works as any[]).map((space, index) => (
+                <div key={space.id} className="rounded-lg border border-subtle overflow-hidden">
+                  <div className="border-b border-subtle p-3 flex items-center justify-between gap-3 bg-surface-up">
+                    <div className="flex-1 flex items-center gap-2">
+                      <button onClick={() => toggleExpand(space.id)} className="p-1.5 rounded-md border border-subtle">
+                        {space.isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                      </button>
+                      <span className="font-bold text-[#a871f7] text-sm">{index + 1}.</span>
+                      <input readOnly={!canEdit} type="text" placeholder="اسم المساحة (مثال: غرفة النوم 1)"
+                        value={space.name} onChange={(e) => updateWorkSpace(space.id, null, 'name', e.target.value)}
+                        className="w-full md:w-1/2 text-sm font-bold bg-input-bg border border-subtle rounded px-3 py-1.5 outline-none" />
+                    </div>
+                    {canEdit && (
+                      <button onClick={() => removeWorkSpace(space.id)} className="text-red-500 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/40">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className={`${space.isExpanded ? 'block' : 'hidden'} p-4 space-y-6`}>
+                    {/* Civil */}
+                    <div>
+                      <h4 className="text-sm font-bold text-[#43bba1] mb-3 pb-1 border-b border-subtle">الأعمال المدنية والتشطيبات</h4>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                        {[
+                          ['ceiling', 'أسقف'], ['concrete', 'خرسانة'], ['ceramic', 'سيراميك'], ['insulation', 'عزل'],
+                          ['plaster', 'مساح'], ['paint', 'دهانات'], ['aluminum', 'ألمنيوم (نوافذ)'], ['wood', 'نجارة (أبواب)'],
+                        ].map(([k, l]) => (
+                          <Input key={k} readOnly={!canEdit} label={l} value={space.civilFixed[k]}
+                            onChange={(e) => updateWorkSpace(space.id, 'civilFixed', k, e.target.value)} />
+                        ))}
+                      </div>
+                      {space.civilCustom.map((c: any) => (
+                        <div key={c.id} className="flex gap-2 mb-2">
+                          <Input className="flex-1" readOnly={!canEdit} placeholder="اسم البند" value={c.name}
+                            onChange={(e) => updateSpaceCustomField(space.id, 'civilCustom', c.id, 'name', e.target.value)} />
+                          <Input className="flex-1" readOnly={!canEdit} placeholder="القيمة" value={c.value}
+                            onChange={(e) => updateSpaceCustomField(space.id, 'civilCustom', c.id, 'value', e.target.value)} />
+                          {canEdit && (
+                            <button onClick={() => removeSpaceCustomField(space.id, 'civilCustom', c.id)} className="px-3 bg-red-100 dark:bg-red-950/40 text-red-600 rounded-lg">
+                              <X size={16} />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      {canEdit && (
+                        <button onClick={() => addSpaceCustomField(space.id, 'civilCustom')} className="text-xs text-[#a871f7] font-bold flex items-center gap-1 mt-2 hover:underline">
+                          <Plus size={14} /> أعمال وتشطيبات أخرى
+                        </button>
+                      )}
+                      <TextArea className="mt-3" readOnly={!canEdit} label="ملاحظات الأعمال المدنية" rows={2}
+                        value={space.civilNotes} onChange={(e) => updateWorkSpace(space.id, null, 'civilNotes', e.target.value)} />
+                    </div>
+
+                    {/* Electrical */}
+                    <div>
+                      <h4 className="text-sm font-bold text-[#43bba1] mb-3 pb-1 border-b border-subtle">أعمال الكهرباء</h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+                        {[
+                          ['ceilingLight', 'مصباح مستعار'], ['breaker', 'لوح/بريكر'],
+                          ['normalSocket', 'أفياش عادية'], ['spotlight', 'سبوت لايت'],
+                        ].map(([k, l]) => (
+                          <NumberCounter key={k} label={l} value={space.electricalFixed[k]}
+                            onChange={(v) => canEdit && updateWorkSpace(space.id, 'electricalFixed', k, v)} />
+                        ))}
+                      </div>
+                      <div className="mt-3 space-y-2">
+                        {space.electricalCustom.map((c: any) => (
+                          <div key={c.id} className="flex gap-2 items-center">
+                            <Input className="flex-1" readOnly={!canEdit} placeholder="اسم البند الإضافي" value={c.name}
+                              onChange={(e) => updateSpaceCustomField(space.id, 'electricalCustom', c.id, 'name', e.target.value)} />
+                            <div className="w-[140px] shrink-0">
+                              <NumberCounter value={c.value} onChange={(v) => canEdit && updateSpaceCustomField(space.id, 'electricalCustom', c.id, 'value', v)} />
+                            </div>
+                            {canEdit && (
+                              <button onClick={() => removeSpaceCustomField(space.id, 'electricalCustom', c.id)} className="p-2 bg-red-100 dark:bg-red-950/40 text-red-600 rounded-lg">
+                                <X size={16} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      {canEdit && (
+                        <button onClick={() => addSpaceCustomField(space.id, 'electricalCustom')} className="text-xs text-[#a871f7] font-bold flex items-center gap-1 mt-3 hover:underline">
+                          <Plus size={14} /> أعمال كهرباء أخرى
+                        </button>
+                      )}
+                      <TextArea className="mt-3" readOnly={!canEdit} label="ملاحظات أعمال الكهرباء" rows={2}
+                        value={space.electricalNotes} onChange={(e) => updateWorkSpace(space.id, null, 'electricalNotes', e.target.value)} />
+                    </div>
+
+                    {/* Plumbing */}
+                    <div>
+                      <h4 className="text-sm font-bold text-[#43bba1] mb-3 pb-1 border-b border-subtle">أعمال السباكة</h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+                        {[
+                          ['arabicToilet', 'كرسي عربي'], ['westernToilet', 'كرسي إفرنجي'],
+                          ['ceramicSink', 'مغاسل خزف'], ['heater', 'سخانة'],
+                        ].map(([k, l]) => (
+                          <NumberCounter key={k} label={l} value={space.plumbingFixed[k]}
+                            onChange={(v) => canEdit && updateWorkSpace(space.id, 'plumbingFixed', k, v)} />
+                        ))}
+                      </div>
+                      <div className="mt-3 space-y-2">
+                        {space.plumbingCustom.map((c: any) => (
+                          <div key={c.id} className="flex gap-2 items-center">
+                            <Input className="flex-1" readOnly={!canEdit} placeholder="اسم البند الإضافي" value={c.name}
+                              onChange={(e) => updateSpaceCustomField(space.id, 'plumbingCustom', c.id, 'name', e.target.value)} />
+                            <div className="w-[140px] shrink-0">
+                              <NumberCounter value={c.value} onChange={(v) => canEdit && updateSpaceCustomField(space.id, 'plumbingCustom', c.id, 'value', v)} />
+                            </div>
+                            {canEdit && (
+                              <button onClick={() => removeSpaceCustomField(space.id, 'plumbingCustom', c.id)} className="p-2 bg-red-100 dark:bg-red-950/40 text-red-600 rounded-lg">
+                                <X size={16} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      {canEdit && (
+                        <button onClick={() => addSpaceCustomField(space.id, 'plumbingCustom')} className="text-xs text-[#a871f7] font-bold flex items-center gap-1 mt-3 hover:underline">
+                          <Plus size={14} /> أعمال سباكة أخرى
+                        </button>
+                      )}
+                      <TextArea className="mt-3" readOnly={!canEdit} label="ملاحظات أعمال السباكة" rows={2}
+                        value={space.plumbingNotes} onChange={(e) => updateWorkSpace(space.id, null, 'plumbingNotes', e.target.value)} />
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+            {canEdit && (
+              <button onClick={addWorkSpace} className="w-full border border-dashed border-[#502b79] text-[#a871f7] py-3 rounded-xl text-sm font-bold flex justify-center items-center gap-2 hover:bg-[#1a0f2e]/10 transition">
+                <Plus className="w-5 h-5" /> إضافة مساحة إضافية لحصر الأعمال
+              </button>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {/* Tab 3 — الأثاث والأجهزة */}
+      {step === 2 && (
+        <Card title="جرد الأثاث والأجهزة" icon={Sofa}>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 border-b border-subtle pb-4">
+            <Select readOnly={!canEdit} label="نوع السكن" options={['منزل', 'شقة']} value={data.housingType}
+              onChange={(e) => setData({ ...data, housingType: e.target.value })} />
+            <Select readOnly={!canEdit} label="حالة المنزل" options={['ترميم', 'حريق']} value={data.housingCondition}
+              onChange={(e) => setData({ ...data, housingCondition: e.target.value })} />
+            <NumberCounter label="عدد الأفراد (ذكور)" value={data.familyCountMale}
+              onChange={(v) => canEdit && setData({ ...data, familyCountMale: v })} />
+            <NumberCounter label="عدد الأفراد (إناث)" value={data.familyCountFemale}
+              onChange={(v) => canEdit && setData({ ...data, familyCountFemale: v })} />
+          </div>
+
+          <div className="space-y-4">
+            <div className="p-4 rounded-lg border border-subtle">
+              <h4 className="text-sm font-bold text-[#43bba1] mb-3 pb-1 border-b border-subtle">الأثاث المطلوب</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+                {[
+                  { k: 'bedSingle', l: 'سرير مفرد' }, { k: 'bed15', l: 'سرير نفر ونص' }, { k: 'bedDouble', l: 'سرير مزدوج' },
+                  { k: 'mattressSingle', l: 'مراتب نفر' }, { k: 'mattress15', l: 'مرتبة نفر ونص' }, { k: 'mattressDouble', l: 'مراتب نفرين' },
+                  { k: 'sofaMeters', l: 'كنب (أمتار)' }, { k: 'floorSeating', l: 'جلسة أرضية' }, { k: 'carpet', l: 'سجاد' },
+                  { k: 'wardrobe2', l: 'دولاب بابين' }, { k: 'wardrobe3', l: 'دولاب 3 أبواب' }, { k: 'wardrobe4', l: 'دولاب 4 أبواب' },
+                  { k: 'nightstand', l: 'كومدينة درجين' }, { k: 'vanity', l: 'تسريحة' },
+                ].map(item => (
+                  <div key={item.k} className="flex flex-col gap-1">
+                    <NumberCounter label={item.l} value={data.furnitureFixed[item.k]}
+                      onChange={(v) => canEdit && updateNestedData('furnitureFixed', item.k, v)} />
+                    <button onClick={() => toggleNote(`f_${item.k}`)} className="text-[10px] text-fg-faint font-bold self-start hover:text-[#43bba1] transition flex items-center gap-1">
+                      <Plus size={10} /> إضافة ملاحظة
+                    </button>
+                    {(activeNoteKey === `f_${item.k}` || data.furnitureNotes[item.k]) && (
+                      <input readOnly={!canEdit} type="text" placeholder="اكتب الملاحظة هنا..."
+                        className="w-full bg-input-bg border border-subtle rounded-md px-2 py-1 text-xs outline-none focus:border-[#43bba1]"
+                        value={data.furnitureNotes[item.k] || ''}
+                        onChange={(e) => updateNestedData('furnitureNotes', item.k, e.target.value)} />
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 space-y-2">
+                {(data.furnitureCustom || []).map((c: any) => (
+                  <div key={c.id} className="flex flex-col gap-1">
+                    <div className="flex gap-2 items-center">
+                      <Input className="flex-1" readOnly={!canEdit} placeholder="اسم الأثاث الإضافي" value={c.name}
+                        onChange={(e) => {
+                          const arr = [...data.furnitureCustom];
+                          const idx = arr.findIndex((x: any) => x.id === c.id);
+                          arr[idx].name = e.target.value;
+                          setData({ ...data, furnitureCustom: arr });
+                        }} />
+                      <div className="w-[140px] shrink-0">
+                        <NumberCounter value={c.count} onChange={(v) => {
+                          if (!canEdit) return;
+                          const arr = [...data.furnitureCustom];
+                          const idx = arr.findIndex((x: any) => x.id === c.id);
+                          arr[idx].count = v;
+                          setData({ ...data, furnitureCustom: arr });
+                        }} />
+                      </div>
+                      {canEdit && (
+                        <button onClick={() => setData({ ...data, furnitureCustom: data.furnitureCustom.filter((x: any) => x.id !== c.id) })} className="p-2 bg-red-100 dark:bg-red-950/40 text-red-600 rounded-lg">
+                          <X size={16} />
+                        </button>
+                      )}
+                    </div>
+                    <input readOnly={!canEdit} type="text" placeholder="ملاحظة..."
+                      className="w-full bg-input-bg border border-subtle rounded-md px-2 py-1.5 text-xs outline-none focus:border-[#43bba1]"
+                      value={c.note || ''}
+                      onChange={(e) => {
+                        const arr = [...data.furnitureCustom];
+                        const idx = arr.findIndex((x: any) => x.id === c.id);
+                        arr[idx].note = e.target.value;
+                        setData({ ...data, furnitureCustom: arr });
+                      }} />
+                  </div>
+                ))}
+              </div>
+              {canEdit && (
+                <button onClick={() => setData({ ...data, furnitureCustom: [...(data.furnitureCustom || []), { id: Date.now(), name: '', count: 0, note: '' }] })}
+                  className="text-xs text-[#a871f7] font-bold flex items-center gap-1 mt-3 hover:underline">
+                  <Plus size={14} /> إضافة أثاث آخر
+                </button>
+              )}
+            </div>
+
+            <div className="p-4 rounded-lg border border-subtle">
+              <h4 className="text-sm font-bold text-[#43bba1] mb-3 pb-1 border-b border-subtle">الأجهزة الكهربائية</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+                {[
+                  { k: 'acSplit1', l: 'مكيف سبلت طن' }, { k: 'acSplit15', l: 'مكيف سبلت طن ونص' }, { k: 'acWindow15', l: 'مكيف شباك طن ونص' },
+                  { k: 'washer', l: 'غسالة' }, { k: 'stove', l: 'فرن غاز' }, { k: 'fridge', l: 'ثلاجة' },
+                  { k: 'vacuum', l: 'مكنسة كهربائية' }, { k: 'waterCooler', l: 'براد ماء' },
+                ].map(item => (
+                  <div key={item.k} className="flex flex-col gap-1">
+                    <NumberCounter label={item.l} value={data.appliancesFixed[item.k]}
+                      onChange={(v) => canEdit && updateNestedData('appliancesFixed', item.k, v)} />
+                    <button onClick={() => toggleNote(`a_${item.k}`)} className="text-[10px] text-fg-faint font-bold self-start hover:text-[#43bba1] transition flex items-center gap-1">
+                      <Plus size={10} /> إضافة ملاحظة
+                    </button>
+                    {(activeNoteKey === `a_${item.k}` || data.appliancesNotes[item.k]) && (
+                      <input readOnly={!canEdit} type="text" placeholder="اكتب الملاحظة هنا..."
+                        className="w-full bg-input-bg border border-subtle rounded-md px-2 py-1 text-xs outline-none focus:border-[#43bba1]"
+                        value={data.appliancesNotes[item.k] || ''}
+                        onChange={(e) => updateNestedData('appliancesNotes', item.k, e.target.value)} />
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 space-y-2">
+                {(data.appliancesCustom || []).map((c: any) => (
+                  <div key={c.id} className="flex flex-col gap-1">
+                    <div className="flex gap-2 items-center">
+                      <Input className="flex-1" readOnly={!canEdit} placeholder="اسم الجهاز الإضافي" value={c.name}
+                        onChange={(e) => {
+                          const arr = [...data.appliancesCustom];
+                          const idx = arr.findIndex((x: any) => x.id === c.id);
+                          arr[idx].name = e.target.value;
+                          setData({ ...data, appliancesCustom: arr });
+                        }} />
+                      <div className="w-[140px] shrink-0">
+                        <NumberCounter value={c.count} onChange={(v) => {
+                          if (!canEdit) return;
+                          const arr = [...data.appliancesCustom];
+                          const idx = arr.findIndex((x: any) => x.id === c.id);
+                          arr[idx].count = v;
+                          setData({ ...data, appliancesCustom: arr });
+                        }} />
+                      </div>
+                      {canEdit && (
+                        <button onClick={() => setData({ ...data, appliancesCustom: data.appliancesCustom.filter((x: any) => x.id !== c.id) })} className="p-2 bg-red-100 dark:bg-red-950/40 text-red-600 rounded-lg">
+                          <X size={16} />
+                        </button>
+                      )}
+                    </div>
+                    <input readOnly={!canEdit} type="text" placeholder="ملاحظة..."
+                      className="w-full bg-input-bg border border-subtle rounded-md px-2 py-1.5 text-xs outline-none focus:border-[#43bba1]"
+                      value={c.note || ''}
+                      onChange={(e) => {
+                        const arr = [...data.appliancesCustom];
+                        const idx = arr.findIndex((x: any) => x.id === c.id);
+                        arr[idx].note = e.target.value;
+                        setData({ ...data, appliancesCustom: arr });
+                      }} />
+                  </div>
+                ))}
+              </div>
+              {canEdit && (
+                <button onClick={() => setData({ ...data, appliancesCustom: [...(data.appliancesCustom || []), { id: Date.now(), name: '', count: 0, note: '' }] })}
+                  className="text-xs text-[#a871f7] font-bold flex items-center gap-1 mt-3 hover:underline">
+                  <Plus size={14} /> إضافة أجهزة كهربائية أخرى
+                </button>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Tab 4 — كروكي المبنى */}
+      {step === 3 && (
+        <Card title="كروكي المبنى" icon={PenTool}>
+          <p className="text-sm text-fg-muted mb-4 leading-relaxed">
+            يمكنك إضافة كروكي لكل غرفة أو دور موضحاً أماكن الأبواب والنوافذ والسباكة بضغطة زر. المساحات ستُحسب آلياً.
+          </p>
+
+          <div className="space-y-4">
+            {(data.croquisList as F08Croquis[]).map((croquis, index) => (
+              <div key={croquis.id} className="border border-subtle rounded-2xl overflow-hidden flex flex-col md:flex-row bg-surface-up">
+                <div className="p-4 flex-1 border-b md:border-b-0 md:border-l border-subtle flex flex-col justify-between gap-3">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <Pill tone="purple">كروكي #{index + 1}</Pill>
+                      <Pill tone="teal">{croquis.area || '0'} م²</Pill>
+                    </div>
+                    <Input readOnly={!canEdit} label="رقم الدور" placeholder="مثال: الدور الأرضي" value={croquis.floorNum}
+                      onChange={(e) => updateCroquis(croquis.id, 'floorNum', e.target.value)} />
+                    <Input readOnly={!canEdit} label="اسم الغرفة" placeholder="مثال: الصالة الرئيسية" value={croquis.roomName}
+                      onChange={(e) => updateCroquis(croquis.id, 'roomName', e.target.value)} />
+                  </div>
+                  <div className="flex gap-2 pt-3 border-t border-subtle">
+                    <button onClick={() => setActiveCroquisId(croquis.id)}
+                      className="flex-1 bg-[#2D124C]/20 text-[#a871f7] border border-[#2D124C] hover:bg-[#2D124C]/40 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition">
+                      <Eye size={14} /> عرض الكروكي
+                    </button>
+                    {canEdit && (
+                      <>
+                        <button onClick={() => setActiveCroquisId(croquis.id)}
+                          className="flex-1 bg-[#05110e] text-[#43bba1] border border-[#43bba1]/30 hover:bg-[#43bba1]/20 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition">
+                          <Edit3 size={14} /> تعديل
+                        </button>
+                        <button onClick={() => removeCroquis(croquis.id)}
+                          className="bg-red-100 dark:bg-red-950/40 text-red-600 hover:bg-red-200 dark:hover:bg-red-900 p-2 rounded-lg transition">
+                          <Trash2 size={16} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="w-full md:w-64 h-48 md:h-auto">
+                  <CroquisMiniViewer
+                    paths={croquis.paths || []}
+                    fixtures={croquis.fixtures || []}
+                    area={croquis.area}
+                    onOpen={() => setActiveCroquisId(croquis.id)}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {canEdit && (
+            <button onClick={addCroquis}
+              className="mt-4 w-full border border-dashed border-[#502b79] text-[#a871f7] py-3 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 hover:bg-[#1a0f2e]/10 transition">
+              <Plus size={18} /> أضف كروكي
+            </button>
+          )}
+        </Card>
+      )}
+
+      {/* Tab 5 — الاعتماد والرفع */}
+      {step === 4 && (
+        <Card title="ملاحظات وتوصيات" icon={ShieldCheck}>
+          <TextArea readOnly={!canEdit} label="ملاحظات وتوصيات استثنائية؟" rows={3}
+            value={data.diagnosisNotes} onChange={(e) => setData({ ...data, diagnosisNotes: e.target.value })} />
+
+          <div className="mt-4">
+            <h4 className="text-xs font-bold text-[#43bba1] mb-3">توصيات الأقسام المعنيّة</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="p-3 rounded-lg border border-subtle text-center bg-surface-up">
+                <p className="text-[10px] text-fg-muted font-bold mb-1">توصيات البحث الاجتماعي</p>
+                <p className="text-xs font-medium">بانتظار المراجعة</p>
+              </div>
+              <div className="p-3 rounded-lg border border-subtle text-center bg-surface-up">
+                <p className="text-[10px] text-fg-muted font-bold mb-1">توصيات الإدارة التنفيذية</p>
+                <p className="text-xs font-medium">بانتظار المراجعة</p>
+              </div>
+            </div>
+          </div>
+
+          {canEdit && (
+            <div className="mt-5 p-4 rounded-lg border border-subtle bg-surface-up flex items-start gap-3">
+              <input type="checkbox" id="pledge_08" checked={!!data.pledge}
+                onChange={(e) => setData({ ...data, pledge: e.target.checked })}
+                className="w-5 h-5 mt-0.5 rounded accent-[#43bba1] cursor-pointer" />
+              <label htmlFor="pledge_08" className="cursor-pointer select-none">
+                <h4 className="text-sm font-bold mb-1">أتعهد بأن المدخلات والحصر دقيق</h4>
+                <p className="text-[11px] text-fg-muted leading-relaxed">
+                  استخدم زر «الاعتماد» في الأسفل لرفع الكراسة إلى المرحلة التالية بعد التأكد من اكتمال جميع التبويبات.
+                </p>
+              </label>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Save + tab nav */}
+      <div className="flex justify-between items-center pt-4 border-t border-subtle gap-2 flex-wrap">
+        {canEdit ? (
+          <button onClick={save} disabled={saving}
+            className="px-5 py-2 text-sm font-bold rounded-lg bg-[#4A1F66] text-white hover:bg-[#3A1652] disabled:opacity-50 transition">
+            {saving ? 'جارٍ الحفظ…' : 'حفظ التعديلات'}
+          </button>
+        ) : <span />}
+        <div className="flex gap-2">
+          <button onClick={() => setStep((s) => Math.max(0, s - 1))} disabled={step === 0}
+            className="px-4 py-2 text-sm font-bold rounded-lg bg-surface-up text-fg-muted disabled:opacity-40">
+            السابق
+          </button>
+          <button onClick={() => setStep((s) => Math.min(4, s + 1))} disabled={step === 4}
+            className="px-4 py-2 text-sm font-bold rounded-lg bg-[#a871f7]/20 text-[#a871f7] disabled:opacity-40">
+            التالي
+          </button>
         </div>
-        <ReadOnlyField className="mt-3" label="التوصية النهائية" value={d.finalRecommendation} />
-      </Card>
+      </div>
+
+      {awaitsMe && !data.pledge && step !== 4 && (
+        <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-2 text-center">
+          ⚠ يجب التوقيع على الإقرار في تبويب «الاعتماد والرفع» قبل اعتماد الكراسة.
+        </p>
+      )}
     </FormShell>
   );
 };

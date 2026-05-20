@@ -22,8 +22,6 @@ interface AdminProps {
   onOpenProfile: (userId: string) => void;
 }
 
-type StatusFilter = 'all' | 'pending' | 'active' | 'deactivated' | 'reset';
-
 const STATUS_MAP: Record<string, { label: string; tone: any; icon: React.ElementType }> = {
   pending:     { label: 'بانتظار الموافقة', tone: 'amber', icon: Clock },
   active:      { label: 'فعّال',           tone: 'green', icon: CheckCircle },
@@ -66,21 +64,38 @@ function UserAdminForm({ user, mode, onSubmit, onSecondary, busy }: {
   onSecondary?: (reason: string) => void;
   busy: boolean;
 }) {
-  const startRole = (user.role && user.role !== 'PENDING' ? user.role as RoleKey : 'SOCIAL_RESEARCHER');
-  const [role, setRole] = useState<RoleKey>(startRole);
-  const [department, setDepartment] = useState(user.department || ROLE_BY_KEY[startRole]?.department || 'RESEARCH');
+  const startRole = (user.role && user.role !== 'PENDING' ? user.role as RoleKey : '' as RoleKey | '');
+  const startDept = user.department
+    || (startRole ? ROLE_BY_KEY[startRole as RoleKey]?.department : '')
+    || 'RESEARCH';
+  const [department, setDepartment] = useState<string>(startDept);
+  const [role, setRole] = useState<RoleKey | ''>(startRole);
   const [region, setRegion] = useState(user.region || 'DAM');
-  const [isManager, setIsManager] = useState(user.isManager || ROLE_BY_KEY[startRole]?.isManager || false);
+  const [isManager, setIsManager] = useState(
+    user.isManager || (startRole ? ROLE_BY_KEY[startRole as RoleKey]?.isManager : false) || false,
+  );
   const [showSecondary, setShowSecondary] = useState(false);
   const [reason, setReason] = useState('');
 
-  const onRoleChange = (r: RoleKey) => {
-    setRole(r);
-    const def = ROLE_BY_KEY[r];
-    if (def) { setDepartment(def.department); setIsManager(!!def.isManager); }
+  const onDeptChange = (d: string) => {
+    setDepartment(d);
+    if (role && ROLE_BY_KEY[role as RoleKey]?.department !== d) {
+      setRole('');
+      setIsManager(false);
+    }
   };
 
-  const rolesByDept = DEPARTMENTS.map(d => ({ dept: d, roles: ROLES_DEF.filter(r => r.department === d.key) }));
+  const onRoleChange = (r: RoleKey | '') => {
+    setRole(r);
+    if (r) {
+      const def = ROLE_BY_KEY[r as RoleKey];
+      if (def) setIsManager(!!def.isManager);
+    } else {
+      setIsManager(false);
+    }
+  };
+
+  const rolesInDept = ROLES_DEF.filter(r => r.department === department);
 
   if (showSecondary && mode === 'approve') {
     return (
@@ -117,29 +132,30 @@ function UserAdminForm({ user, mode, onSubmit, onSecondary, busy }: {
       </div>
 
       <div>
-        <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 mb-1">الدور الوظيفي (مع العضوية)</label>
+        <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 mb-1">الإدارة</label>
         <div className="relative">
-          <select value={role} onChange={e => onRoleChange(e.target.value as RoleKey)}
+          <select value={department} onChange={e => onDeptChange(e.target.value)}
             className="w-full appearance-none px-3 py-2 pl-8 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]">
-            {rolesByDept.map(g => (
-              <optgroup key={g.dept.key} label={g.dept.name}>
-                {g.roles.map(r => <option key={r.key} value={r.key}>{r.membershipTitle}</option>)}
-              </optgroup>
-            ))}
+            {DEPARTMENTS.map(d => <option key={d.key} value={d.key}>{d.name}</option>)}
           </select>
           <ChevronDown className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
         </div>
       </div>
 
       <div>
-        <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 mb-1">الإدارة</label>
+        <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 mb-1">الدور الوظيفي (العضوية الكاملة)</label>
         <div className="relative">
-          <select value={department} onChange={e => setDepartment(e.target.value)}
-            className="w-full appearance-none px-3 py-2 pl-8 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]">
-            {DEPARTMENTS.map(d => <option key={d.key} value={d.key}>{d.name}</option>)}
+          <select value={role} onChange={e => onRoleChange(e.target.value as RoleKey | '')}
+            className="w-full appearance-none px-3 py-2 pl-8 border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66] disabled:opacity-50"
+            disabled={!department}>
+            <option value="">— اختر الدور —</option>
+            {rolesInDept.map(r => <option key={r.key} value={r.key}>{r.membershipTitle}</option>)}
           </select>
           <ChevronDown className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
         </div>
+        {rolesInDept.length === 0 && department && (
+          <p className="text-[11px] text-amber-600 mt-1">لا توجد أدوار معرّفة في هذه الإدارة.</p>
+        )}
       </div>
 
       <div>
@@ -166,7 +182,8 @@ function UserAdminForm({ user, mode, onSubmit, onSecondary, busy }: {
             <XCircle className="w-4 h-4" /> رفض
           </button>
         )}
-        <button onClick={() => onSubmit({ role, department, region, isManager })} disabled={busy}
+        <button onClick={() => role && onSubmit({ role: role as RoleKey, department, region, isManager })}
+          disabled={busy || !role}
           className={`px-4 py-2 rounded-lg text-sm font-bold transition disabled:opacity-40 flex items-center gap-1
             ${mode === 'approve' ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-[#4A1F66] text-white hover:bg-[#3A1652]'}`}>
           <CheckCircle className="w-4 h-4" />
@@ -178,39 +195,138 @@ function UserAdminForm({ user, mode, onSubmit, onSecondary, busy }: {
 }
 
 /* ──────────────────────────────────────────────────────────────────
+   UserTable — shared row renderer used by every Admin section
+   ────────────────────────────────────────────────────────────────── */
+
+function UserTable({
+  users, hideDept = false, currentUserId,
+  onOpenProfile, onApprove, onEdit, onDeactivate, onReactivate,
+}: {
+  users: UserProfile[];
+  hideDept?: boolean;
+  currentUserId: string;
+  onOpenProfile: (id: string) => void;
+  onApprove: (u: UserProfile) => void;
+  onEdit: (u: UserProfile) => void;
+  onDeactivate: (u: UserProfile) => void;
+  onReactivate: (u: UserProfile) => void;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="bg-gray-50 dark:bg-slate-800 text-gray-600 dark:text-slate-300 text-xs">
+            <th className="px-3 py-2 text-right font-bold">الاسم</th>
+            <th className="px-3 py-2 text-right font-bold">البريد</th>
+            <th className="px-3 py-2 text-right font-bold">العضوية</th>
+            {!hideDept && <th className="px-3 py-2 text-right font-bold">الإدارة</th>}
+            <th className="px-3 py-2 text-right font-bold">الحالة</th>
+            <th className="px-3 py-2 text-right font-bold">إجراءات</th>
+          </tr>
+        </thead>
+        <tbody>
+          {users.map(u => {
+            const def = ROLE_BY_KEY[u.role as RoleKey];
+            const dept = DEPT_BY_KEY[u.department as any];
+            return (
+              <tr key={u.id} className="border-t border-gray-100 dark:border-slate-700 hover:bg-gray-50/50 dark:hover:bg-slate-800/50 transition">
+                <td className="px-3 py-2.5">
+                  <div className="flex items-center gap-2 cursor-pointer" onClick={() => onOpenProfile(u.id)}>
+                    <div className="w-7 h-7 rounded-full bg-[#4A1F66] text-white flex items-center justify-center font-bold text-[10px] shrink-0">
+                      {u.fullName?.charAt(0) || '?'}
+                    </div>
+                    <span className="font-semibold text-gray-800 dark:text-slate-100 truncate max-w-[140px] hover:underline">{u.fullName}</span>
+                    {u.isManager && <Pill tone="purple">مدير</Pill>}
+                    {u.isAdmin && <Pill tone="red">أدمن</Pill>}
+                    {u.needsRoleReset && <Pill tone="amber">إعادة ضبط</Pill>}
+                  </div>
+                </td>
+                <td className="px-3 py-2.5 text-gray-500 dark:text-slate-400 text-xs" dir="ltr">{u.email}</td>
+                <td className="px-3 py-2.5 text-xs">{def?.membershipTitle || roleName(u.role) || '—'}</td>
+                {!hideDept && <td className="px-3 py-2.5 text-xs">{dept?.name || '—'}</td>}
+                <td className="px-3 py-2.5"><StatusBadge status={u.status} /></td>
+                <td className="px-3 py-2.5">
+                  <div className="flex items-center gap-1">
+                    {(u.status === 'pending' || u.needsRoleReset) && (
+                      <button onClick={() => onApprove(u)}
+                        className="p-1.5 rounded-lg bg-green-50 dark:bg-green-900/40 text-green-600 dark:text-green-200 hover:bg-green-100" title="مراجعة وإسناد">
+                        <UserCheck className="w-4 h-4" />
+                      </button>
+                    )}
+                    {u.status === 'active' && (
+                      <>
+                        <button onClick={() => onEdit(u)}
+                          className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-200 hover:bg-blue-100" title="تعديل">
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        {u.id !== currentUserId && !u.isAdmin && (
+                          <button onClick={() => onDeactivate(u)}
+                            className="p-1.5 rounded-lg bg-red-50 dark:bg-red-900/40 text-red-600 dark:text-red-200 hover:bg-red-100" title="تعطيل">
+                            <XCircle className="w-4 h-4" />
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {u.status === 'deactivated' && (
+                      <button onClick={() => onReactivate(u)}
+                        className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-200 hover:bg-blue-100" title="إعادة تفعيل">
+                        <UserPlus className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────
    AdminUsersPortal
    ────────────────────────────────────────────────────────────────── */
 
 export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUser, reactivateUser, rejectUser, resetUserRole, currentUser, onOpenProfile }: AdminProps) {
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<UserProfile | null>(null);
   const [mode, setMode] = useState<'approve' | 'edit' | null>(null);
   const [busy, setBusy] = useState(false);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const toggleSection = (key: string) => setCollapsed(c => ({ ...c, [key]: !c[key] }));
 
   const isAdmin = currentUser.isAdmin === true;
 
-  const filtered = useMemo(() => {
-    let list = users;
-    if (statusFilter === 'reset') {
-      list = list.filter(u => u.needsRoleReset);
-    } else if (statusFilter !== 'all') {
-      list = list.filter(u => u.status === statusFilter);
-    }
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      list = list.filter(u => (u.fullName || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q));
-    }
-    return list;
-  }, [users, statusFilter, search]);
+  const matchesSearch = useCallback((u: UserProfile) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (u.fullName || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q);
+  }, [search]);
 
-  const counts = useMemo(() => ({
-    all: users.length,
-    pending: users.filter(u => u.status === 'pending').length,
-    active: users.filter(u => u.status === 'active').length,
-    deactivated: users.filter(u => u.status === 'deactivated').length,
-    reset: users.filter(u => u.needsRoleReset).length,
-  }), [users]);
+  const pendingUsers = useMemo(
+    () => users.filter(u => (u.status === 'pending' || u.needsRoleReset) && matchesSearch(u)),
+    [users, matchesSearch],
+  );
+  const deactivatedUsers = useMemo(
+    () => users.filter(u => u.status === 'deactivated' && matchesSearch(u)),
+    [users, matchesSearch],
+  );
+  const usersByDept = useMemo(() => {
+    const map: Record<string, UserProfile[]> = {};
+    for (const u of users) {
+      if (u.status !== 'active' || !u.department) continue;
+      if (!matchesSearch(u)) continue;
+      (map[u.department] ||= []).push(u);
+    }
+    for (const k of Object.keys(map)) {
+      map[k].sort((a, b) => {
+        if (!!a.isManager !== !!b.isManager) return a.isManager ? -1 : 1;
+        return (a.fullName || '').localeCompare(b.fullName || '', 'ar');
+      });
+    }
+    return map;
+  }, [users, matchesSearch]);
 
   const handleApprove = useCallback(async (edits: any) => {
     if (!selected) return;
@@ -272,97 +388,83 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
         </p>
       </Card>
 
-      <div className="flex flex-wrap gap-2">
-        {(['all', 'pending', 'active', 'deactivated', 'reset'] as StatusFilter[]).map(s => {
-          const isActive = statusFilter === s;
-          const label = s === 'all' ? 'الكل' : s === 'pending' ? 'بانتظار الموافقة' : s === 'active' ? 'فعّال' : s === 'deactivated' ? 'معطّل' : 'يحتاج إعادة ضبط';
-          return (
-            <button key={s} onClick={() => setStatusFilter(s)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition ${
-                isActive ? 'bg-[#4A1F66] text-white shadow' : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 border border-gray-200 dark:border-slate-700'
-              }`}>
-              {label}
-              <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${isActive ? 'bg-white/20' : 'bg-gray-100 dark:bg-slate-700'}`}>{(counts as any)[s]}</span>
-            </button>
-          );
-        })}
-      </div>
+      {/* Pending approvals (also includes role-reset cases) */}
+      {pendingUsers.length > 0 && (
+        <Card title={`بانتظار الموافقة (${pendingUsers.length})`} icon={Clock} accent="teal">
+          <UserTable users={pendingUsers} hideDept
+            onOpenProfile={onOpenProfile}
+            onApprove={(u) => { setSelected(u); setMode('approve'); }}
+            onEdit={(u) => { setSelected(u); setMode('edit'); }}
+            onDeactivate={handleDeactivate}
+            onReactivate={handleReactivate}
+            currentUserId={currentUser.id} />
+        </Card>
+      )}
 
-      <Card title={`المستخدمون (${filtered.length})`} icon={Users}>
-        {filtered.length === 0 ? (
-          <EmptyState icon={Users} title="لا يوجد مستخدمون مطابقون" />
-        ) : (
-          <div className="overflow-x-auto -mx-4 md:-mx-5">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 dark:bg-slate-800 text-gray-600 dark:text-slate-300 text-xs">
-                  <th className="px-3 py-2 text-right font-bold">الاسم</th>
-                  <th className="px-3 py-2 text-right font-bold">البريد</th>
-                  <th className="px-3 py-2 text-right font-bold">العضوية</th>
-                  <th className="px-3 py-2 text-right font-bold">الإدارة</th>
-                  <th className="px-3 py-2 text-right font-bold">الحالة</th>
-                  <th className="px-3 py-2 text-right font-bold">إجراءات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map(u => {
-                  const def = ROLE_BY_KEY[u.role as RoleKey];
-                  const dept = DEPT_BY_KEY[u.department as any];
-                  return (
-                    <tr key={u.id} className="border-t border-gray-100 dark:border-slate-700 hover:bg-gray-50/50 dark:hover:bg-slate-800/50 transition">
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-2 cursor-pointer" onClick={() => onOpenProfile(u.id)}>
-                          <div className="w-7 h-7 rounded-full bg-[#4A1F66] text-white flex items-center justify-center font-bold text-[10px] shrink-0">
-                            {u.fullName?.charAt(0) || '?'}
-                          </div>
-                          <span className="font-semibold text-gray-800 dark:text-slate-100 truncate max-w-[140px] hover:underline">{u.fullName}</span>
-                          {u.isManager && <Pill tone="purple">مدير</Pill>}
-                          {u.isAdmin && <Pill tone="red">أدمن</Pill>}
-                          {u.needsRoleReset && <Pill tone="amber">إعادة ضبط</Pill>}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2.5 text-gray-500 dark:text-slate-400 text-xs" dir="ltr">{u.email}</td>
-                      <td className="px-3 py-2.5 text-xs">{def?.membershipTitle || roleName(u.role) || '—'}</td>
-                      <td className="px-3 py-2.5 text-xs">{dept?.name || '—'}</td>
-                      <td className="px-3 py-2.5"><StatusBadge status={u.status} /></td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-1">
-                          {(u.status === 'pending' || u.needsRoleReset) && (
-                            <button onClick={() => { setSelected(u); setMode('approve'); }}
-                              className="p-1.5 rounded-lg bg-green-50 dark:bg-green-900/40 text-green-600 dark:text-green-200 hover:bg-green-100" title="مراجعة وإسناد">
-                              <UserCheck className="w-4 h-4" />
-                            </button>
-                          )}
-                          {u.status === 'active' && (
-                            <>
-                              <button onClick={() => { setSelected(u); setMode('edit'); }}
-                                className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-200 hover:bg-blue-100" title="تعديل">
-                                <Edit className="w-4 h-4" />
-                              </button>
-                              {u.id !== currentUser.id && !u.isAdmin && (
-                                <button onClick={() => handleDeactivate(u)}
-                                  className="p-1.5 rounded-lg bg-red-50 dark:bg-red-900/40 text-red-600 dark:text-red-200 hover:bg-red-100" title="تعطيل">
-                                  <XCircle className="w-4 h-4" />
-                                </button>
-                              )}
-                            </>
-                          )}
-                          {u.status === 'deactivated' && (
-                            <button onClick={() => handleReactivate(u)}
-                              className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-200 hover:bg-blue-100" title="إعادة تفعيل">
-                              <UserPlus className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+      {/* Active users — grouped by department, collapsible */}
+      {DEPARTMENTS.map(d => {
+        const list = usersByDept[d.key] || [];
+        if (list.length === 0) return null;
+        const isCollapsed = !!collapsed[d.key];
+        const managerCount = list.filter(u => u.isManager).length;
+        return (
+          <div key={d.key} className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-gray-200 dark:border-slate-700 overflow-hidden">
+            <button onClick={() => toggleSection(d.key)}
+              className="w-full bg-gradient-to-l from-[#4A1F66] to-[#6B3D87] px-4 py-2.5 flex items-center justify-between text-white text-right">
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-[#56B894]" />
+                <span className="font-bold text-sm">{d.name}</span>
+                <span className="text-[11px] bg-white/15 px-2 py-0.5 rounded-full">{list.length} عضو</span>
+                {managerCount > 0 && (
+                  <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded-full">{managerCount} مدير</span>
+                )}
+              </div>
+              <ChevronDown className={`w-4 h-4 transition ${isCollapsed ? '' : 'rotate-180'}`} />
+            </button>
+            {!isCollapsed && (
+              <div className="p-2">
+                <UserTable users={list}
+                  onOpenProfile={onOpenProfile}
+                  onApprove={(u) => { setSelected(u); setMode('approve'); }}
+                  onEdit={(u) => { setSelected(u); setMode('edit'); }}
+                  onDeactivate={handleDeactivate}
+                  onReactivate={handleReactivate}
+                  currentUserId={currentUser.id} />
+              </div>
+            )}
           </div>
-        )}
-      </Card>
+        );
+      })}
+
+      {/* Deactivated users — collapsed by default */}
+      {deactivatedUsers.length > 0 && (
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-gray-200 dark:border-slate-700 overflow-hidden">
+          <button onClick={() => toggleSection('_deactivated')}
+            className="w-full bg-gradient-to-l from-red-900 to-red-700 px-4 py-2.5 flex items-center justify-between text-white text-right">
+            <div className="flex items-center gap-2">
+              <XCircle className="w-4 h-4" />
+              <span className="font-bold text-sm">المعطّلون</span>
+              <span className="text-[11px] bg-white/15 px-2 py-0.5 rounded-full">{deactivatedUsers.length}</span>
+            </div>
+            <ChevronDown className={`w-4 h-4 transition ${collapsed['_deactivated'] === false ? 'rotate-180' : ''}`} />
+          </button>
+          {collapsed['_deactivated'] === false && (
+            <div className="p-2">
+              <UserTable users={deactivatedUsers}
+                onOpenProfile={onOpenProfile}
+                onApprove={(u) => { setSelected(u); setMode('approve'); }}
+                onEdit={(u) => { setSelected(u); setMode('edit'); }}
+                onDeactivate={handleDeactivate}
+                onReactivate={handleReactivate}
+                currentUserId={currentUser.id} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {pendingUsers.length === 0 && Object.keys(usersByDept).length === 0 && deactivatedUsers.length === 0 && (
+        <Card icon={Users}><EmptyState icon={Users} title="لا يوجد مستخدمون مطابقون" /></Card>
+      )}
 
       <Modal open={mode === 'approve'} onClose={() => { setSelected(null); setMode(null); }} title="مراجعة الطلب وإسناد العضوية">
         {selected && <UserAdminForm user={selected} mode="approve" onSubmit={handleApprove} onSecondary={handleReject} busy={busy} />}

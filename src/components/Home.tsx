@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import {
   Home as HomeIcon, FileText, Building2,
-  Target, MapPin,
+  Target, MapPin, AlertTriangle,
 } from 'lucide-react';
 import {
   KpiStrip, MyDayWidget, PhaseFunnel,

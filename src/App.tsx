@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
-  collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc, runTransaction,
+  collection, onSnapshot, doc, updateDoc, addDoc, runTransaction,
   query, where, orderBy, limit, writeBatch, serverTimestamp, arrayUnion,
 } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
@@ -537,10 +537,26 @@ function App() {
     } catch (e) { console.error('reactivateUser:', e); }
   }, [users]);
 
-  const rejectUser = useCallback(async (userId: string, _actorId: string, _reason?: string) => {
-    try { await deleteDoc(doc(db, 'users', userId)); }
-    catch (e) { console.error('rejectUser:', e); }
-  }, []);
+  const rejectUser = useCallback(async (userId: string, actorId: string, reason?: string) => {
+    const existing = users.find(u => u.id === userId);
+    if (!existing) return;
+    try {
+      await updateDoc(doc(db, 'users', userId), {
+        status: 'deactivated',
+        role: 'PENDING',
+        department: '',
+        rejectedAt: new Date().toISOString(),
+        rejectedBy: actorId,
+        rejectionReason: reason || 'بدون سبب',
+        auditLog: [...(existing.auditLog || []), {
+          at: new Date().toISOString(),
+          actor: actorId,
+          action: 'rejected',
+          reason: reason || null,
+        }],
+      });
+    } catch (e) { console.error('rejectUser:', e); }
+  }, [users]);
 
   /** يعيد ضبط مستخدم قديم: يضع status=pending ويفرغ role/department */
   const resetUserRole = useCallback(async (userId: string, actorId: string) => {

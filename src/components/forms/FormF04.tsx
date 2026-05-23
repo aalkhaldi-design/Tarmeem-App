@@ -5,133 +5,69 @@
  * Output: Sets project.diagnosisEngineerId via TRIGGER_MAP F-04 entry
  */
 
-import React, { useState, useMemo } from 'react';
-import { Check } from 'lucide-react';
-import type { SharedFormProps } from './_shared';
-import { canApproveForm } from './_shared';
+import React, { useState, useMemo, useEffect } from 'react';
+import { UserCog, Check, AlertTriangle } from 'lucide-react';
+import { FormRenderer, formAwaitsUser } from '../Forms';
+import { Card, Select } from '../ui';
+import { FormShell } from './FormShell';
 
-export function FormF04Renderer(props: SharedFormProps) {
-  const { rec, user, onClose, onApprove, users, isBusy } = props;
-  const [selectedEngineerId, setSelectedEngineerId] = useState<string>(
-    (rec.data?.engineerId as string) || ''
-  );
-  const [approvalNote, setApprovalNote] = useState('');
+export const FormF04Renderer: FormRenderer = ({ rec, user, api, users }) => {
+  const [engineerId, setEngineerId] = useState<string>((rec.data?.engineerId as string) || '');
+  const awaits = formAwaitsUser(rec, user);
+  const isReadOnly = !awaits;
 
   const diagnosisEngineers = useMemo(
     () => users.filter(u => u.role === 'DIAGNOSIS_ENGINEER' && u.status === 'active'),
-    [users]
+    [users],
   );
+  const selectedEngineer = diagnosisEngineers.find(e => e.id === engineerId);
 
-  const selectedEngineer = diagnosisEngineers.find(e => e.id === selectedEngineerId);
-  const canApprove = canApproveForm(rec, user);
-  const isApproved = rec.status === 'approved';
-
-  const handleApprove = async () => {
-    if (!selectedEngineerId) {
-      alert('الرجاء اختيار مهندس تشخيص');
-      return;
-    }
-    const engineer = diagnosisEngineers.find(e => e.id === selectedEngineerId);
-    if (!engineer) return;
-    await onApprove(approvalNote, { engineerId: selectedEngineerId });
-  };
+  // Persist the pick to form.data before approval — the F-04 trigger reads
+  // approvedRecord.data.engineerId, and ApprovalActions approves with no dataPatch.
+  useEffect(() => {
+    if (!engineerId || isReadOnly) return;
+    const t = setTimeout(() => { api.updateFormData(rec.id, { engineerId }); }, 500);
+    return () => clearTimeout(t);
+  }, [engineerId, isReadOnly]);
 
   return (
-    <div className="bg-white dark:bg-[#050505] text-gray-900 dark:text-white p-6 rounded-lg space-y-6" dir="rtl">
-      {/* Header */}
-      <div className="border-b border-[#43bba1]/30 pb-4">
-        <h2 className="text-xl font-bold text-[#43bba1]">تعيين مهندس التشخيص</h2>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-          اختر مهندس التشخيص المسؤول عن هذا المشروع
+    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد التعيين">
+      <Card title="تعيين مهندس التشخيص" icon={UserCog}>
+        <p className="text-xs text-gray-500 dark:text-slate-400 mb-3">
+          اختر مهندس التشخيص المسؤول عن هذا المشروع.
         </p>
-      </div>
 
-      {/* Current Selection */}
-      {selectedEngineer && (
-        <div className="bg-gray-50 dark:bg-[#1a1a1a] border border-[#43bba1] rounded p-4">
-          <p className="text-sm text-gray-600 dark:text-gray-300 mb-2">المهندس المختار:</p>
-          <div className="flex items-center justify-between">
+        <Select
+          label="مهندس التشخيص"
+          value={engineerId}
+          onChange={e => setEngineerId(e.target.value)}
+          readOnly={isReadOnly}
+          options={diagnosisEngineers.map(e => ({ value: e.id, label: `${e.fullName} (${e.email})` }))}
+          placeholder="— اختر مهندس —"
+        />
+
+        {selectedEngineer && (
+          <div className="mt-3 bg-gray-50 dark:bg-slate-800 border border-[#43bba1] rounded-lg p-3 flex items-center justify-between">
             <div>
               <p className="font-bold text-[#43bba1]">{selectedEngineer.fullName}</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">{selectedEngineer.email}</p>
+              <p className="text-xs text-gray-500 dark:text-slate-400">{selectedEngineer.email}</p>
             </div>
             <Check className="w-5 h-5 text-[#43bba1]" />
           </div>
-        </div>
-      )}
-
-      {/* Engineer Selection */}
-      <div>
-        <label className="block text-sm font-bold text-[#43bba1] mb-3">
-          اختر مهندس التشخيص
-        </label>
-        <select
-          value={selectedEngineerId}
-          onChange={e => setSelectedEngineerId(e.target.value)}
-          disabled={isApproved || !canApprove}
-          className="w-full bg-gray-100 dark:bg-[#111] border border-[#43bba1]/50 rounded px-3 py-2 text-gray-900 dark:text-white text-sm focus:border-[#43bba1] focus:outline-none disabled:opacity-50"
-        >
-          <option value="">-- اختر مهندس --</option>
-          {diagnosisEngineers.map(eng => (
-            <option key={eng.id} value={eng.id}>
-              {eng.fullName} ({eng.email})
-            </option>
-          ))}
-        </select>
-        {diagnosisEngineers.length === 0 && (
-          <p className="text-xs text-red-600 mt-1">لا يوجد مهندسو تشخيص نشطون في النظام</p>
         )}
-      </div>
 
-      {/* Approval Note */}
-      {canApprove && !isApproved && (
-        <div>
-          <label className="block text-sm font-bold text-[#43bba1] mb-2">ملاحظات الاعتماد</label>
-          <textarea
-            value={approvalNote}
-            onChange={e => setApprovalNote(e.target.value)}
-            placeholder="أضف ملاحظة (اختياري)"
-            className="w-full bg-gray-100 dark:bg-[#111] border border-[#43bba1]/50 rounded px-3 py-2 text-gray-900 dark:text-white text-sm focus:border-[#43bba1] focus:outline-none"
-            rows={3}
-          />
-        </div>
-      )}
+        {diagnosisEngineers.length === 0 && (
+          <p className="mt-2 text-xs text-red-600 dark:text-red-300 flex items-center gap-1">
+            <AlertTriangle className="w-3.5 h-3.5" /> لا يوجد مهندسو تشخيص نشطون في النظام.
+          </p>
+        )}
 
-      {/* Status Badge */}
-      <div className="bg-gray-50 dark:bg-[#1a1a1a] border border-[#43bba1]/30 rounded p-3 flex items-center gap-2">
-        <div className="w-2 h-2 bg-[#43bba1] rounded-full" />
-        <span className="text-xs text-gray-600 dark:text-gray-300">
-          الحالة: {isApproved ? 'معتمد' : 'بانتظار الاعتماد'}
-        </span>
-      </div>
-
-      {/* Action Buttons */}
-      {canApprove && !isApproved && (
-        <div className="flex gap-3 pt-4 border-t border-[#43bba1]/30">
-          <button
-            onClick={handleApprove}
-            disabled={!selectedEngineerId || isBusy}
-            className="flex-1 bg-[#43bba1] hover:bg-[#3aa892] disabled:opacity-50 text-white font-bold py-2 rounded transition"
-          >
-            {isBusy ? 'جارٍ...' : 'اعتماد التعيين'}
-          </button>
-          <button
-            onClick={onClose}
-            className="flex-1 bg-[#502b79] hover:bg-[#652d8f] text-white font-bold py-2 rounded transition"
-          >
-            إغلاق
-          </button>
-        </div>
-      )}
-
-      {isApproved && (
-        <button
-          onClick={onClose}
-          className="w-full bg-gray-100 dark:bg-[#1a1a1a] hover:bg-gray-200 dark:hover:bg-[#222] text-gray-700 dark:text-gray-300 font-bold py-2 rounded transition"
-        >
-          إغلاق
-        </button>
-      )}
-    </div>
+        {awaits && !engineerId && diagnosisEngineers.length > 0 && (
+          <p className="mt-2 text-xs text-amber-700 dark:text-amber-300 flex items-center gap-1">
+            <AlertTriangle className="w-3.5 h-3.5" /> اختر مهندس التشخيص قبل الاعتماد.
+          </p>
+        )}
+      </Card>
+    </FormShell>
   );
-}
+};

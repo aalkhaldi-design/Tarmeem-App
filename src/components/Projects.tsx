@@ -393,6 +393,21 @@ const FormAccordionItem: React.FC<{
     declined:  'مرفوض نهائياً',
   };
 
+  // For a draft, find the upstream form that must be approved first.
+  const upstreamWaiting = useMemo(() => {
+    if (rec.status !== 'draft') return null;
+    const order = ['F-02','F-03','F-03.1','F-03.2','F-04','F-08','F-18','F-22','F-21','F-20',
+      'F-84','F-85','F-32','F-33','F-35','F-34','F-19','F-14','F-23','F-07','F-52'];
+    const projectForms = api.forms
+      .filter(f => f.projectRefId === rec.projectRefId)
+      .sort((a, b) => order.indexOf(a.code) - order.indexOf(b.code));
+    const myIdx = projectForms.findIndex(f => f.id === rec.id);
+    for (let i = myIdx - 1; i >= 0; i--) {
+      if (projectForms[i].status !== 'approved' && projectForms[i].status !== 'completed') return projectForms[i];
+    }
+    return null;
+  }, [api.forms, rec]);
+
   return (
     <div className={`rounded-xl border-2 transition overflow-hidden bg-white dark:bg-slate-800
       ${isClosed ? 'border-[#43bba1]' : 'border-[#6B3D87]/40'}`}>
@@ -413,9 +428,14 @@ const FormAccordionItem: React.FC<{
             </p>
           )}
           {rec.status === 'draft' && (
-            <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-0.5 flex items-center gap-1">
-              <Lock className="w-3 h-3" /> مقفل — يفتح تلقائياً عند تفعيل النموذج
-            </p>
+            <div className="text-[11px] text-gray-500 dark:text-slate-400 mt-0.5 flex items-start gap-1.5">
+              <Lock className="w-3 h-3 mt-0.5 shrink-0" />
+              <span>
+                {upstreamWaiting ? (
+                  <>مقفل — بانتظار <strong className="text-amber-700 dark:text-amber-300">{upstreamWaiting.title || FORM_BY_CODE[upstreamWaiting.code]?.title}</strong> من {roleName(upstreamWaiting.approvalChain[upstreamWaiting.approvalIndex] || upstreamWaiting.approvalChain[0])}</>
+                ) : 'مقفل — يفتح تلقائياً عند تفعيل النموذج'}
+              </span>
+            </div>
           )}
         </div>
         <div className="shrink-0 text-gray-400 mt-1">
@@ -424,6 +444,11 @@ const FormAccordionItem: React.FC<{
       </button>
       {open && (
         <div className="border-t border-gray-200 dark:border-slate-700 p-3 bg-gray-50/50 dark:bg-slate-900/40">
+          {rec.status === 'draft' && (
+            <div className="mb-3 p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 text-xs text-purple-900 dark:text-purple-200 leading-relaxed">
+              🔒 <strong>هذا النموذج مقفل حالياً.</strong> سيُفتح للتعبئة بواسطة <strong>{roleName(rec.approvalChain[0])}</strong> فور اعتماد النموذج السابق في سلسلة المشروع. يمكنك مطالعة بنيته أدناه للاطلاع.
+            </div>
+          )}
           {Renderer ? (
             <Renderer rec={rec} user={user} api={api} users={users} context={context} onClose={onToggle} />
           ) : (

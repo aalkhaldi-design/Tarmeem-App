@@ -129,7 +129,8 @@ export function formAwaitsRole(record: FormRecord, role: RoleKey): boolean {
 
 // Canonical implementation lives in src/lib/rbac.ts (manager override + helper override).
 // Re-exported here so all existing callers keep their import paths unchanged.
-export { formAwaitsUser, formIsEditableByUser } from '../lib/rbac';
+import { formAwaitsUser, formIsEditableByUser } from '../lib/rbac';
+export { formAwaitsUser, formIsEditableByUser };
 
 /* ──────────────────────────────────────────────────────────────────
    Compact summary card

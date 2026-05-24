@@ -6,13 +6,14 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { UserCog, Check, AlertTriangle } from 'lucide-react';
+import { UserCog, Check, AlertTriangle, Users as UsersIcon } from 'lucide-react';
 import { FormRenderer, formAwaitsUser } from '../Forms';
-import { Card, Select } from '../ui';
+import { Card, Select, Pill } from '../ui';
 import { FormShell } from './FormShell';
 
 export const FormF04Renderer: FormRenderer = ({ rec, user, api, users }) => {
   const [engineerId, setEngineerId] = useState<string>((rec.data?.engineerId as string) || '');
+  const [helpers, setHelpers] = useState<string[]>((rec.data?.helpers as string[]) || []);
   const awaits = formAwaitsUser(rec, user);
   const isReadOnly = !awaits;
 
@@ -21,14 +22,16 @@ export const FormF04Renderer: FormRenderer = ({ rec, user, api, users }) => {
     [users],
   );
   const selectedEngineer = diagnosisEngineers.find(e => e.id === engineerId);
+  const toggleHelper = (id: string) =>
+    setHelpers(hs => hs.includes(id) ? hs.filter(x => x !== id) : [...hs, id]);
 
-  // Persist the pick to form.data before approval — the F-04 trigger reads
-  // approvedRecord.data.engineerId, and ApprovalActions approves with no dataPatch.
+  // Persist the pick + الفزعة helpers to form.data before approval — the F-04
+  // trigger reads approvedRecord.data.engineerId, and F-08 reads data.helpers.
   useEffect(() => {
     if (!engineerId || isReadOnly) return;
-    const t = setTimeout(() => { api.updateFormData(rec.id, { engineerId }); }, 500);
+    const t = setTimeout(() => { api.updateFormData(rec.id, { engineerId, helpers }); }, 500);
     return () => clearTimeout(t);
-  }, [engineerId, isReadOnly]);
+  }, [engineerId, helpers, isReadOnly]);
 
   return (
     <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد التعيين">
@@ -67,6 +70,37 @@ export const FormF04Renderer: FormRenderer = ({ rec, user, api, users }) => {
             <AlertTriangle className="w-3.5 h-3.5" /> اختر مهندس التشخيص قبل الاعتماد.
           </p>
         )}
+
+        <div className="mt-4 border-t border-gray-200 dark:border-slate-700 pt-3">
+          <p className="text-xs font-bold text-gray-700 dark:text-slate-200 flex items-center gap-1.5 mb-2">
+            <UsersIcon className="w-3.5 h-3.5" /> فريق الفزعة (مساعدون اختياريون)
+          </p>
+          {isReadOnly ? (
+            helpers.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {helpers.map(id => {
+                  const u = users.find(x => x.id === id);
+                  return <Pill key={id} tone="teal">{u?.fullName || id}</Pill>;
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400 dark:text-slate-500">لا يوجد مساعدون.</p>
+            )
+          ) : (
+            <div className="space-y-1.5">
+              {diagnosisEngineers.filter(e => e.id !== engineerId).map(e => (
+                <label key={e.id} className="flex items-center gap-2 cursor-pointer text-sm">
+                  <input type="checkbox" checked={helpers.includes(e.id)} onChange={() => toggleHelper(e.id)}
+                    className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66] w-4 h-4" />
+                  <span className="text-gray-700 dark:text-slate-200">{e.fullName}</span>
+                </label>
+              ))}
+              {diagnosisEngineers.filter(e => e.id !== engineerId).length === 0 && (
+                <p className="text-xs text-gray-400 dark:text-slate-500">لا يوجد مهندسون آخرون لإضافتهم.</p>
+              )}
+            </div>
+          )}
+        </div>
       </Card>
     </FormShell>
   );

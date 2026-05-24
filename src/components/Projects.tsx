@@ -10,6 +10,7 @@ import type { ProjectRecord, FormsContext } from './forms/FormRenderers';
 import { RENDERERS } from './forms/FormRenderers';
 import type { UserProfile } from './Auth';
 import { ProjectActionsMenu } from './ProjectActionsMenu';
+import { FormErrorBoundary } from './forms/FormErrorBoundary';
 
 const PHASE_LABELS: Record<ProjectRecord['phase'], string> = {
   RESEARCH: 'البحث الاجتماعي',
@@ -450,7 +451,9 @@ const FormAccordionItem: React.FC<{
             </div>
           )}
           {Renderer ? (
-            <Renderer rec={rec} user={user} api={api} users={users} context={context} onClose={onToggle} />
+            <FormErrorBoundary key={rec.id} formCode={rec.code}>
+              <Renderer rec={rec} user={user} api={api} users={users} context={context} onClose={onToggle} />
+            </FormErrorBoundary>
           ) : (
             <p className="text-xs text-gray-500 dark:text-slate-400 text-center py-6">
               لا يوجد عرض مخصص لهذا النموذج. افتح من صندوق الوارد للوصول إلى الإجراءات.

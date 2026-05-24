@@ -11,6 +11,7 @@ import {
 import { DECLINE_ELIGIBLE_FORMS } from '../lib/workflow';
 import { Card, Pill, EmptyState } from './ui';
 import type { UserProfile } from './Auth';
+import { FormErrorBoundary } from './forms/FormErrorBoundary';
 
 /* ──────────────────────────────────────────────────────────────────
    Data Types
@@ -284,7 +285,9 @@ export const FormDetailModal: React.FC<{
         </div>
         <div className="overflow-y-auto p-5 flex-1">
           {Renderer ? (
-            <Renderer rec={rec} user={user} api={api} users={users} context={context} onClose={onClose} />
+            <FormErrorBoundary key={rec.id} formCode={rec.code}>
+              <Renderer rec={rec} user={user} api={api} users={users} context={context} onClose={onClose} />
+            </FormErrorBoundary>
           ) : (
             <DefaultFormView rec={rec} user={user} api={api} onClose={onClose} />
           )}

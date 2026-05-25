@@ -20,7 +20,7 @@ import {
   Card, Input, Select, TextArea, ReadOnlyField, FileUploader, Pill, NumberCounter,
   ProgressBar,
 } from '../ui';
-import { DEFAULT_LISTS, FormCode, SaudiRiyalGlassIcon } from '../../lib/data';
+import { DEFAULT_LISTS, FormCode, SaudiRiyalGlassIcon, roleName } from '../../lib/data';
 import {
   FormCreator, FormRenderer, formAwaitsUser, formIsEditableByUser, FormRecord,
 } from '../Forms';
@@ -1620,6 +1620,338 @@ const CreatorShell: React.FC<{ title: string; onClose: () => void; footer: React
 );
 
 /* ──────────────────────────────────────────────────────────────────
+   Batch Eta — renderers for the 7 previously view-less forms
+   ────────────────────────────────────────────────────────────────── */
+
+// Verdict can arrive as English ('eligible'/'ineligible' from F03_1Creator),
+// Arabic ('مستحق'/'غير مستحق' from F-03's `eligibility`), or blank (Big-Bang
+// cascade leaves `eligibilityVerdict` undefined). Normalize to an Arabic label.
+function verdictLabel(
+  data: Record<string, unknown> | undefined,
+  f03Eligibility?: unknown,
+): string {
+  const raw = (data?.eligibilityVerdict ?? data?.eligibility ?? f03Eligibility) as string | undefined;
+  if (raw === 'eligible' || raw === 'مستحق') return 'مستحق';
+  if (raw === 'ineligible' || raw === 'غير مستحق') return 'غير مستحق';
+  return '—';
+}
+
+export const F03_1Renderer: FormRenderer = ({ rec, user, api }) => {
+  const d = rec.data || {};
+  const f03 = api.forms.find(f => f.code === 'F-03' && f.projectRefId === rec.projectRefId);
+  const verdict = verdictLabel(d, (f03?.data as Record<string, unknown> | undefined)?.eligibility);
+  return (
+    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد تنفيذي">
+      <Card title="قرار الاستحقاق" icon={ShieldCheck}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <ReadOnlyField label="حكم الاستحقاق" value={verdict} />
+          <ReadOnlyField label="ملاحظات مدير البحث"
+            value={(d.managerNotes as string) || (f03?.data as Record<string, unknown> | undefined)?.managerNotes as string} />
+        </div>
+      </Card>
+    </FormShell>
+  );
+};
+
+export const F03_2Renderer: FormRenderer = ({ rec, user, api }) => {
+  const d = rec.data || {};
+  const awaits = formAwaitsUser(rec, user);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const f031 = api.forms.find(f => f.code === 'F-03.1' && f.projectRefId === rec.projectRefId);
+  const f03 = api.forms.find(f => f.code === 'F-03' && f.projectRefId === rec.projectRefId);
+  const verdict = verdictLabel(f031?.data as Record<string, unknown> | undefined, (f03?.data as Record<string, unknown> | undefined)?.eligibility);
+  const execApproved = f031?.status === 'approved' && verdict !== 'غير مستحق';
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try { await fn(); } finally { setBusy(false); }
+  };
+  const approveTransfer = () => run(() => api.approveForm(rec.id, user, note));
+  const closeProject = () => run(async () => {
+    await api.updateFormData(rec.id, { closureNote: note });
+    await api.rejectForm(rec.id, user, note || 'إغلاق بعد رفض تنفيذي');
+  });
+  const returnToResearcher = () => run(() => api.deferForm(rec.id, user, note));
+
+  const branchButtons = !awaits ? null : (
+    <div className="border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-900/20 rounded-lg p-3 space-y-3">
+      <textarea value={note} onChange={e => setNote(e.target.value)} rows={2}
+        placeholder="ملاحظة / سبب القرار"
+        className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-[#56B894]" />
+      {execApproved ? (
+        <button onClick={approveTransfer} disabled={busy}
+          className="w-full py-2 bg-[#4A1F66] text-white rounded-lg font-bold text-sm hover:bg-[#3A1652] disabled:opacity-40 transition flex items-center justify-center gap-1.5">
+          <CheckCircle2 className="w-4 h-4" /> اعتماد وإحالة إلى إدارة المشاريع
+        </button>
+      ) : (
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={closeProject} disabled={busy || !note.trim()}
+            className="flex-1 min-w-[140px] py-2 bg-red-700 text-white rounded-lg font-bold text-sm hover:bg-red-800 disabled:opacity-40 transition">
+            إغلاق المشروع نهائياً
+          </button>
+          <button onClick={returnToResearcher} disabled={busy || !note.trim()}
+            className="flex-1 min-w-[140px] py-2 bg-amber-500 text-white rounded-lg font-bold text-sm hover:bg-amber-600 disabled:opacity-40 transition">
+            إعادة إلى الباحث الاجتماعي
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <FormShell rec={rec} user={user} api={api} approvalSection={branchButtons}>
+      <Card title="الاعتماد النهائي للإحالة" icon={FileSignature}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <ReadOnlyField label="حكم الاستحقاق" value={verdict} />
+          <ReadOnlyField label="ملاحظات مدير البحث"
+            value={(f031?.data as Record<string, unknown> | undefined)?.managerNotes as string || (d.managerNotes as string)} />
+        </div>
+        {d.confirmationNotes ? <ReadOnlyField className="mt-3" label="ملاحظات الإحالة" value={d.confirmationNotes as string} /> : null}
+      </Card>
+    </FormShell>
+  );
+};
+
+export const F32Renderer: FormRenderer = ({ rec, user, api, users }) => {
+  const d = rec.data || {};
+  const awaits = formAwaitsUser(rec, user);
+  const isReadOnly = !awaits;
+  const [engineerId, setEngineerId] = useState<string>((d.engineerId as string) || '');
+  const supervisors = users.filter(u => u.role === 'DIAGNOSIS_ENGINEER' && u.status === 'active');
+  const selected = supervisors.find(e => e.id === engineerId);
+
+  useEffect(() => {
+    if (!engineerId || isReadOnly) return;
+    const t = setTimeout(() => { api.updateFormData(rec.id, { engineerId }); }, 500);
+    return () => clearTimeout(t);
+  }, [engineerId, isReadOnly]);
+
+  return (
+    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد التعيين">
+      <Card title="تعيين المهندس المشرف" icon={UsersIcon}>
+        <Select label="المهندس المشرف" value={engineerId} readOnly={isReadOnly}
+          onChange={e => setEngineerId(e.target.value)}
+          options={supervisors.map(e => ({ value: e.id, label: `${e.fullName} (${e.email})` }))}
+          placeholder="— اختر مهندساً —" />
+        {selected && (
+          <div className="mt-3 bg-gray-50 dark:bg-slate-800 border border-[#43bba1] rounded-lg p-3">
+            <p className="font-bold text-[#43bba1]">{selected.fullName}</p>
+            <p className="text-xs text-gray-500 dark:text-slate-400">{selected.email}</p>
+          </div>
+        )}
+        {supervisors.length === 0 && (
+          <p className="mt-2 text-xs text-red-600 dark:text-red-300 flex items-center gap-1">
+            <AlertTriangle className="w-3.5 h-3.5" /> لا يوجد مهندسون نشطون في النظام.
+          </p>
+        )}
+      </Card>
+    </FormShell>
+  );
+};
+
+export const F33Renderer: FormRenderer = ({ rec, user, api }) => {
+  const d = rec.data || {};
+  const awaits = formAwaitsUser(rec, user);
+  const isReadOnly = !awaits;
+  const [startDate, setStartDate] = useState<string>((d.startDate as string) || '');
+  const [supervisorNotes, setSupervisorNotes] = useState<string>((d.supervisorNotes as string) || '');
+
+  useEffect(() => {
+    if (isReadOnly) return;
+    const t = setTimeout(() => { api.updateFormData(rec.id, { startDate, supervisorNotes }); }, 500);
+    return () => clearTimeout(t);
+  }, [startDate, supervisorNotes, isReadOnly]);
+
+  return (
+    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد البدء">
+      <Card title="توثيق بدء التنفيذ" icon={Calendar}>
+        {isReadOnly ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <ReadOnlyField label="تاريخ البدء" value={d.startDate as string} />
+            <ReadOnlyField label="ملاحظات المشرف" value={d.supervisorNotes as string} />
+          </div>
+        ) : (
+          <>
+            <Input type="date" label="تاريخ البدء الفعلي" value={startDate} onChange={e => setStartDate(e.target.value)} />
+            <TextArea className="mt-3" label="ملاحظات المشرف" rows={3} value={supervisorNotes} onChange={e => setSupervisorNotes(e.target.value)} />
+          </>
+        )}
+      </Card>
+    </FormShell>
+  );
+};
+
+export const F34Renderer: FormRenderer = ({ rec, user, api }) => {
+  const d = rec.data || {};
+  const awaits = formAwaitsUser(rec, user);
+  const isReadOnly = !awaits;
+  const items = (d.f20_items as Array<{ id?: string; name?: string; unit?: string; qty?: number; supplier?: string }>) || [];
+  const [materialSummary, setMaterialSummary] = useState<string>((d.materialSummary as string) || '');
+  const [totalCost, setTotalCost] = useState<string>((d.totalCost as string | number | undefined)?.toString() ?? '');
+
+  useEffect(() => {
+    if (isReadOnly) return;
+    const t = setTimeout(() => { api.updateFormData(rec.id, { materialSummary, totalCost: Number(totalCost || 0) }); }, 500);
+    return () => clearTimeout(t);
+  }, [materialSummary, totalCost, isReadOnly]);
+
+  return (
+    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد الإحالة">
+      <Card title="بنود المواد (من F-20)" icon={Truck}>
+        {items.length === 0 ? (
+          <p className="text-xs text-gray-500 dark:text-slate-400">لم تُستخرج بنود من F-20 بعد.</p>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="bg-gray-50 dark:bg-slate-800">
+              <tr>
+                <th className="px-2 py-2 text-right">البند</th>
+                <th className="px-2 py-2 text-right">الكمية</th>
+                <th className="px-2 py-2 text-right">المصدر</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it, i) => (
+                <tr key={it.id || i} className="border-t dark:border-slate-700">
+                  <td className="px-2 py-1.5 font-bold">{it.name || '—'}</td>
+                  <td className="px-2 py-1.5">{it.qty ?? '—'} {it.unit || ''}</td>
+                  <td className="px-2 py-1.5 text-gray-500">{it.supplier || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+      <Card title="ملخّص الإحالة" icon={ClipboardList}>
+        {isReadOnly ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <ReadOnlyField label="ملخّص المواد" value={d.materialSummary as string} />
+            <ReadOnlyField label="التكلفة الإجمالية"
+              value={<span className="flex items-center gap-1">{Number(d.totalCost || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
+          </div>
+        ) : (
+          <>
+            <TextArea label="ملخّص المواد" rows={3} value={materialSummary} onChange={e => setMaterialSummary(e.target.value)} />
+            <Input className="mt-3" type="number" value={totalCost} onChange={e => setTotalCost(e.target.value)}
+              label={<span className="flex items-center gap-1">التكلفة الإجمالية <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
+          </>
+        )}
+      </Card>
+    </FormShell>
+  );
+};
+
+export const F35Renderer: FormRenderer = ({ rec, user, api }) => {
+  const d = rec.data || {};
+  const awaits = formAwaitsUser(rec, user);
+  const canEditPayment = awaits && user.role === 'ACCOUNTANT';
+  const [paymentAmount, setPaymentAmount] = useState<string>((d.paymentAmount as string | number | undefined)?.toString() ?? '');
+  const [paymentNotes, setPaymentNotes] = useState<string>((d.paymentNotes as string) || '');
+  const currentStage = rec.approvalChain[rec.approvalIndex];
+
+  useEffect(() => {
+    if (!canEditPayment) return;
+    const t = setTimeout(() => { api.updateFormData(rec.id, { paymentAmount: Number(paymentAmount || 0), paymentNotes }); }, 500);
+    return () => clearTimeout(t);
+  }, [paymentAmount, paymentNotes, canEditPayment]);
+
+  return (
+    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد الدفعة">
+      <Card title="طلب صرف الدفعة الأولى" icon={DollarSign}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <ReadOnlyField label="الدفعة" value="الدفعة الأولى (30%)" />
+          <ReadOnlyField label="المرحلة الحالية" value={currentStage ? roleName(currentStage) : '—'} />
+        </div>
+        {canEditPayment ? (
+          <>
+            <Input className="mt-3" type="number" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)}
+              label={<span className="flex items-center gap-1">قيمة الدفعة <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
+            <TextArea className="mt-3" label="ملاحظات الصرف" rows={2} value={paymentNotes} onChange={e => setPaymentNotes(e.target.value)} />
+          </>
+        ) : (
+          <ReadOnlyField className="mt-3" label="القيمة"
+            value={<span className="flex items-center gap-1">{Number(d.paymentAmount || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
+        )}
+      </Card>
+    </FormShell>
+  );
+};
+
+export const F84Renderer: FormRenderer = ({ rec, user, api }) => {
+  const d = rec.data || {};
+  const awaits = formAwaitsUser(rec, user);
+  const isReadOnly = !awaits;
+  const [bids, setBids] = useState<BidRow[]>((d.f84_bids as BidRow[]) || []);
+  const [pricingNotes, setPricingNotes] = useState<string>((d.f84_pricingNotes as string) || '');
+
+  useEffect(() => {
+    if (isReadOnly) return;
+    const t = setTimeout(() => { api.updateFormData(rec.id, { f84_bids: bids, f84_pricingNotes: pricingNotes }); }, 500);
+    return () => clearTimeout(t);
+  }, [bids, pricingNotes, isReadOnly]);
+
+  const addBid = () => setBids(b => [...b, { id: Date.now() + '', contractor: '', price: 0, notes: '' }]);
+  const updateBid = (id: string, k: keyof BidRow, v: unknown) => setBids(b => b.map(x => x.id === id ? { ...x, [k]: v } : x));
+  const removeBid = (id: string) => setBids(b => b.filter(x => x.id !== id));
+
+  return (
+    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد التسعير">
+      <Card title="عروض المقاولين" icon={Calculator}>
+        {isReadOnly ? (
+          bids.length === 0 ? (
+            <p className="text-xs text-gray-500 dark:text-slate-400">لا توجد عروض مسجّلة.</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 dark:bg-slate-800">
+                <tr>
+                  <th className="px-2 py-2 text-right">المقاول</th>
+                  <th className="px-2 py-2 text-right">السعر</th>
+                  <th className="px-2 py-2 text-right">ملاحظات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bids.map(b => (
+                  <tr key={b.id} className="border-t dark:border-slate-700">
+                    <td className="px-2 py-1.5 font-bold">{b.contractor}</td>
+                    <td className="px-2 py-1.5"><span className="inline-flex items-center gap-1">{b.price} <SaudiRiyalGlassIcon className="w-3.5 h-3.5 inline" /></span></td>
+                    <td className="px-2 py-1.5 text-gray-500">{b.notes}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        ) : (
+          <div className="space-y-2">
+            {bids.map(b => (
+              <div key={b.id} className="grid grid-cols-12 gap-2 items-end p-2 rounded-lg border border-gray-200 dark:border-slate-700">
+                <Input className="col-span-5" label="المقاول" value={b.contractor} onChange={e => updateBid(b.id, 'contractor', e.target.value)} />
+                <Input className="col-span-3" type="number" value={b.price} onChange={e => updateBid(b.id, 'price', Number(e.target.value || 0))}
+                  label={<span className="flex items-center gap-1">السعر <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
+                <Input className="col-span-3" label="ملاحظات" value={b.notes || ''} onChange={e => updateBid(b.id, 'notes', e.target.value)} />
+                <button onClick={() => removeBid(b.id)} className="col-span-1 h-9 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 flex items-center justify-center">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+            <button onClick={addBid} className="mt-1 px-3 py-1.5 rounded-lg bg-[#56B894] text-white text-xs font-bold flex items-center gap-1.5">
+              <Plus className="w-3 h-3" /> أضف عرضاً
+            </button>
+          </div>
+        )}
+      </Card>
+      <Card title="ملاحظات التسعير" icon={FileSignature}>
+        {isReadOnly ? (
+          <ReadOnlyField label="ملاحظات" value={d.f84_pricingNotes as string} />
+        ) : (
+          <TextArea label="ملاحظات التسعير" rows={3} value={pricingNotes} onChange={e => setPricingNotes(e.target.value)} />
+        )}
+      </Card>
+    </FormShell>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────
    Registries
    ────────────────────────────────────────────────────────────────── */
 
@@ -1639,6 +1971,13 @@ export const RENDERERS: Record<string, FormRenderer | undefined> = {
   'F-15': F15Renderer,
   'F-07': F07Renderer,
   'F-52': F52Renderer,
+  'F-03.1': F03_1Renderer,
+  'F-03.2': F03_2Renderer,
+  'F-32':   F32Renderer,
+  'F-33':   F33Renderer,
+  'F-34':   F34Renderer,
+  'F-35':   F35Renderer,
+  'F-84':   F84Renderer,
 };
 
 /* ──────────────────────────────────────────────────────────────────

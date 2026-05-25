@@ -3,8 +3,8 @@ import {
   Building2, MapPin, FileText, Activity, ArrowLeft, ChevronDown, ChevronUp, Lock, Plus,
 } from 'lucide-react';
 import { Card, Pill, ProgressBar, SearchBar, EmptyState } from './ui';
-import { FORM_BY_CODE, FormCode, FormDef, RoleKey, roleName, SaudiRiyalGlassIcon } from '../lib/data';
-import { FormsApi, formAwaitsUser, formCanBeOriginatedBy } from './Forms';
+import { FORM_BY_CODE, FormCode, FormDef, roleName, SaudiRiyalGlassIcon } from '../lib/data';
+import { FormsApi, formAwaitsUser } from './Forms';
 import type { FormRecord } from './Forms';
 import type { ProjectRecord, FormsContext } from './forms/FormRenderers';
 import { RENDERERS } from './forms/FormRenderers';
@@ -67,10 +67,10 @@ export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, 
       <Card title="قائمة المشاريع الرئيسية" icon={Building2} accent="gradient">
         <div className="flex flex-col md:flex-row gap-3 mb-4">
           <div className="flex-1"><SearchBar value={search} onChange={setSearch} placeholder="بحث برقم المشروع أو اسم المستفيد..." /></div>
-          {(user.isAdmin || formCanBeOriginatedBy(FORM_BY_CODE['F-02'], user.role as RoleKey)) && (
+          {(user.role === 'SOCIAL_RESEARCHER' || user.isAdmin) && (
             <button onClick={() => onCreateForm('F-02')}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-[#4A1F66] text-white hover:bg-[#3A1652] transition shadow whitespace-nowrap">
-              <Plus className="w-4 h-4" /> بحث اجتماعي جديد
+              <Plus className="w-4 h-4" /> استمارة بحث جديدة
             </button>
           )}
           <div className="flex flex-wrap gap-2">
@@ -144,7 +144,7 @@ type PhaseIdx = 1 | 2 | 3 | 4 | 5;
 type PhaseEntry = { code: FormCode; def: FormDef; records: FormRecord[] };
 
 const PHASE_FORMS: Record<PhaseIdx, FormCode[]> = {
-  1: ['F-02', 'F-03', 'F-03.1', 'F-03.2'],
+  1: ['F-02'],
   2: ['F-04', 'F-08', 'F-18', 'F-22', 'F-21', 'F-20'],
   3: ['F-84', 'F-85', 'F-32', 'F-33', 'F-35'],
   4: ['F-34', 'F-19', 'F-14', 'F-23', 'F-15'],

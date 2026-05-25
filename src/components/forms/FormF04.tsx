@@ -9,6 +9,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { UserCog, Check, AlertTriangle, Users as UsersIcon } from 'lucide-react';
 import { FormRenderer, formAwaitsUser } from '../Forms';
 import { Card, Select, Pill } from '../ui';
+import { roleName } from '../../lib/data';
 import { FormShell } from './FormShell';
 
 export const FormF04Renderer: FormRenderer = ({ rec, user, api, users }) => {
@@ -19,6 +20,11 @@ export const FormF04Renderer: FormRenderer = ({ rec, user, api, users }) => {
 
   const diagnosisEngineers = useMemo(
     () => users.filter(u => u.role === 'DIAGNOSIS_ENGINEER' && u.status === 'active'),
+    [users],
+  );
+  // الفزعة pool: all active PROJECTS-department members (any role).
+  const projectsMembers = useMemo(
+    () => users.filter(u => u.department === 'PROJECTS' && u.status === 'active'),
     [users],
   );
   const selectedEngineer = diagnosisEngineers.find(e => e.id === engineerId);
@@ -88,15 +94,15 @@ export const FormF04Renderer: FormRenderer = ({ rec, user, api, users }) => {
             )
           ) : (
             <div className="space-y-1.5">
-              {diagnosisEngineers.filter(e => e.id !== engineerId).map(e => (
-                <label key={e.id} className="flex items-center gap-2 cursor-pointer text-sm">
-                  <input type="checkbox" checked={helpers.includes(e.id)} onChange={() => toggleHelper(e.id)}
+              {projectsMembers.filter(m => m.id !== engineerId).map(m => (
+                <label key={m.id} className="flex items-center gap-2 cursor-pointer text-sm">
+                  <input type="checkbox" checked={helpers.includes(m.id)} onChange={() => toggleHelper(m.id)}
                     className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66] w-4 h-4" />
-                  <span className="text-gray-700 dark:text-slate-200">{e.fullName}</span>
+                  <span className="text-gray-700 dark:text-slate-200">{m.fullName} <span className="text-[10px] text-gray-400">· {roleName(m.role)}</span></span>
                 </label>
               ))}
-              {diagnosisEngineers.filter(e => e.id !== engineerId).length === 0 && (
-                <p className="text-xs text-gray-400 dark:text-slate-500">لا يوجد مهندسون آخرون لإضافتهم.</p>
+              {projectsMembers.filter(m => m.id !== engineerId).length === 0 && (
+                <p className="text-xs text-gray-400 dark:text-slate-500">لا يوجد أعضاء آخرون في إدارة المشاريع.</p>
               )}
             </div>
           )}

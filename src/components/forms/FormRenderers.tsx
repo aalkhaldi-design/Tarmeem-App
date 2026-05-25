@@ -1719,14 +1719,18 @@ export const F32Renderer: FormRenderer = ({ rec, user, api, users }) => {
   const awaits = formAwaitsUser(rec, user);
   const isReadOnly = !awaits;
   const [engineerId, setEngineerId] = useState<string>((d.engineerId as string) || '');
+  const [helpers, setHelpers] = useState<string[]>((d.helpers as string[]) || []);
   const supervisors = users.filter(u => u.role === 'DIAGNOSIS_ENGINEER' && u.status === 'active');
+  const projectsMembers = users.filter(u => u.department === 'PROJECTS' && u.status === 'active');
   const selected = supervisors.find(e => e.id === engineerId);
+  const toggleHelper = (id: string) =>
+    setHelpers(hs => hs.includes(id) ? hs.filter(x => x !== id) : [...hs, id]);
 
   useEffect(() => {
     if (!engineerId || isReadOnly) return;
-    const t = setTimeout(() => { api.updateFormData(rec.id, { engineerId }); }, 500);
+    const t = setTimeout(() => { api.updateFormData(rec.id, { engineerId, helpers }); }, 500);
     return () => clearTimeout(t);
-  }, [engineerId, isReadOnly]);
+  }, [engineerId, helpers, isReadOnly]);
 
   return (
     <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد التعيين">
@@ -1746,6 +1750,37 @@ export const F32Renderer: FormRenderer = ({ rec, user, api, users }) => {
             <AlertTriangle className="w-3.5 h-3.5" /> لا يوجد مهندسون نشطون في النظام.
           </p>
         )}
+
+        <div className="mt-4 border-t border-gray-200 dark:border-slate-700 pt-3">
+          <p className="text-xs font-bold text-gray-700 dark:text-slate-200 flex items-center gap-1.5 mb-2">
+            <UsersIcon className="w-3.5 h-3.5" /> فريق الفزعة (مساعدون اختياريون)
+          </p>
+          {isReadOnly ? (
+            helpers.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {helpers.map(id => {
+                  const u = users.find(x => x.id === id);
+                  return <Pill key={id} tone="teal">{u?.fullName || id}</Pill>;
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400 dark:text-slate-500">لا يوجد مساعدون.</p>
+            )
+          ) : (
+            <div className="space-y-1.5">
+              {projectsMembers.filter(m => m.id !== engineerId).map(m => (
+                <label key={m.id} className="flex items-center gap-2 cursor-pointer text-sm">
+                  <input type="checkbox" checked={helpers.includes(m.id)} onChange={() => toggleHelper(m.id)}
+                    className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66] w-4 h-4" />
+                  <span className="text-gray-700 dark:text-slate-200">{m.fullName} <span className="text-[10px] text-gray-400">· {roleName(m.role)}</span></span>
+                </label>
+              ))}
+              {projectsMembers.filter(m => m.id !== engineerId).length === 0 && (
+                <p className="text-xs text-gray-400 dark:text-slate-500">لا يوجد أعضاء آخرون في إدارة المشاريع.</p>
+              )}
+            </div>
+          )}
+        </div>
       </Card>
     </FormShell>
   );

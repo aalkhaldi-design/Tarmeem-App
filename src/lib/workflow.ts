@@ -43,14 +43,13 @@ export interface CascadeContext {
 
 export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => CascadeResult>> = {
 
+  // F-02 is now a 4-stage form (researcher → manager → exec → manager transfer).
+  // Full approval transfers the project to Projects and unlocks F-04 (was F-03.2).
   'F-02': (ctx) => {
-    const f03 = ctx.forms.find(f => f.code === 'F-03' && f.projectRefId === ctx.approvedRecord.projectRefId);
-    const src = (ctx.approvedRecord.data || {}) as { managerNotes?: string; eligibilityVerdict?: string };
+    const f04 = ctx.forms.find(f => f.code === 'F-04' && f.projectRefId === ctx.approvedRecord.projectRefId);
     return {
-      activate: f03 ? [{
-        formId: f03.id,
-        data: { managerNotes: src.managerNotes, eligibilityVerdict: src.eligibilityVerdict },
-      }] : [],
+      projectPatch: { phase: 'DIAGNOSIS' as ProjectPhase, progressPct: 15 },
+      activate: f04 ? [{ formId: f04.id }] : [],
     };
   },
 
@@ -279,9 +278,21 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
    DECLINE_MAP — fires on terminal رفض نهائي
    ────────────────────────────────────────────────────────────────── */
 
-export const DECLINE_ELIGIBLE_FORMS: FormCode[] = ['F-03.1', 'F-08', 'F-23'];
+export const DECLINE_ELIGIBLE_FORMS: FormCode[] = ['F-02', 'F-03.1', 'F-08', 'F-23'];
 
 export const DECLINE_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => CascadeResult>> = {
+
+  // F-02 decline (research manager rejects eligibility) — close the project.
+  'F-02': (ctx) => {
+    const drafts = ctx.forms.filter(f =>
+      f.projectRefId === ctx.approvedRecord.projectRefId &&
+      f.status === 'draft' && f.id !== ctx.approvedRecord.id,
+    );
+    return {
+      projectPatch: { phase: 'REJECTED' as ProjectPhase, progressPct: 0 } as Partial<ProjectRecord>,
+      autoComplete: drafts.map(f => ({ formId: f.id, note: 'تم إغلاق المشروع بعد رفض الاستحقاق' })),
+    };
+  },
 
   'F-03.1': (ctx) => {
     const draftsOnProject = ctx.forms.filter(f =>

@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Building2, MapPin, FileText, Activity, ArrowLeft, ChevronDown, ChevronUp, Lock,
+  Building2, MapPin, FileText, Activity, ArrowLeft, ChevronDown, ChevronUp, Lock, Plus,
 } from 'lucide-react';
 import { Card, Pill, ProgressBar, SearchBar, EmptyState } from './ui';
-import { FORM_BY_CODE, FormCode, roleName, SaudiRiyalGlassIcon } from '../lib/data';
-import { FormsApi, formAwaitsUser } from './Forms';
+import { FORM_BY_CODE, FormCode, FormDef, RoleKey, roleName, SaudiRiyalGlassIcon } from '../lib/data';
+import { FormsApi, formAwaitsUser, formCanBeOriginatedBy } from './Forms';
 import type { FormRecord } from './Forms';
 import type { ProjectRecord, FormsContext } from './forms/FormRenderers';
 import { RENDERERS } from './forms/FormRenderers';
@@ -42,9 +42,10 @@ interface MasterProjectListProps {
   projects: ProjectRecord[];
   users: UserProfile[];
   onOpenProject: (id: string) => void;
+  onCreateForm: (code?: FormCode) => void;
 }
 
-export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, onOpenProject, api }) => {
+export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, onOpenProject, api, user, onCreateForm }) => {
   const [search, setSearch] = useState('');
   const [phaseFilter, setPhaseFilter] = useState<'all' | ProjectRecord['phase']>('all');
 
@@ -66,6 +67,12 @@ export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, 
       <Card title="قائمة المشاريع الرئيسية" icon={Building2} accent="gradient">
         <div className="flex flex-col md:flex-row gap-3 mb-4">
           <div className="flex-1"><SearchBar value={search} onChange={setSearch} placeholder="بحث برقم المشروع أو اسم المستفيد..." /></div>
+          {(user.isAdmin || formCanBeOriginatedBy(FORM_BY_CODE['F-02'], user.role as RoleKey)) && (
+            <button onClick={() => onCreateForm('F-02')}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-[#4A1F66] text-white hover:bg-[#3A1652] transition shadow whitespace-nowrap">
+              <Plus className="w-4 h-4" /> بحث اجتماعي جديد
+            </button>
+          )}
           <div className="flex flex-wrap gap-2">
             {(['all', 'RESEARCH', 'DIAGNOSIS', 'EVACUATION', 'TENDERING', 'EXECUTION', 'HANDOVER', 'CLOSED'] as const).map(p => (
               <button key={p} onClick={() => setPhaseFilter(p)}
@@ -134,6 +141,7 @@ interface ProjectDetailProps {
 }
 
 type PhaseIdx = 1 | 2 | 3 | 4 | 5;
+type PhaseEntry = { code: FormCode; def: FormDef; records: FormRecord[] };
 
 const PHASE_FORMS: Record<PhaseIdx, FormCode[]> = {
   1: ['F-02', 'F-03', 'F-03.1', 'F-03.2'],
@@ -177,36 +185,24 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, user, use
   const toggle = (id: string) =>
     setUnfolded(arr => arr.includes(id) ? arr.filter(x => x !== id) : [...arr, id]);
 
-  // F-08 safety hazard gates F-18 / F-22 visibility
-  const safetyHazard = useMemo(() => {
-    const f08 = projectForms.find(f => f.code === 'F-08');
-    return !!(f08?.data as { safetyHazard?: boolean } | undefined)?.safetyHazard;
-  }, [projectForms]);
-
-  // Build ordered form list for the active phase
-  const phaseForms = useMemo<FormRecord[]>(() => {
-    const codes = PHASE_FORMS[activePhase];
-    const buckets: FormRecord[] = [];
-    for (const code of codes) {
-      if ((code === 'F-18' || code === 'F-22') && !safetyHazard) continue;
-      const matches = projectForms.filter(f => f.code === code);
+  // Build the full per-phase roadmap: one entry per code (real records + not-yet-created).
+  const phaseEntries = useMemo<PhaseEntry[]>(() => {
+    return PHASE_FORMS[activePhase].flatMap(code => {
+      const def = FORM_BY_CODE[code];
+      if (!def) return [];
+      const records = projectForms.filter(f => f.code === code);
       if (code === 'F-14') {
-        matches.sort((a, b) => {
-          const va = Number((a.data as { visitNumber?: number } | undefined)?.visitNumber || 1);
-          const vb = Number((b.data as { visitNumber?: number } | undefined)?.visitNumber || 1);
-          return va - vb;
-        });
+        records.sort((a, b) =>
+          Number((a.data as { visitNumber?: number } | undefined)?.visitNumber || 1) -
+          Number((b.data as { visitNumber?: number } | undefined)?.visitNumber || 1));
       } else if (code === 'F-15') {
-        matches.sort((a, b) => {
-          const pa = Number((a.data as { paymentIndex?: number } | undefined)?.paymentIndex || 1);
-          const pb = Number((b.data as { paymentIndex?: number } | undefined)?.paymentIndex || 1);
-          return pa - pb;
-        });
+        records.sort((a, b) =>
+          Number((a.data as { paymentIndex?: number } | undefined)?.paymentIndex || 1) -
+          Number((b.data as { paymentIndex?: number } | undefined)?.paymentIndex || 1));
       }
-      buckets.push(...matches);
-    }
-    return buckets;
-  }, [projectForms, activePhase, safetyHazard]);
+      return [{ code, def, records }];
+    });
+  }, [projectForms, activePhase]);
 
   return (
     <div dir="rtl" className="space-y-4">
@@ -287,26 +283,49 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, user, use
         })}
       </div>
 
-      {/* Phase forms accordion */}
-      <Card title={`نماذج ${PHASE_TITLES[activePhase]} (${phaseForms.length})`} icon={FileText}>
-        {phaseForms.length === 0 ? (
-          <EmptyState icon={FileText} title="لا توجد نماذج في هذه المرحلة" />
-        ) : (
-          <div className="space-y-2">
-            {phaseForms.map(f => (
-              <FormAccordionItem
-                key={f.id}
-                rec={f}
-                user={user}
-                users={users}
-                api={api}
-                context={context}
-                open={unfolded.includes(f.id)}
-                onToggle={() => toggle(f.id)}
-              />
-            ))}
-          </div>
-        )}
+      {/* Phase forms accordion — full roadmap (real + not-yet-created) */}
+      <Card title={`نماذج ${PHASE_TITLES[activePhase]} (${phaseEntries.length})`} icon={FileText}>
+        <div className="space-y-2">
+          {phaseEntries.map(entry => (
+            entry.records.length > 0
+              ? entry.records.map(rec => (
+                  <FormAccordionItem
+                    key={rec.id}
+                    rec={rec}
+                    user={user}
+                    users={users}
+                    api={api}
+                    context={context}
+                    open={unfolded.includes(rec.id)}
+                    onToggle={() => toggle(rec.id)}
+                  />
+                ))
+              : (
+                <div key={entry.code}
+                  className="rounded-xl border border-dashed border-gray-300 dark:border-slate-700 bg-gray-50/50 dark:bg-slate-900/30 p-4 opacity-75">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-gray-200 dark:bg-slate-700 text-gray-600 dark:text-slate-300">
+                      {entry.code}
+                    </span>
+                    <span className="text-sm font-bold text-gray-700 dark:text-slate-200">
+                      {entry.def.title}
+                    </span>
+                    <span className="ms-auto inline-flex items-center gap-1 text-[10px] text-gray-500 dark:text-slate-400">
+                      <Lock className="w-3 h-3" /> قيد الانتظار — للاطلاع فقط
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-gray-500 dark:text-slate-400 leading-relaxed">
+                    {entry.def.description}
+                  </p>
+                  <p className="text-[10px] text-gray-400 dark:text-slate-500 mt-2">
+                    {(entry.code === 'F-18' || entry.code === 'F-22')
+                      ? 'يُفعّل فقط عند وجود خطر سلامة في التشخيص.'
+                      : 'سيُفتح للتعبئة تلقائياً عندما يصل سير العمل إلى هذه المرحلة.'}
+                  </p>
+                </div>
+              )
+          ))}
+        </div>
       </Card>
 
       <Card title={`الملفات المرفقة (${filesAll.length})`} icon={FileText}>

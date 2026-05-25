@@ -2,15 +2,15 @@ import React, { useMemo, useState } from 'react';
 import {
   Building2, Users as UsersIcon, Stethoscope, Wallet, Truck, HeartHandshake,
   Megaphone, Handshake, Mic2, FileText, Activity, Bell,
-  Shield, Settings, X, ArrowLeft, GitBranch, Clock,
+  Shield, Settings, X, ArrowLeft, GitBranch, Clock, Plus,
 } from 'lucide-react';
 import {
-  DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, FormCode, FormDef, FORM_BY_CODE,
+  DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, FormCode, FormDef, FORM_BY_CODE, RoleKey,
   formsByDepartment, departmentName, roleName, slaStatus,
   FORM_STATUS_LABELS,
 } from '../lib/data';
 import { Card, Pill, EmptyState } from './ui';
-import { FormsApi, formAwaitsUser } from './Forms';
+import { FormsApi, formAwaitsUser, formCanBeOriginatedBy } from './Forms';
 import type { UserProfile } from './Auth';
 
 const DEPT_ICON: Record<DepartmentKey, React.ElementType> = {
@@ -39,8 +39,11 @@ interface PortalProps {
    explanatory ("how it's triggered / who fills it / what happens next").
    ────────────────────────────────────────────────────────────────── */
 
-const EducationalFormModal: React.FC<{ form: FormDef; dept: DepartmentKey; onClose: () => void }> =
-  ({ form, dept, onClose }) => {
+const EducationalFormModal: React.FC<{
+  form: FormDef; dept: DepartmentKey; onClose: () => void;
+  user: UserProfile; onCreateForm: (preselect?: FormCode) => void;
+}> =
+  ({ form, dept, onClose, user, onCreateForm }) => {
     const isBridged = form.ownerDept !== dept && (form.bridgesTo || []).includes(dept);
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4" dir="rtl">
@@ -121,6 +124,13 @@ const EducationalFormModal: React.FC<{ form: FormDef; dept: DepartmentKey; onClo
             <p className="text-[11px] text-gray-500 dark:text-slate-400 italic border-t border-gray-100 dark:border-slate-700 pt-3">
               هذه نسخة تعليمية للتوضيح فقط — لا تُحفظ أي بيانات ولا تُؤثر على المسار الحقيقي.
             </p>
+
+            {(user.isAdmin || formCanBeOriginatedBy(form, user.role as RoleKey)) && (
+              <button onClick={() => { onClose(); onCreateForm(form.code); }}
+                className="w-full mt-4 py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm hover:bg-[#3A1652] transition flex items-center justify-center gap-2">
+                <Plus className="w-4 h-4" /> ابدأ تعبئة هذا النموذج
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -128,7 +138,7 @@ const EducationalFormModal: React.FC<{ form: FormDef; dept: DepartmentKey; onClo
   };
 
 const DepartmentPortalLayout: React.FC<PortalProps & { dept: DepartmentKey; extras?: React.ReactNode }> =
-  ({ dept, user, api, onOpenForm, extras }) => {
+  ({ dept, user, api, onOpenForm, onCreateForm, extras }) => {
     const def = DEPT_BY_KEY[dept];
     const Icon = DEPT_ICON[dept];
 
@@ -226,7 +236,7 @@ const DepartmentPortalLayout: React.FC<PortalProps & { dept: DepartmentKey; extr
           )}
         </Card>
 
-        {educationalForm && <EducationalFormModal form={educationalForm} dept={dept} onClose={() => setEducationalForm(null)} />}
+        {educationalForm && <EducationalFormModal form={educationalForm} dept={dept} user={user} onCreateForm={onCreateForm} onClose={() => setEducationalForm(null)} />}
       </div>
     );
   };

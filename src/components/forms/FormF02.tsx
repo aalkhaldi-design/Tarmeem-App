@@ -10,10 +10,11 @@ import { writeBatch, doc, collection } from 'firebase/firestore';
 import {
   X, Send, Users as UsersIcon, Home as HomeIcon, Activity,
   Briefcase, DollarSign, FileSignature, ShieldCheck, Save, FileText,
+  CheckCircle2, Trash2, Plus,
 } from 'lucide-react';
-import { Card, Input, Select, TextArea, ReadOnlyField, FileUploader } from '../ui';
-import { DEFAULT_LISTS, SaudiRiyalGlassIcon, FormCode, FORM_BY_CODE, RoleKey } from '../../lib/data';
-import { FormCreator, FormRenderer, formIsEditableByUser } from '../Forms';
+import { Card, Input, Select, TextArea, ReadOnlyField } from '../ui';
+import { DEFAULT_LISTS, SaudiRiyalGlassIcon, FormCode, FORM_BY_CODE, RoleKey, roleName } from '../../lib/data';
+import { FormCreator, FormRenderer, formAwaitsUser } from '../Forms';
 import type { FormRecord } from '../Forms';
 import { FormShell, SectionTitle } from './FormShell';
 import { storage, db } from '../../lib/firebase';
@@ -79,8 +80,6 @@ const FAMILY_NUM_FIELDS: [keyof F02Family, string][] = [
   ['total', 'إجمالي'], ['under15', 'أقل من 15'], ['over64', 'فوق 64'], ['specialNeeds', 'ذوو احتياجات'],
 ];
 
-type FileEntry = NonNullable<FormRecord['files']>[number];
-
 /* ─── Helper: merge raw form data with typed defaults ────────────── */
 
 function toF02(raw: unknown): F02Data {
@@ -102,6 +101,60 @@ function sumValues(obj: Record<string, unknown>): number {
   return Object.values(obj).reduce<number>((a, b) => a + Number(b || 0), 0);
 }
 
+/* ─── Titled file uploader (full-width rows; editable title per file) ─── */
+
+interface TitledFile { name: string; title: string; url?: string; size?: number; uploadedAt?: string }
+
+const TitledFileUploader: React.FC<{
+  files: TitledFile[];
+  onChange: (files: TitledFile[]) => void;
+  pathPrefix: string;
+  disabled?: boolean;
+}> = ({ files, onChange, pathPrefix, disabled }) => {
+  const [uploading, setUploading] = useState(false);
+
+  const handleAdd = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    setUploading(true);
+    try {
+      const added: TitledFile[] = [];
+      for (const file of Array.from(fileList)) {
+        const sRef = ref(storage, `${pathPrefix}/${crypto.randomUUID()}/${file.name}`);
+        await uploadBytes(sRef, file);
+        const url = await getDownloadURL(sRef);
+        added.push({ name: file.name, title: file.name, url, size: file.size, uploadedAt: new Date().toISOString() });
+      }
+      onChange([...files, ...added]);
+    } finally { setUploading(false); }
+  };
+
+  return (
+    <div className="space-y-2">
+      {files.map((f, i) => (
+        <div key={i} className="flex items-center gap-2 w-full p-2 rounded-lg border border-subtle bg-surface-up">
+          <Input className="flex-1" placeholder="عنوان المستند" value={f.title}
+            onChange={e => onChange(files.map((x, idx) => idx === i ? { ...x, title: e.target.value } : x))} />
+          <a href={f.url} target="_blank" rel="noopener noreferrer"
+            className="text-[11px] text-[#43bba1] hover:underline truncate max-w-[140px]">{f.name}</a>
+          {!disabled && (
+            <button type="button" onClick={() => onChange(files.filter((_, idx) => idx !== i))}
+              className="p-1.5 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 shrink-0">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      ))}
+      {!disabled && (
+        <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#56B894] text-white text-xs font-bold cursor-pointer">
+          <Plus className="w-3 h-3" /> {uploading ? 'جارٍ الرفع…' : 'إضافة ملف'}
+          <input type="file" multiple className="hidden" disabled={uploading}
+            onChange={e => { handleAdd(e.target.files); e.target.value = ''; }} />
+        </label>
+      )}
+    </div>
+  );
+};
+
 /* ═══════════════════════════════════════════════════════════════════
    F02Creator — 4-step wizard modal
    ═══════════════════════════════════════════════════════════════════ */
@@ -115,6 +168,7 @@ export const F02Creator: FormCreator = ({ user, api, context, onClose }) => {
   }));
   const [step, setStep]  = useState(0);
   const [busy, setBusy]  = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState<TitledFile[]>([]);
 
   const upd = (sec: keyof F02Data, key: string, val: unknown) =>
     setData(d => ({ ...d, [sec]: { ...(d[sec] as Record<string, unknown>), [key]: val } }));
@@ -140,7 +194,7 @@ export const F02Creator: FormCreator = ({ user, api, context, onClose }) => {
       });
       if (!projectRefId) throw new Error('Failed to create project');
 
-      // 2) Atomic Big Bang — F-02 (pending) + 20 drafts in a single batch
+      // 2) Atomic Big Bang — F-02 (pending) + downstream drafts in a single batch
       const batch = writeBatch(db);
       const now = new Date().toISOString();
       const beneficiaryName = data.personal.fullName;
@@ -168,13 +222,12 @@ export const F02Creator: FormCreator = ({ user, api, context, onClose }) => {
         bridgesTo: f02Def.bridgesTo || [],
         notes: data.researcher.opinion || '',
         data,
-        assigneeId: null, files: [],
+        assigneeId: null, files: uploadedFiles,
         triggeredBy: null,
       });
 
-      // 20 drafts for the rest of the workflow
+      // Drafts for the rest of the workflow (F-03/03.1/03.2 merged into F-02).
       const DRAFT_CODES: FormCode[] = [
-        'F-03', 'F-03.1', 'F-03.2',
         'F-04', 'F-08', 'F-18', 'F-22', 'F-21', 'F-20',
         'F-84', 'F-85', 'F-32', 'F-33', 'F-35', 'F-34',
         'F-19', 'F-14', 'F-23',
@@ -327,6 +380,10 @@ export const F02Creator: FormCreator = ({ user, api, context, onClose }) => {
           {/* STEP 3 — Researcher & Pledge */}
           {step === 3 && (
             <>
+              <Card title="المستندات المرفقة" icon={FileText}>
+                <p className="text-xs text-fg-muted mb-2">أرفق صور المبنى والمستندات الداعمة، وأضف عنواناً وصفياً لكل ملف.</p>
+                <TitledFileUploader files={uploadedFiles} onChange={setUploadedFiles} pathPrefix="f02-uploads" />
+              </Card>
               <Card title="الباحث الاجتماعي" icon={Activity}>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <Input label="اسم الباحث"   required value={data.researcher.name}      onChange={e => upd('researcher', 'name',      e.target.value)} />
@@ -381,12 +438,20 @@ export const F02Creator: FormCreator = ({ user, api, context, onClose }) => {
    read-only review mode for RESEARCH_MANAGER and other viewers.
    ═══════════════════════════════════════════════════════════════════ */
 
+const STAGE_LABELS = ['الباحث الاجتماعي', 'مدير البحث الاجتماعي', 'المدير التنفيذي', 'الإحالة النهائية'];
+
 export const F02Renderer: FormRenderer = ({ rec, user, api }) => {
-  const canEdit = formIsEditableByUser(rec, user);
-  const [draft,      setDraft]      = useState<F02Data>(() => toF02(rec.data));
-  const [saving,     setSaving]     = useState(false);
-  const [uploading,  setUploading]  = useState(false);
-  const [localFiles, setLocalFiles] = useState<FileEntry[]>(rec.files ?? []);
+  const stage = rec.approvalIndex;                 // 0..3
+  const awaitsMe = formAwaitsUser(rec, user);
+  // Only the originating researcher, only at stage 0 (initial fill is via the
+  // wizard; this re-edit path is reached after a "return to researcher").
+  const canEdit = rec.createdBy === user.id && stage === 0 && rec.status === 'pending';
+
+  const [draft, setDraft]   = useState<F02Data>(() => toF02(rec.data));
+  const [saving, setSaving] = useState(false);
+  const [note, setNote]     = useState('');
+  const [busy, setBusy]     = useState(false);
+  const [newFiles, setNewFiles] = useState<TitledFile[]>([]);
 
   const upd = (sec: keyof F02Data, key: string, val: unknown) =>
     setDraft(d => ({ ...d, [sec]: { ...(d[sec] as Record<string, unknown>), [key]: val } }));
@@ -397,22 +462,11 @@ export const F02Renderer: FormRenderer = ({ rec, user, api }) => {
     finally { setSaving(false); }
   };
 
-  const handleAddFiles = async (fileList: FileList) => {
-    if (!rec.projectRefId) return;
-    setUploading(true);
-    try {
-      const uploaded: FileEntry[] = [];
-      for (const file of Array.from(fileList)) {
-        const uuid  = crypto.randomUUID();
-        const path  = `projects/${rec.projectRefId}/forms/${rec.id}/${uuid}-${file.name}`;
-        const sRef  = ref(storage, path);
-        await uploadBytes(sRef, file);
-        const url   = await getDownloadURL(sRef);
-        uploaded.push({ name: file.name, url, size: file.size, uploadedAt: new Date().toISOString() });
-      }
-      await api.attachFiles(rec.id, uploaded);
-      setLocalFiles(prev => [...prev, ...uploaded]);
-    } finally { setUploading(false); }
+  const attachNewFiles = async () => {
+    if (newFiles.length === 0) return;
+    setBusy(true);
+    try { await api.attachFiles(rec.id, newFiles); setNewFiles([]); }
+    finally { setBusy(false); }
   };
 
   const totalIncome = sumValues(draft.income as unknown as Record<string, unknown>);
@@ -421,9 +475,111 @@ export const F02Renderer: FormRenderer = ({ rec, user, api }) => {
   const revDebts    = sumValues((rec.data as Partial<F02Data>)?.debts  as unknown as Record<string, unknown> ?? {});
 
   const d = toF02(rec.data);
+  const existingFiles = (rec.files ?? []) as TitledFile[];
+
+  const approvalSection =
+    !awaitsMe ? null
+    : stage === 0 ? (
+        <button disabled={busy} onClick={async () => { setBusy(true);
+          try { await api.approveForm(rec.id, user, ''); } finally { setBusy(false); }
+        }} className="w-full py-2.5 bg-[#4A1F66] text-white rounded-lg font-bold text-sm hover:bg-[#3A1652] disabled:opacity-50 transition">
+          إرسال الاستمارة إلى مدير البحث الاجتماعي
+        </button>
+      )
+    : stage === 1 ? (
+        <div className="border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-900/20 rounded-lg p-3 space-y-3">
+          <p className="text-xs font-bold text-amber-800 dark:text-amber-300">قرار مدير البحث الاجتماعي (قرار الاستحقاق)</p>
+          <textarea value={note} onChange={e => setNote(e.target.value)} rows={3} placeholder="التوصية / الملاحظة"
+            className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-[#56B894]" />
+          <div className="grid gap-2">
+            <button disabled={busy} onClick={async () => { setBusy(true);
+              try { await api.approveForm(rec.id, user, note, { managerNotes: note, eligibilityVerdict: 'eligible' }); } finally { setBusy(false); }
+            }} className="py-2.5 bg-green-600 text-white rounded-lg font-bold text-sm hover:bg-green-700 disabled:opacity-50 transition">
+              اعتماد ورفع إلى المدير التنفيذي
+            </button>
+            <button disabled={busy || !note.trim()} onClick={async () => { setBusy(true);
+              try { await api.rejectForm(rec.id, user, note); } finally { setBusy(false); }
+            }} className="py-2.5 bg-amber-500 text-white rounded-lg font-bold text-sm hover:bg-amber-600 disabled:opacity-40 transition">
+              إعادة إلى الباحث (لإعادة التعبئة)
+            </button>
+            <button disabled={busy || !note.trim()} onClick={async () => { setBusy(true);
+              try { await api.declineForm(rec.id, user, note); } finally { setBusy(false); }
+            }} className="py-2.5 bg-red-700 text-white rounded-lg font-bold text-sm hover:bg-red-800 disabled:opacity-40 transition">
+              رفض وإغلاق المشروع
+            </button>
+          </div>
+          <p className="text-[10px] text-gray-500 dark:text-slate-400">«إعادة» و«رفض» يتطلبان كتابة السبب.</p>
+        </div>
+      )
+    : stage === 2 ? (
+        <div className="border border-blue-200 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-900/20 rounded-lg p-3 space-y-3">
+          <p className="text-xs font-bold text-blue-800 dark:text-blue-300">اعتماد المدير التنفيذي</p>
+          <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="ملاحظة (اختياري)"
+            className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 outline-none focus:ring-2 focus:ring-[#56B894]" />
+          <div className="grid gap-2">
+            <button disabled={busy} onClick={async () => { setBusy(true);
+              try { await api.approveForm(rec.id, user, note, { execNotes: note }); } finally { setBusy(false); }
+            }} className="py-2.5 bg-green-600 text-white rounded-lg font-bold text-sm hover:bg-green-700 disabled:opacity-50 transition">
+              اعتماد تنفيذي
+            </button>
+            <button disabled={busy || !note.trim()} onClick={async () => { setBusy(true);
+              try { await api.rejectForm(rec.id, user, note); } finally { setBusy(false); }
+            }} className="py-2.5 bg-amber-500 text-white rounded-lg font-bold text-sm hover:bg-amber-600 disabled:opacity-40 transition">
+              إعادة إلى الباحث للمراجعة
+            </button>
+          </div>
+        </div>
+      )
+    : stage === 3 ? (
+        <button disabled={busy} onClick={async () => { setBusy(true);
+          try { await api.approveForm(rec.id, user, note); } finally { setBusy(false); }
+        }} className="w-full py-2.5 bg-[#4A1F66] text-white rounded-lg font-bold text-sm hover:bg-[#3A1652] disabled:opacity-50 transition">
+          اعتماد وإحالة إلى إدارة المشاريع
+        </button>
+      )
+    : null;
 
   return (
-    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد الاستمارة ورفعها لقرار الاستحقاق">
+    <FormShell rec={rec} user={user} api={api} approvalSection={approvalSection}>
+
+      {/* Stage chip strip */}
+      <div className="flex gap-1.5 flex-wrap">
+        {STAGE_LABELS.map((label, idx) => {
+          const passed = idx < stage || rec.status === 'approved';
+          const current = idx === stage && rec.status === 'pending';
+          return (
+            <span key={idx}
+              className={`inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full
+                ${current ? 'bg-[#4A1F66] text-white'
+                  : passed ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-200'
+                    : 'bg-gray-100 text-gray-400 dark:bg-slate-800 dark:text-slate-500'}`}>
+              {passed && <CheckCircle2 className="w-3 h-3" />} {idx + 1}. {label}
+            </span>
+          );
+        })}
+      </div>
+
+      {/* Decision log */}
+      {(rec.approvals ?? []).length > 0 && (
+        <Card title="سجل القرارات" icon={Activity}>
+          <ul className="space-y-2">
+            {(rec.approvals ?? []).map((a, i) => (
+              <li key={i} className="text-xs border-b border-subtle last:border-0 pb-2 last:pb-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-bold text-fg">{roleName(a.role)}</span>
+                  <span className="text-fg-muted">— {a.actorName}</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                    a.decision === 'approved' ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-200'
+                      : a.decision === 'rejected' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200'
+                        : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200'}`}>{a.decision}</span>
+                  <span className="ms-auto text-[10px] text-fg-faint">{new Date(a.at).toLocaleString('ar-SA')}</span>
+                </div>
+                {a.note && <p className="text-fg-muted mt-1">{a.note}</p>}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       {canEdit ? (
         /* ── EDIT MODE ─────────────────────────────────────────────── */
@@ -512,16 +668,28 @@ export const F02Renderer: FormRenderer = ({ rec, user, api }) => {
               value={draft.researcher.opinion} onChange={e => upd('researcher', 'opinion', e.target.value)} />
           </Card>
 
-          {/* Section 7: File uploads */}
+          {/* Section 7: File uploads (titled) */}
           <Card title="المستندات المرفقة" icon={FileText}>
-            {uploading && <p className="text-xs text-fg-muted mb-2">جارٍ رفع الملفات…</p>}
-            <FileUploader
-              files={localFiles}
-              onAdd={handleAddFiles}
-              onRemove={i => setLocalFiles(f => f.filter((_, idx) => idx !== i))}
-              label="إرفاق صور المبنى والمستندات الداعمة"
-              accept="image/*,.pdf"
-            />
+            {existingFiles.length > 0 && (
+              <ul className="space-y-1.5 mb-3">
+                {existingFiles.map((f, i) => (
+                  <li key={i}>
+                    <a href={f.url} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-xs text-[#43bba1] hover:underline">
+                      <FileText className="w-3.5 h-3.5 shrink-0" /> {f.title || f.name}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <TitledFileUploader files={newFiles} onChange={setNewFiles}
+              pathPrefix={`projects/${rec.projectRefId}/forms/${rec.id}`} />
+            {newFiles.length > 0 && (
+              <button onClick={attachNewFiles} disabled={busy}
+                className="mt-2 px-4 py-1.5 rounded-lg bg-[#43bba1] text-white text-xs font-bold disabled:opacity-50">
+                {busy ? 'جارٍ الإرفاق…' : 'إرفاق الملفات'}
+              </button>
+            )}
           </Card>
 
           {/* Save button */}
@@ -644,16 +812,16 @@ export const F02Renderer: FormRenderer = ({ rec, user, api }) => {
             )}
           </Card>
 
-          {/* Section 5: Files */}
-          {localFiles.length > 0 && (
+          {/* Section 5: Files (titled, read-only) */}
+          {existingFiles.length > 0 && (
             <Card title="المستندات المرفقة" icon={FileText}>
               <ul className="space-y-1.5">
-                {localFiles.map((f, i) => (
+                {existingFiles.map((f, i) => (
                   <li key={i}>
                     <a href={f.url} target="_blank" rel="noopener noreferrer"
                       className="flex items-center gap-2 text-xs text-[#43bba1] hover:underline">
                       <FileText className="w-3.5 h-3.5 shrink-0" />
-                      {f.name}
+                      {f.title || f.name}
                     </a>
                   </li>
                 ))}

@@ -5,12 +5,12 @@ import {
   Shield, Settings, X, ArrowLeft, GitBranch, Clock, Plus,
 } from 'lucide-react';
 import {
-  DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, FormCode, FormDef, FORM_BY_CODE, RoleKey,
+  DEPARTMENTS, DEPT_BY_KEY, DepartmentKey, FormCode, FormDef, FORM_BY_CODE,
   formsByDepartment, departmentName, roleName, slaStatus,
   FORM_STATUS_LABELS,
 } from '../lib/data';
 import { Card, Pill, EmptyState } from './ui';
-import { FormsApi, formAwaitsUser, formCanBeOriginatedBy } from './Forms';
+import { FormsApi, formAwaitsUser } from './Forms';
 import type { UserProfile } from './Auth';
 
 const DEPT_ICON: Record<DepartmentKey, React.ElementType> = {
@@ -39,11 +39,8 @@ interface PortalProps {
    explanatory ("how it's triggered / who fills it / what happens next").
    ────────────────────────────────────────────────────────────────── */
 
-const EducationalFormModal: React.FC<{
-  form: FormDef; dept: DepartmentKey; onClose: () => void;
-  user: UserProfile; onCreateForm: (preselect?: FormCode) => void;
-}> =
-  ({ form, dept, onClose, user, onCreateForm }) => {
+const EducationalFormModal: React.FC<{ form: FormDef; dept: DepartmentKey; onClose: () => void }> =
+  ({ form, dept, onClose }) => {
     const isBridged = form.ownerDept !== dept && (form.bridgesTo || []).includes(dept);
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4" dir="rtl">
@@ -124,13 +121,6 @@ const EducationalFormModal: React.FC<{
             <p className="text-[11px] text-gray-500 dark:text-slate-400 italic border-t border-gray-100 dark:border-slate-700 pt-3">
               هذه نسخة تعليمية للتوضيح فقط — لا تُحفظ أي بيانات ولا تُؤثر على المسار الحقيقي.
             </p>
-
-            {(user.isAdmin || formCanBeOriginatedBy(form, user.role as RoleKey)) && (
-              <button onClick={() => { onClose(); onCreateForm(form.code); }}
-                className="w-full mt-4 py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm hover:bg-[#3A1652] transition flex items-center justify-center gap-2">
-                <Plus className="w-4 h-4" /> ابدأ تعبئة هذا النموذج
-              </button>
-            )}
           </div>
         </div>
       </div>
@@ -166,6 +156,13 @@ const DepartmentPortalLayout: React.FC<PortalProps & { dept: DepartmentKey; extr
         </div>
 
         {extras}
+
+        {dept === 'RESEARCH' && user.role === 'SOCIAL_RESEARCHER' && (
+          <button onClick={() => onCreateForm('F-02')}
+            className="w-full mb-4 py-3 rounded-xl bg-[#4A1F66] text-white font-bold text-sm hover:bg-[#3A1652] transition flex items-center justify-center gap-2 shadow-lg">
+            <Plus className="w-5 h-5" /> استمارة بحث جديدة +
+          </button>
+        )}
 
         {/* Section A — Department Forms (read-only educational mocks) */}
         <Card title={`نماذج القسم (${deptForms.length})`} icon={FileText} accent="purple">
@@ -236,7 +233,7 @@ const DepartmentPortalLayout: React.FC<PortalProps & { dept: DepartmentKey; extr
           )}
         </Card>
 
-        {educationalForm && <EducationalFormModal form={educationalForm} dept={dept} user={user} onCreateForm={onCreateForm} onClose={() => setEducationalForm(null)} />}
+        {educationalForm && <EducationalFormModal form={educationalForm} dept={dept} onClose={() => setEducationalForm(null)} />}
       </div>
     );
   };

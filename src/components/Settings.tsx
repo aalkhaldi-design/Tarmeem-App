@@ -147,6 +147,7 @@ export const SettingsPage: React.FC<{
           <div>
             <p className="text-base font-bold text-fg">منصة ترميم للعمليات</p>
             <p className="text-xs text-fg-muted mt-0.5">الإصدار v3.0 — جمعية ترميم الخيرية</p>
+            <p className="text-[10px] text-fg-faint mt-0.5 font-mono" dir="ltr">build: {__BUILD_ID__}</p>
           </div>
         </div>
         <div className="space-y-1.5 text-xs text-fg-muted border-t border-subtle pt-3">

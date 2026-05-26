@@ -436,10 +436,19 @@ export const F08Renderer: FormRenderer = ({ rec, user, api, context, users }) =>
 
   const activeCroquis = (data.croquisList as F08Croquis[]).find(c => c.id === activeCroquisId);
 
+  const [saved, setSaved] = useState(false);
   const save = async () => {
-    setSaving(true);
-    try { await api.updateFormData(rec.id, data); }
-    finally { setSaving(false); }
+    setSaving(true); setSaved(false);
+    try {
+      // Firestore rejects `undefined` — strip it before writing, no submit/status change.
+      const clean = JSON.parse(JSON.stringify(data));
+      await api.updateFormData(rec.id, clean);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      console.error('F-08 save failed:', e);
+      alert('تعذّر حفظ التعديلات — تحقق من الاتصال وحاول مجدداً');
+    } finally { setSaving(false); }
   };
 
   const steps = ['الأساسية', 'حصر الأعمال', 'الأثاث والأجهزة', 'كروكي المبنى', 'الاعتماد والرفع'];
@@ -945,7 +954,7 @@ export const F08Renderer: FormRenderer = ({ rec, user, api, context, users }) =>
         {canEdit ? (
           <button onClick={save} disabled={saving}
             className="px-5 py-2 text-sm font-bold rounded-lg bg-[#4A1F66] text-white hover:bg-[#3A1652] disabled:opacity-50 transition">
-            {saving ? 'جارٍ الحفظ…' : 'حفظ التعديلات'}
+            {saving ? 'جارٍ الحفظ…' : saved ? 'تم الحفظ ✓' : 'حفظ التعديلات'}
           </button>
         ) : <span />}
         <div className="flex gap-2">

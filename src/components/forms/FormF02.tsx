@@ -5,19 +5,19 @@
  */
 
 import React, { useState } from 'react';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { writeBatch, doc, collection } from 'firebase/firestore';
 import {
   X, Send, Users as UsersIcon, Home as HomeIcon, Activity,
   Briefcase, DollarSign, FileSignature, ShieldCheck, Save, FileText,
-  CheckCircle2, Trash2, Plus,
+  CheckCircle2,
 } from 'lucide-react';
 import { Card, Input, Select, TextArea, ReadOnlyField } from '../ui';
 import { DEFAULT_LISTS, SaudiRiyalGlassIcon, FormCode, FORM_BY_CODE, RoleKey, roleName } from '../../lib/data';
 import { FormCreator, FormRenderer, formAwaitsUser } from '../Forms';
 import type { FormRecord } from '../Forms';
 import { FormShell, SectionTitle } from './FormShell';
-import { storage, db } from '../../lib/firebase';
+import { TitledFileUploader, TitledFile } from './TitledFileUploader';
+import { db } from '../../lib/firebase';
 
 /* ─── Domain types ───────────────────────────────────────────────── */
 
@@ -100,60 +100,6 @@ function toF02(raw: unknown): F02Data {
 function sumValues(obj: Record<string, unknown>): number {
   return Object.values(obj).reduce<number>((a, b) => a + Number(b || 0), 0);
 }
-
-/* ─── Titled file uploader (full-width rows; editable title per file) ─── */
-
-interface TitledFile { name: string; title: string; url?: string; size?: number; uploadedAt?: string }
-
-const TitledFileUploader: React.FC<{
-  files: TitledFile[];
-  onChange: (files: TitledFile[]) => void;
-  pathPrefix: string;
-  disabled?: boolean;
-}> = ({ files, onChange, pathPrefix, disabled }) => {
-  const [uploading, setUploading] = useState(false);
-
-  const handleAdd = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) return;
-    setUploading(true);
-    try {
-      const added: TitledFile[] = [];
-      for (const file of Array.from(fileList)) {
-        const sRef = ref(storage, `${pathPrefix}/${crypto.randomUUID()}/${file.name}`);
-        await uploadBytes(sRef, file);
-        const url = await getDownloadURL(sRef);
-        added.push({ name: file.name, title: file.name, url, size: file.size, uploadedAt: new Date().toISOString() });
-      }
-      onChange([...files, ...added]);
-    } finally { setUploading(false); }
-  };
-
-  return (
-    <div className="space-y-2">
-      {files.map((f, i) => (
-        <div key={i} className="flex items-center gap-2 w-full p-2 rounded-lg border border-subtle bg-surface-up">
-          <Input className="flex-1" placeholder="عنوان المستند" value={f.title}
-            onChange={e => onChange(files.map((x, idx) => idx === i ? { ...x, title: e.target.value } : x))} />
-          <a href={f.url} target="_blank" rel="noopener noreferrer"
-            className="text-[11px] text-[#43bba1] hover:underline truncate max-w-[140px]">{f.name}</a>
-          {!disabled && (
-            <button type="button" onClick={() => onChange(files.filter((_, idx) => idx !== i))}
-              className="p-1.5 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 shrink-0">
-              <Trash2 className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-      ))}
-      {!disabled && (
-        <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#56B894] text-white text-xs font-bold cursor-pointer">
-          <Plus className="w-3 h-3" /> {uploading ? 'جارٍ الرفع…' : 'إضافة ملف'}
-          <input type="file" multiple className="hidden" disabled={uploading}
-            onChange={e => { handleAdd(e.target.files); e.target.value = ''; }} />
-        </label>
-      )}
-    </div>
-  );
-};
 
 /* ═══════════════════════════════════════════════════════════════════
    F02Creator — 4-step wizard modal

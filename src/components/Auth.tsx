@@ -172,6 +172,9 @@ export function AuthScreen({ onAuth }: { onAuth: (user: any) => void }) {
             بعد التسجيل سيراجع مدير النظام طلبك ويسند الدور والإدارة المناسبة قبل تفعيل الحساب.
           </p>
         )}
+        <p className="text-[10px] text-gray-400 dark:text-slate-500 text-center mt-4 font-mono" dir="ltr">
+          build: {__BUILD_ID__}
+        </p>
       </div>
     </div>
   );

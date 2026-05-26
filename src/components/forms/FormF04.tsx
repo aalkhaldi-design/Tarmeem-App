@@ -1,16 +1,15 @@
 /**
  * FormF04.tsx — Assign Diagnosis Engineer
- * Phase: Post-F-03 Approval
- * Role: HEAD_DIAGNOSIS assigns DIAGNOSIS_ENGINEER
- * Output: Sets project.diagnosisEngineerId via TRIGGER_MAP F-04 entry
+ * Role: HEAD_DIAGNOSIS assigns DIAGNOSIS_ENGINEER + optional فريق الفزعة.
+ * Output: project.diagnosisEngineerId via TRIGGER_MAP F-04; F-08 reads data.helpers.
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { UserCog, Check, AlertTriangle, Users as UsersIcon } from 'lucide-react';
 import { FormRenderer, formAwaitsUser } from '../Forms';
-import { Card, Select, Pill } from '../ui';
-import { roleName } from '../../lib/data';
+import { Card } from '../ui';
 import { FormShell } from './FormShell';
+import { SearchablePeoplePicker } from './SearchablePeoplePicker';
 
 export const FormF04Renderer: FormRenderer = ({ rec, user, api, users }) => {
   const [engineerId, setEngineerId] = useState<string>((rec.data?.engineerId as string) || '');
@@ -22,17 +21,16 @@ export const FormF04Renderer: FormRenderer = ({ rec, user, api, users }) => {
     () => users.filter(u => u.role === 'DIAGNOSIS_ENGINEER' && u.status === 'active'),
     [users],
   );
-  // الفزعة pool: all active PROJECTS-department members (any role).
-  const projectsMembers = useMemo(
-    () => users.filter(u => u.department === 'PROJECTS' && u.status === 'active'),
-    [users],
+  // فريق الفزعة pool: active PROJECTS members, EXCLUDING admins,
+  // مدير إدارة المشاريع (PROJECTS_MANAGER), and the chosen engineer.
+  const helperPool = useMemo(
+    () => users.filter(u =>
+      u.department === 'PROJECTS' && u.status === 'active' &&
+      !u.isAdmin && u.role !== 'PROJECTS_MANAGER' && u.id !== engineerId),
+    [users, engineerId],
   );
   const selectedEngineer = diagnosisEngineers.find(e => e.id === engineerId);
-  const toggleHelper = (id: string) =>
-    setHelpers(hs => hs.includes(id) ? hs.filter(x => x !== id) : [...hs, id]);
 
-  // Persist the pick + الفزعة helpers to form.data before approval — the F-04
-  // trigger reads approvedRecord.data.engineerId, and F-08 reads data.helpers.
   useEffect(() => {
     if (!engineerId || isReadOnly) return;
     const t = setTimeout(() => { api.updateFormData(rec.id, { engineerId, helpers }); }, 500);
@@ -46,13 +44,14 @@ export const FormF04Renderer: FormRenderer = ({ rec, user, api, users }) => {
           اختر مهندس التشخيص المسؤول عن هذا المشروع.
         </p>
 
-        <Select
-          label="مهندس التشخيص"
-          value={engineerId}
-          onChange={e => setEngineerId(e.target.value)}
-          readOnly={isReadOnly}
-          options={diagnosisEngineers.map(e => ({ value: e.id, label: `${e.fullName} (${e.email})` }))}
-          placeholder="— اختر مهندس —"
+        <label className="block text-xs font-bold text-fg-muted mb-1">مهندس التشخيص</label>
+        <SearchablePeoplePicker
+          people={diagnosisEngineers}
+          selected={engineerId ? [engineerId] : []}
+          onChange={ids => setEngineerId(ids[0] || '')}
+          multi={false}
+          placeholder="ابحث واختر مهندس التشخيص (بالاسم أو البريد)"
+          disabled={isReadOnly}
         />
 
         {selectedEngineer && (
@@ -81,31 +80,14 @@ export const FormF04Renderer: FormRenderer = ({ rec, user, api, users }) => {
           <p className="text-xs font-bold text-gray-700 dark:text-slate-200 flex items-center gap-1.5 mb-2">
             <UsersIcon className="w-3.5 h-3.5" /> فريق الفزعة (مساعدون اختياريون)
           </p>
-          {isReadOnly ? (
-            helpers.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {helpers.map(id => {
-                  const u = users.find(x => x.id === id);
-                  return <Pill key={id} tone="teal">{u?.fullName || id}</Pill>;
-                })}
-              </div>
-            ) : (
-              <p className="text-xs text-gray-400 dark:text-slate-500">لا يوجد مساعدون.</p>
-            )
-          ) : (
-            <div className="space-y-1.5">
-              {projectsMembers.filter(m => m.id !== engineerId).map(m => (
-                <label key={m.id} className="flex items-center gap-2 cursor-pointer text-sm">
-                  <input type="checkbox" checked={helpers.includes(m.id)} onChange={() => toggleHelper(m.id)}
-                    className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66] w-4 h-4" />
-                  <span className="text-gray-700 dark:text-slate-200">{m.fullName} <span className="text-[10px] text-gray-400">· {roleName(m.role)}</span></span>
-                </label>
-              ))}
-              {projectsMembers.filter(m => m.id !== engineerId).length === 0 && (
-                <p className="text-xs text-gray-400 dark:text-slate-500">لا يوجد أعضاء آخرون في إدارة المشاريع.</p>
-              )}
-            </div>
-          )}
+          <SearchablePeoplePicker
+            people={helperPool}
+            selected={helpers}
+            onChange={setHelpers}
+            multi={true}
+            placeholder="ابحث واختر فريق الفزعة (بالاسم أو البريد)"
+            disabled={isReadOnly}
+          />
         </div>
       </Card>
     </FormShell>

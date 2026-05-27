@@ -92,28 +92,28 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
     const f21 = ctx.forms.find(f => f.code === 'F-21' && f.projectRefId === projectRefId);
     const f18 = ctx.forms.find(f => f.code === 'F-18' && f.projectRefId === projectRefId);
     const f22 = ctx.forms.find(f => f.code === 'F-22' && f.projectRefId === projectRefId);
-    // SINGLE SOURCE: top-level data.safetyHazard only, per RENDERER_CONTRACT
-    const safetyHazard = !!(ctx.dataPatch?.safetyHazard ?? (ctx.approvedRecord.data as { safetyHazard?: boolean })?.safetyHazard);
+    // SINGLE SOURCE: top-level data.noEvacuation only, per RENDERER_CONTRACT.
+    const noEvacuation = !!(ctx.dataPatch?.noEvacuation ?? (ctx.approvedRecord.data as { noEvacuation?: boolean })?.noEvacuation);
     const project = ctx.projects.find(p => p.id === projectRefId);
 
+    // Always open: supply plan (F-20), furniture/appliance inventory (F-21),
+    // and the OPTIONAL alternative-housing request (F-22 — triggers nothing).
     const result: CascadeResult = {
       activate: [
         ...(f20 ? [{ formId: f20.id }] : []),
         ...(f21 ? [{ formId: f21.id, assigneeId: project?.diagnosisEngineerId || null }] : []),
+        ...(f22 ? [{ formId: f22.id, assigneeId: project?.createdBy || null, data: { city: project?.city || '' } }] : []),
       ],
     };
 
-    if (safetyHazard) {
+    // Evacuation pledge (F-18) opens by default; auto-skipped only in the rare
+    // case the engineer checked "المبنى ليس بحاجة إخلاء".
+    if (!noEvacuation) {
       if (f18) result.activate!.push({ formId: f18.id, assigneeId: project?.createdBy || null });
-      if (f22) result.activate!.push({ formId: f22.id, assigneeId: project?.createdBy || null, data: { city: project?.city || '' } });
-      result.projectPatch = { phase: 'EVACUATION' as ProjectPhase, progressPct: 30 };
     } else {
-      result.autoComplete = [
-        ...(f18 ? [{ formId: f18.id, note: 'تخطي تلقائي — لا يحتاج إخلاء' }] : []),
-        ...(f22 ? [{ formId: f22.id, note: 'تخطي تلقائي — لا يحتاج سكن بديل' }] : []),
-      ];
-      result.projectPatch = { progressPct: 30 };
+      if (f18) result.autoComplete = [{ formId: f18.id, note: 'تخطي تلقائي — لا يحتاج إخلاء' }];
     }
+    result.projectPatch = { progressPct: 30 };
     return result;
   },
 

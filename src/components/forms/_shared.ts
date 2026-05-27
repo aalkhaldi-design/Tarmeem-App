@@ -77,7 +77,7 @@ export const ACTIVATE_DATA_PROPAGATIONS = {
    ────────────────────────────────────────────────────────────────── */
 export const RENDERER_CONTRACT = {
   'F-04': ['engineerId'],
-  'F-08': ['safetyHazard'],     // TOP LEVEL only — NOT data.basic.safetyHazard
+  'F-08': ['noEvacuation'],     // TOP LEVEL only
   'F-85': ['winnerContractor', 'winnerPrice'],
   'F-32': ['engineerId'],
   'F-14': ['overallProgress', 'requestScopeChange'],

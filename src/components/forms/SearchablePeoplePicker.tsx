@@ -40,13 +40,13 @@ export const SearchablePeoplePicker: React.FC<{
         <ChevronDown className="w-4 h-4 shrink-0 text-fg-muted" />
       </button>
       {open && !disabled && (
-        <div className="absolute z-30 mt-1 w-full rounded-lg border border-subtle bg-white dark:bg-slate-900 shadow-xl max-h-64 overflow-hidden flex flex-col">
+        <div className="mt-1 w-full rounded-lg border border-subtle bg-white dark:bg-slate-900 shadow-xl overflow-hidden flex flex-col">
           <div className="flex items-center gap-2 px-3 py-2 border-b border-subtle">
             <Search className="w-4 h-4 text-fg-muted" />
             <input autoFocus value={q} onChange={e => setQ(e.target.value)}
               placeholder="ابحث بالاسم أو البريد…" className="flex-1 bg-transparent text-sm outline-none" />
           </div>
-          <div className="overflow-y-auto">
+          <div className="max-h-56 overflow-y-auto">
             {filtered.length === 0 && <p className="px-3 py-3 text-xs text-fg-faint">لا نتائج</p>}
             {filtered.map(p => {
               const on = selected.includes(p.id);

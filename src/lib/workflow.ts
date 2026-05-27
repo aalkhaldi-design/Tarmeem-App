@@ -88,7 +88,7 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
 
   'F-08': (ctx) => {
     const projectRefId = ctx.approvedRecord.projectRefId!;
-    const f20 = ctx.forms.find(f => f.code === 'F-20' && f.projectRefId === projectRefId);
+    const f84 = ctx.forms.find(f => f.code === 'F-84' && f.projectRefId === projectRefId);
     const f21 = ctx.forms.find(f => f.code === 'F-21' && f.projectRefId === projectRefId);
     const f18 = ctx.forms.find(f => f.code === 'F-18' && f.projectRefId === projectRefId);
     const f22 = ctx.forms.find(f => f.code === 'F-22' && f.projectRefId === projectRefId);
@@ -96,18 +96,17 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
     const noEvacuation = !!(ctx.dataPatch?.noEvacuation ?? (ctx.approvedRecord.data as { noEvacuation?: boolean })?.noEvacuation);
     const project = ctx.projects.find(p => p.id === projectRefId);
 
-    // Always open: supply plan (F-20), furniture/appliance inventory (F-21),
-    // and the OPTIONAL alternative-housing request (F-22 — triggers nothing).
+    // F-08 opens (all at once): inventory (F-21), contractor pricing (F-84),
+    // the optional housing request (F-22), and the evacuation pledge (F-18)
+    // unless the building needs no evacuation.
     const result: CascadeResult = {
       activate: [
-        ...(f20 ? [{ formId: f20.id }] : []),
         ...(f21 ? [{ formId: f21.id, assigneeId: project?.diagnosisEngineerId || null }] : []),
+        ...(f84 ? [{ formId: f84.id, assigneeId: project?.diagnosisEngineerId || null }] : []),
         ...(f22 ? [{ formId: f22.id, assigneeId: project?.createdBy || null, data: { city: project?.city || '' } }] : []),
       ],
     };
 
-    // Evacuation pledge (F-18) opens by default; auto-skipped only in the rare
-    // case the engineer checked "المبنى ليس بحاجة إخلاء".
     if (!noEvacuation) {
       if (f18) result.activate!.push({ formId: f18.id, assigneeId: project?.createdBy || null });
     } else {
@@ -118,21 +117,24 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
   },
 
   'F-20': (ctx) => {
-    const f84 = ctx.forms.find(f => f.code === 'F-84' && f.projectRefId === ctx.approvedRecord.projectRefId);
+    const f32 = ctx.forms.find(f => f.code === 'F-32' && f.projectRefId === ctx.approvedRecord.projectRefId);
     return {
-      projectPatch: { phase: 'TENDERING' as ProjectPhase, progressPct: 45 },
-      activate: f84 ? [{ formId: f84.id }] : [],
+      projectPatch: { progressPct: 58 },
+      activate: f32 ? [{ formId: f32.id }] : [],
     };
   },
 
   'F-84': (ctx) => {
     const f85 = ctx.forms.find(f => f.code === 'F-85' && f.projectRefId === ctx.approvedRecord.projectRefId);
-    return { activate: f85 ? [{ formId: f85.id }] : [] };
+    return {
+      projectPatch: { phase: 'TENDERING' as ProjectPhase, progressPct: 45 },
+      activate: f85 ? [{ formId: f85.id }] : [],
+    };
   },
 
   'F-85': (ctx) => {
     const projectRefId = ctx.approvedRecord.projectRefId!;
-    const f32 = ctx.forms.find(f => f.code === 'F-32' && f.projectRefId === projectRefId);
+    const f20 = ctx.forms.find(f => f.code === 'F-20' && f.projectRefId === projectRefId);
     const f35 = ctx.forms.find(f => f.code === 'F-35' && f.projectRefId === projectRefId);
     return {
       projectPatch: {
@@ -141,7 +143,7 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
         progressPct: 55,
       } as Partial<ProjectRecord>,
       activate: [
-        ...(f32 ? [{ formId: f32.id }] : []),
+        ...(f20 ? [{ formId: f20.id }] : []),
         ...(f35 ? [{ formId: f35.id }] : []),
       ],
     };

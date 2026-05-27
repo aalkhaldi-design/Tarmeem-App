@@ -145,8 +145,8 @@ type PhaseEntry = { code: FormCode; def: FormDef; records: FormRecord[] };
 
 const PHASE_FORMS: Record<PhaseIdx, FormCode[]> = {
   1: ['F-02'],
-  2: ['F-04', 'F-08', 'F-18', 'F-22', 'F-21', 'F-20'],
-  3: ['F-84', 'F-85', 'F-32', 'F-33', 'F-35'],
+  2: ['F-04', 'F-08', 'F-18', 'F-22', 'F-21', 'F-84'],
+  3: ['F-85', 'F-20', 'F-32', 'F-33', 'F-35'],
   4: ['F-34', 'F-19', 'F-14', 'F-23', 'F-15'],
   5: ['F-07', 'F-52'],
 };
@@ -416,8 +416,8 @@ const FormAccordionItem: React.FC<{
   // For a draft, find the upstream form that must be approved first.
   const upstreamWaiting = useMemo(() => {
     if (rec.status !== 'draft') return null;
-    const order = ['F-02','F-03','F-03.1','F-03.2','F-04','F-08','F-18','F-22','F-21','F-20',
-      'F-84','F-85','F-32','F-33','F-35','F-34','F-19','F-14','F-23','F-07','F-52'];
+    const order = ['F-02','F-03','F-03.1','F-03.2','F-04','F-08','F-18','F-22','F-21','F-84',
+      'F-85','F-20','F-32','F-33','F-35','F-34','F-19','F-14','F-23','F-07','F-52'];
     const projectForms = api.forms
       .filter(f => f.projectRefId === rec.projectRefId)
       .sort((a, b) => order.indexOf(a.code) - order.indexOf(b.code));

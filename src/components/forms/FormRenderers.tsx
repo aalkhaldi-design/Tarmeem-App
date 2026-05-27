@@ -15,7 +15,7 @@ import {
   X, Send, Plus, Building2, Users as UsersIcon, Home as HomeIcon, Activity,
   ClipboardList, Calculator, Trophy, ShieldCheck, Camera, Truck, ShoppingCart,
   DollarSign, Briefcase, FileSignature, AlertTriangle, CheckCircle2,
-  Calendar, PenTool, Edit3, Eye, Sofa, ChevronUp, ChevronDown, Trash2,
+  Calendar, PenTool, Edit3, Eye, Sofa, ChevronUp, ChevronDown, Trash2, RotateCcw,
 } from 'lucide-react';
 
 import {
@@ -1156,26 +1156,120 @@ export const F21Creator: FormCreator = ({ user, api, context, onClose }) => {
   );
 };
 
+// ── F-21 catalogs (mirror F-08 furnitureFixed / appliancesFixed / works) ──
+const F21_FURNITURE = [
+  { k: 'bedSingle', l: 'سرير مفرد' }, { k: 'bed15', l: 'سرير نفر ونص' }, { k: 'bedDouble', l: 'سرير مزدوج' },
+  { k: 'mattressSingle', l: 'مراتب نفر' }, { k: 'mattress15', l: 'مرتبة نفر ونص' }, { k: 'mattressDouble', l: 'مراتب نفرين' },
+  { k: 'sofaMeters', l: 'كنب (أمتار)' }, { k: 'floorSeating', l: 'جلسة أرضية' }, { k: 'carpet', l: 'سجاد' },
+  { k: 'wardrobe2', l: 'دولاب بابين' }, { k: 'wardrobe3', l: 'دولاب 3 أبواب' }, { k: 'wardrobe4', l: 'دولاب 4 أبواب' },
+  { k: 'nightstand', l: 'كومدينة درجين' }, { k: 'vanity', l: 'تسريحة' },
+];
+const F21_APPLIANCES = [
+  { k: 'acSplit1', l: 'مكيف سبلت طن' }, { k: 'acSplit15', l: 'مكيف سبلت طن ونص' }, { k: 'acWindow15', l: 'مكيف شباك طن ونص' },
+  { k: 'washer', l: 'غسالة' }, { k: 'stove', l: 'فرن غاز' }, { k: 'fridge', l: 'ثلاجة' },
+  { k: 'vacuum', l: 'مكنسة كهربائية' }, { k: 'waterCooler', l: 'براد ماء' },
+];
+const F21_CIVIL = [
+  { k: 'ceiling', l: 'أسقف' }, { k: 'concrete', l: 'خرسانة' }, { k: 'ceramic', l: 'سيراميك' }, { k: 'insulation', l: 'عزل' },
+  { k: 'plaster', l: 'مساح' }, { k: 'paint', l: 'دهانات' }, { k: 'aluminum', l: 'ألمنيوم (نوافذ)' }, { k: 'wood', l: 'نجارة (أبواب)' },
+];
+const F21_ELEC = [
+  { k: 'ceilingLight', l: 'مصباح مستعار' }, { k: 'breaker', l: 'لوح/بريكر' }, { k: 'normalSocket', l: 'أفياش عادية' }, { k: 'spotlight', l: 'سبوت لايت' },
+];
+const F21_PLUMB = [
+  { k: 'arabicToilet', l: 'كرسي عربي' }, { k: 'westernToilet', l: 'كرسي إفرنجي' }, { k: 'ceramicSink', l: 'مغاسل خزف' }, { k: 'heater', l: 'سخانة' },
+];
+
+interface InvRow { id: string; label: string; qty: string; comment: string }
+interface InvSection { rows: InvRow[]; comment: string }
+
+const f21Uid = (p: string) => p + Math.random().toString(36).slice(2, 8);
+function f21Extract(f08?: Record<string, any>): { furniture: InvSection; appliances: InvSection; materials: InvSection } {
+  const d = f08 || {};
+  const fur: InvRow[] = [];
+  F21_FURNITURE.forEach(i => { const q = Number(d.furnitureFixed?.[i.k]); if (q > 0) fur.push({ id: f21Uid('f_'), label: i.l, qty: String(q), comment: '' }); });
+  (d.furnitureCustom || []).forEach((c: any) => { if (Number(c.count) > 0) fur.push({ id: f21Uid('fc_'), label: c.name || 'بند', qty: String(c.count), comment: c.note || '' }); });
+  const app: InvRow[] = [];
+  F21_APPLIANCES.forEach(i => { const q = Number(d.appliancesFixed?.[i.k]); if (q > 0) app.push({ id: f21Uid('a_'), label: i.l, qty: String(q), comment: '' }); });
+  (d.appliancesCustom || []).forEach((c: any) => { if (Number(c.count) > 0) app.push({ id: f21Uid('ac_'), label: c.name || 'بند', qty: String(c.count), comment: c.note || '' }); });
+  const mat: InvRow[] = [];
+  (d.works || []).forEach((w: any) => {
+    const room = w.roomName || w.title || 'غرفة';
+    F21_CIVIL.forEach(i => { const v = w.civilFixed?.[i.k]; if (v && String(v).trim()) mat.push({ id: f21Uid('mc_'), label: `${i.l} — ${room}`, qty: String(v), comment: '' }); });
+    F21_ELEC.forEach(i => { const q = Number(w.electricalFixed?.[i.k]); if (q > 0) mat.push({ id: f21Uid('me_'), label: `${i.l} — ${room}`, qty: String(q), comment: '' }); });
+    F21_PLUMB.forEach(i => { const q = Number(w.plumbingFixed?.[i.k]); if (q > 0) mat.push({ id: f21Uid('mp_'), label: `${i.l} — ${room}`, qty: String(q), comment: '' }); });
+  });
+  return { furniture: { rows: fur, comment: '' }, appliances: { rows: app, comment: '' }, materials: { rows: mat, comment: '' } };
+}
+
+const InvSectionEditor: React.FC<{ title: string; icon: any; section: InvSection; catalog: { l: string }[]; canEdit: boolean; onChange: (s: InvSection) => void }> = ({ title, icon, section, catalog, canEdit, onChange }) => {
+  const [showAdd, setShowAdd] = useState(false);
+  const setRows = (rows: InvRow[]) => onChange({ ...section, rows });
+  const upd = (id: string, k: keyof InvRow, v: string) => setRows(section.rows.map(r => r.id === id ? { ...r, [k]: v } : r));
+  const addRow = (label: string) => { setRows([...section.rows, { id: f21Uid('n_'), label, qty: '', comment: '' }]); setShowAdd(false); };
+  return (
+    <Card title={title} icon={icon}>
+      <div className="space-y-2">
+        {section.rows.map(r => (
+          <div key={r.id} className="p-2.5 rounded-xl border border-subtle bg-surface-up space-y-2">
+            <div className="flex items-center gap-2">
+              <Input className="flex-1" placeholder="البند" value={r.label} readOnly={!canEdit} onChange={e => upd(r.id, 'label', e.target.value)} />
+              <Input className="w-24" placeholder="الكمية" value={r.qty} readOnly={!canEdit} onChange={e => upd(r.id, 'qty', e.target.value)} />
+              {canEdit && <button onClick={() => setRows(section.rows.filter(x => x.id !== r.id))} className="p-1.5 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 shrink-0"><Trash2 className="w-4 h-4" /></button>}
+            </div>
+            <Input placeholder="ملاحظة على البند" value={r.comment} readOnly={!canEdit} onChange={e => upd(r.id, 'comment', e.target.value)} />
+          </div>
+        ))}
+        {section.rows.length === 0 && <p className="text-xs text-fg-faint">لا بنود بكميات في هذا القسم.</p>}
+        {canEdit && (
+          <div>
+            <button onClick={() => setShowAdd(s => !s)} className="px-3 py-1.5 rounded-lg bg-[#56B894] text-white text-xs font-bold flex items-center gap-1.5"><Plus className="w-3 h-3" /> أضف بنداً</button>
+            {showAdd && (
+              <div className="mt-2 p-2 rounded-lg border border-subtle bg-surface-up flex flex-wrap gap-1.5">
+                {catalog.map(c => <button key={c.l} onClick={() => addRow(c.l)} className="px-2 py-1 rounded-md bg-gray-100 dark:bg-slate-800 text-xs">{c.l}</button>)}
+                <button onClick={() => addRow('')} className="px-2 py-1 rounded-md bg-[#4A1F66] text-white text-xs">+ بند مخصص</button>
+              </div>
+            )}
+          </div>
+        )}
+        <TextArea label="ملاحظة عامة على القسم" rows={2} value={section.comment} readOnly={!canEdit} onChange={e => onChange({ ...section, comment: e.target.value })} />
+      </div>
+    </Card>
+  );
+};
+
 export const F21Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
+  const f04 = api.forms.find(f => f.code === 'F-04' && f.projectRefId === rec.projectRefId);
+  const helperIds = ((f04?.data?.helpers as string[]) || []);
+  const canEdit = rec.status === 'pending' && (user.isAdmin || user.role === 'HEAD_DIAGNOSIS' || user.id === rec.assigneeId || helperIds.includes(user.id));
+  const f08 = api.forms.find(f => f.code === 'F-08' && f.projectRefId === rec.projectRefId);
+
+  const [sections, setSections] = useState<{ furniture: InvSection; appliances: InvSection; materials: InvSection }>(
+    () => (d.f21_sections as any) || f21Extract(f08?.data as any),
+  );
+  const [recommendation, setRecommendation] = useState<string>((d.f21_recommendation as string) || '');
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const persist = () => api.updateFormData(rec.id, JSON.parse(JSON.stringify({ f21_sections: sections, f21_recommendation: recommendation })));
+  const save = async () => { setSaved(false); try { await persist(); setSaved(true); setTimeout(() => setSaved(false), 2500); } catch (e) { console.error('F-21 save failed:', e); alert('تعذّر الحفظ — حاول مجدداً'); } };
+  const submit = async () => { setBusy(true); try { await persist(); await api.approveForm(rec.id, user, ''); } finally { setBusy(false); } };
+  const restore = () => { if (confirm('استرجاع البنود الأصلية من كراسة التشخيص؟ سيُستبدل ما أدخلته.')) setSections(f21Extract(f08?.data as any)); };
+
   return (
-    <FormShell rec={rec} user={user} api={api}>
-      <Card title="ملخص الحصر" icon={ClipboardList}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <ReadOnlyField label="إجمالي الأثاث" value={<span className="flex items-center gap-1">{Number(d.totalFurniture || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
-          <ReadOnlyField label="إجمالي الأجهزة" value={<span className="flex items-center gap-1">{Number(d.totalAppliance || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
-          <ReadOnlyField label="الإجمالي العام" value={<span className="flex items-center gap-1">{Number(d.total || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
-        </div>
-      </Card>
-      <Card title="الأثاث" icon={HomeIcon}>
-        <div className="flex flex-wrap gap-2">
-          {Object.entries(d.furniture || {}).map(([k, v]) => Number(v) > 0 ? <Pill key={k} tone="purple">{FURNITURE_CATALOG.find(i => i.key === k)?.label || k}: {v as any}</Pill> : null)}
-        </div>
-      </Card>
-      <Card title="الأجهزة" icon={Activity}>
-        <div className="flex flex-wrap gap-2">
-          {Object.entries(d.appliances || {}).map(([k, v]) => Number(v) > 0 ? <Pill key={k} tone="teal">{APPLIANCE_CATALOG.find(i => i.key === k)?.label || k}: {v as any}</Pill> : null)}
-        </div>
+    <FormShell rec={rec} user={user} api={api} approvalSection={canEdit ? (
+      <div className="flex gap-2">
+        <button onClick={save} className="flex-1 py-2.5 rounded-lg border-2 border-[#4A1F66] text-[#4A1F66] dark:text-purple-300 font-bold text-sm">{saved ? 'تم الحفظ ✓' : 'حفظ المسودة'}</button>
+        <button disabled={busy} onClick={submit} className="flex-1 py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">{busy ? 'جارٍ التقديم…' : 'تقديم نهائي'}</button>
+      </div>
+    ) : <></>}>
+      {canEdit && <button onClick={restore} className="mb-1 px-3 py-1.5 rounded-lg border border-subtle text-xs font-bold text-fg-muted flex items-center gap-1.5"><RotateCcw className="w-3.5 h-3.5" /> استرجاع الأصل من كراسة التشخيص</button>}
+      <InvSectionEditor title="الأثاث" icon={Sofa} section={sections.furniture} catalog={F21_FURNITURE.map(i => ({ l: i.l }))} canEdit={canEdit} onChange={s => setSections(p => ({ ...p, furniture: s }))} />
+      <InvSectionEditor title="الأجهزة" icon={ShoppingCart} section={sections.appliances} catalog={F21_APPLIANCES.map(i => ({ l: i.l }))} canEdit={canEdit} onChange={s => setSections(p => ({ ...p, appliances: s }))} />
+      <InvSectionEditor title="المواد" icon={Truck} section={sections.materials} catalog={[...F21_CIVIL, ...F21_ELEC, ...F21_PLUMB].map(i => ({ l: i.l }))} canEdit={canEdit} onChange={s => setSections(p => ({ ...p, materials: s }))} />
+      <Card title="التوصية" icon={ClipboardList}>
+        <TextArea label="" rows={3} value={recommendation} readOnly={!canEdit} onChange={e => setRecommendation(e.target.value)} />
       </Card>
     </FormShell>
   );

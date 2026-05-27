@@ -258,7 +258,7 @@ export const FORMS: FormDef[] = [
   },
   /* F-21 */
   {
-    code: 'F-21', title: 'حصر الأثاث والأجهزة', titleEn: 'Furniture & Appliances Inventory',
+    code: 'F-21', title: 'حصر الأثاث والأجهزة والمواد', titleEn: 'Furniture, Appliances & Materials Inventory',
     category: 'BENEFICIARY', ownerDept: 'PROJECTS',
     originRoles: ['DIAGNOSIS_ENGINEER', 'ITQAN_HEAD', 'ITQAN_MEMBER'],
     approvalChain: ['DIAGNOSIS_ENGINEER', 'PROJECTS_MANAGER', 'MARKETING_MANAGER', 'SUPPORT_MANAGER', 'FINANCE_HEAD'],

@@ -354,8 +354,16 @@ function App() {
     if (!rec) return;
 
     const expected = rec.approvalChain[rec.approvalIndex] as RoleKey;
-    if (expected !== user.role && !user.isAdmin) return;
-    if (rec.assigneeId && rec.assigneeId !== user.id && !user.isAdmin) return;
+    // Collaborative forms (F-21 inventory, F-84 pricing): any authorized PROJECTS
+    // editor may submit — not only the assigned engineer. The renderer gates which
+    // of them sees the submit button (رئيس التشخيص / chosen engineer / فريق الفزعة).
+    const isCollabSubmit = (rec.code === 'F-21' || rec.code === 'F-84')
+      && decision === 'approved'
+      && (user.isAdmin || user.department === 'PROJECTS');
+    if (!isCollabSubmit) {
+      if (expected !== user.role && !user.isAdmin) return;
+      if (rec.assigneeId && rec.assigneeId !== user.id && !user.isAdmin) return;
+    }
 
     const approval = {
       role: expected, actorId: user.id, actorName: user.fullName,

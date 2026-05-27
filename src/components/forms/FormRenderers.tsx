@@ -1355,7 +1355,7 @@ export const F19Renderer: FormRenderer = ({ rec, user, api }) => {
    F-85 — اعتماد التسعيرات والترسية
    ────────────────────────────────────────────────────────────────── */
 
-interface BidRow { id: string; contractor: string; price: number; notes?: string; }
+interface BidRow { id: string; contractor: string; price: number; duration?: string; notes?: string; }
 
 export const F85Creator: FormCreator = ({ user, api, context, onClose }) => {
   const projects = context.projects;
@@ -1410,30 +1410,56 @@ export const F85Creator: FormCreator = ({ user, api, context, onClose }) => {
 
 export const F85Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
+  const awaits = formAwaitsUser(rec, user); // مدير إدارة المشاريع
+  const f84 = api.forms.find(f => f.code === 'F-84' && f.projectRefId === rec.projectRefId);
+  const bids = ((f84?.data?.f84_bids as BidRow[]) || []);
+  const [winnerId, setWinnerId] = useState<string>((d.winnerId as string) || '');
+  const [busy, setBusy] = useState(false);
+  const winner = bids.find(b => b.id === winnerId);
+
+  const submit = async () => {
+    if (!winner) return;
+    setBusy(true);
+    try {
+      await api.approveForm(rec.id, user, '', {
+        winnerId: winner.id, winnerContractor: winner.contractor,
+        winnerPrice: winner.price, winnerDuration: winner.duration || '',
+      });
+    } finally { setBusy(false); }
+  };
+
   return (
-    <FormShell rec={rec} user={user} api={api}>
-      <Card title="عروض الأسعار" icon={Calculator}>
-        <table className="w-full text-xs">
-          <thead className="bg-gray-50 dark:bg-slate-800">
-            <tr>
-              <th className="px-2 py-2 text-right">المقاول</th>
-              <th className="px-2 py-2 text-right">السعر</th>
-              <th className="px-2 py-2 text-right">ملاحظات</th>
-              <th className="px-2 py-2 text-right">الفائز</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(d.bids || []).map((b: BidRow) => (
-              <tr key={b.id} className="border-t dark:border-slate-700">
-                <td className="px-2 py-1.5 font-bold">{b.contractor}</td>
-                <td className="px-2 py-1.5"><span className="inline-flex items-center gap-1">{b.price} <SaudiRiyalGlassIcon className="w-3.5 h-3.5 inline" /></span></td>
-                <td className="px-2 py-1.5 text-gray-500">{b.notes}</td>
-                <td className="px-2 py-1.5">{d.winnerId === b.id && <Pill tone="amber"><Trophy className="w-3 h-3" /> الفائز</Pill>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <p className="mt-3 text-sm font-bold text-purple-700 dark:text-purple-300 flex items-center gap-1">قيمة الترسية: {d.winnerPrice || 0} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /> — {d.winnerContractor}</p>
+    <FormShell rec={rec} user={user} api={api} approvalSection={awaits ? (
+      <button disabled={busy || !winner} onClick={submit} className="w-full py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">{busy ? 'جارٍ الترسية…' : 'ترسية المشروع على المقاول المختار'}</button>
+    ) : <></>}>
+      <Card title="عروض المقاولين (من تسعيرات المقاولين)" icon={Calculator}>
+        {bids.length === 0 ? (
+          <p className="text-xs text-fg-faint">لم تُسجَّل عروض في نموذج تسعيرات المقاولين بعد.</p>
+        ) : (
+          <div className="space-y-2">
+            {bids.map(b => {
+              const sel = winnerId === b.id;
+              const isFinal = d.winnerId === b.id;
+              return (
+                <button type="button" key={b.id} disabled={!awaits} onClick={() => awaits && setWinnerId(b.id)}
+                  className={`w-full text-right p-3 rounded-xl border-2 transition ${sel || isFinal ? 'border-[#43bba1] bg-[#43bba1]/10' : 'border-subtle bg-surface-up'}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-fg">{b.contractor || '—'}</span>
+                    {(sel || isFinal) && <Pill tone="teal"><Trophy className="w-3 h-3" /> {isFinal ? 'الفائز' : 'محدد'}</Pill>}
+                  </div>
+                  <div className="mt-1 text-xs text-fg-muted flex flex-wrap gap-x-4 gap-y-1">
+                    <span className="inline-flex items-center gap-1">التسعير: {b.price} <SaudiRiyalGlassIcon className="w-3.5 h-3.5 inline" /></span>
+                    {b.duration && <span>المدة: {b.duration}</span>}
+                    {b.notes && <span className="text-fg-faint">{b.notes}</span>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {d.winnerContractor && (
+          <p className="mt-3 text-sm font-bold text-purple-700 dark:text-purple-300 flex items-center gap-1">قيمة الترسية: {d.winnerPrice || 0} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /> — {d.winnerContractor as string}</p>
+        )}
       </Card>
     </FormShell>
   );
@@ -1911,72 +1937,63 @@ export const F35Renderer: FormRenderer = ({ rec, user, api }) => {
 
 export const F84Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
-  const awaits = formAwaitsUser(rec, user);
-  const isReadOnly = !awaits;
+  // Editable by رئيس التشخيص + the chosen engineer (assignee) + فريق الفزعة (from F-04) + admin.
+  const f04 = api.forms.find(f => f.code === 'F-04' && f.projectRefId === rec.projectRefId);
+  const helperIds = ((f04?.data?.helpers as string[]) || []);
+  const canEdit = rec.status === 'pending' && (
+    user.isAdmin || user.role === 'HEAD_DIAGNOSIS' || user.id === rec.assigneeId || helperIds.includes(user.id)
+  );
   const [bids, setBids] = useState<BidRow[]>((d.f84_bids as BidRow[]) || []);
-  const [pricingNotes, setPricingNotes] = useState<string>((d.f84_pricingNotes as string) || '');
+  const [notes, setNotes] = useState<string>((d.f84_pricingNotes as string) || '');
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (isReadOnly) return;
-    const t = setTimeout(() => { api.updateFormData(rec.id, { f84_bids: bids, f84_pricingNotes: pricingNotes }); }, 500);
-    return () => clearTimeout(t);
-  }, [bids, pricingNotes, isReadOnly]);
-
-  const addBid = () => setBids(b => [...b, { id: Date.now() + '', contractor: '', price: 0, notes: '' }]);
+  const addBid = () => setBids(b => [...b, { id: Date.now() + '', contractor: '', price: 0, duration: '', notes: '' }]);
   const updateBid = (id: string, k: keyof BidRow, v: unknown) => setBids(b => b.map(x => x.id === id ? { ...x, [k]: v } : x));
   const removeBid = (id: string) => setBids(b => b.filter(x => x.id !== id));
 
+  const persist = () => api.updateFormData(rec.id, JSON.parse(JSON.stringify({ f84_bids: bids, f84_pricingNotes: notes })));
+  const save = async () => {
+    setSaved(false);
+    try { await persist(); setSaved(true); setTimeout(() => setSaved(false), 2500); }
+    catch (e) { console.error('F-84 save failed:', e); alert('تعذّر الحفظ — حاول مجدداً'); }
+  };
+  const submit = async () => {
+    setBusy(true);
+    try { await persist(); await api.approveForm(rec.id, user, ''); }
+    finally { setBusy(false); }
+  };
+
   return (
-    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد التسعير">
+    <FormShell rec={rec} user={user} api={api} approvalSection={canEdit ? (
+      <div className="flex gap-2">
+        <button onClick={save} className="flex-1 py-2.5 rounded-lg border-2 border-[#4A1F66] text-[#4A1F66] dark:text-purple-300 font-bold text-sm">{saved ? 'تم الحفظ ✓' : 'حفظ المسودة'}</button>
+        <button disabled={busy || bids.length === 0} onClick={submit} className="flex-1 py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">{busy ? 'جارٍ التقديم…' : 'تقديم نهائي'}</button>
+      </div>
+    ) : <></>}>
       <Card title="عروض المقاولين" icon={Calculator}>
-        {isReadOnly ? (
-          bids.length === 0 ? (
-            <p className="text-xs text-gray-500 dark:text-slate-400">لا توجد عروض مسجّلة.</p>
-          ) : (
-            <table className="w-full text-xs">
-              <thead className="bg-gray-50 dark:bg-slate-800">
-                <tr>
-                  <th className="px-2 py-2 text-right">المقاول</th>
-                  <th className="px-2 py-2 text-right">السعر</th>
-                  <th className="px-2 py-2 text-right">ملاحظات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bids.map(b => (
-                  <tr key={b.id} className="border-t dark:border-slate-700">
-                    <td className="px-2 py-1.5 font-bold">{b.contractor}</td>
-                    <td className="px-2 py-1.5"><span className="inline-flex items-center gap-1">{b.price} <SaudiRiyalGlassIcon className="w-3.5 h-3.5 inline" /></span></td>
-                    <td className="px-2 py-1.5 text-gray-500">{b.notes}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )
-        ) : (
-          <div className="space-y-2">
-            {bids.map(b => (
-              <div key={b.id} className="grid grid-cols-12 gap-2 items-end p-2 rounded-lg border border-gray-200 dark:border-slate-700">
-                <Input className="col-span-5" label="المقاول" value={b.contractor} onChange={e => updateBid(b.id, 'contractor', e.target.value)} />
-                <Input className="col-span-3" type="number" value={b.price} onChange={e => updateBid(b.id, 'price', Number(e.target.value || 0))}
-                  label={<span className="flex items-center gap-1">السعر <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
-                <Input className="col-span-3" label="ملاحظات" value={b.notes || ''} onChange={e => updateBid(b.id, 'notes', e.target.value)} />
-                <button onClick={() => removeBid(b.id)} className="col-span-1 h-9 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 flex items-center justify-center">
-                  <Trash2 className="w-4 h-4" />
-                </button>
+        <div className="space-y-3">
+          {bids.map(b => (
+            <div key={b.id} className="p-3 rounded-xl border border-subtle bg-surface-up space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-fg-muted">عرض مقاول</span>
+                {canEdit && <button onClick={() => removeBid(b.id)} className="p-1.5 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600"><Trash2 className="w-4 h-4" /></button>}
               </div>
-            ))}
-            <button onClick={addBid} className="mt-1 px-3 py-1.5 rounded-lg bg-[#56B894] text-white text-xs font-bold flex items-center gap-1.5">
-              <Plus className="w-3 h-3" /> أضف عرضاً
-            </button>
-          </div>
-        )}
+              <Input label="المقاول" value={b.contractor} readOnly={!canEdit} onChange={e => updateBid(b.id, 'contractor', e.target.value)} />
+              <div className="grid grid-cols-2 gap-2">
+                <Input type="number" value={b.price} readOnly={!canEdit} onChange={e => updateBid(b.id, 'price', Number(e.target.value || 0))}
+                  label={<span className="flex items-center gap-1">التسعير <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
+                <Input label="المدة" placeholder="مثال: 45 يوم" value={b.duration || ''} readOnly={!canEdit} onChange={e => updateBid(b.id, 'duration', e.target.value)} />
+              </div>
+              <TextArea label="ملاحظات" rows={2} value={b.notes || ''} readOnly={!canEdit} onChange={e => updateBid(b.id, 'notes', e.target.value)} />
+            </div>
+          ))}
+          {bids.length === 0 && <p className="text-xs text-fg-faint">لا توجد عروض بعد.</p>}
+          {canEdit && <button onClick={addBid} className="px-3 py-1.5 rounded-lg bg-[#56B894] text-white text-xs font-bold flex items-center gap-1.5"><Plus className="w-3 h-3" /> أضف عرض مقاول</button>}
+        </div>
       </Card>
-      <Card title="ملاحظات التسعير" icon={FileSignature}>
-        {isReadOnly ? (
-          <ReadOnlyField label="ملاحظات" value={d.f84_pricingNotes as string} />
-        ) : (
-          <TextArea label="ملاحظات التسعير" rows={3} value={pricingNotes} onChange={e => setPricingNotes(e.target.value)} />
-        )}
+      <Card title="ملاحظات عامة على التسعير" icon={FileSignature}>
+        <TextArea label="" rows={2} value={notes} readOnly={!canEdit} onChange={e => setNotes(e.target.value)} />
       </Card>
     </FormShell>
   );

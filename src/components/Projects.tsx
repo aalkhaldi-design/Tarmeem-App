@@ -319,7 +319,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, user, use
                   </p>
                   <p className="text-[10px] text-gray-400 dark:text-slate-500 mt-2">
                     {(entry.code === 'F-18' || entry.code === 'F-22')
-                      ? 'يُفعّل فقط عند وجود خطر سلامة في التشخيص.'
+                      ? 'يُفتح عند تقديم كراسة التشخيص (F-08).'
                       : 'سيُفتح للتعبئة تلقائياً عندما يصل سير العمل إلى هذه المرحلة.'}
                   </p>
                 </div>

@@ -235,7 +235,7 @@ export const FORMS: FormDef[] = [
     approvalChain: ['DIAGNOSIS_ENGINEER'],
     triggers: ['F-20'],
     slaDays: 7,
-    description: 'مهندس التشخيص ميدانياً ➡️ رئيس قسم التشخيص/الإشراف ➡️ مدير المشاريع. عند safetyHazard=true يُفتَح F-18 و F-22.',
+    description: 'يعبّئها مهندس التشخيص ويقدّمها. عند التقديم تُفتح خطة التوريد والحصر وتعهد الإخلاء (F-18) ما لم يُحدَّد أن المبنى لا يحتاج إخلاء، وطلب السكن البديل الاختياري (F-22).',
   },
   /* F-18 */
   {
@@ -248,13 +248,13 @@ export const FORMS: FormDef[] = [
   },
   /* F-22 */
   {
-    code: 'F-22', title: 'طلب توفير سكن بديل وأثاث', titleEn: 'Alternative Housing Request',
+    code: 'F-22', title: 'طلب توفير سكن بديل', titleEn: 'Alternative Housing Request',
     category: 'BENEFICIARY', ownerDept: 'RESEARCH',
     originRoles: ['SOCIAL_RESEARCHER'],
     approvalChain: ['SOCIAL_RESEARCHER'],
     bridgesTo: ['PARTNERSHIP'],
     slaDays: 3,
-    description: 'يُولَّد آلياً عند safetyHazard=true من F-08. يخرج كخطاب رسمي للجهة الشريكة لتأمين السكن البديل.',
+    description: 'يُفتح اختيارياً عند تقديم كراسة التشخيص. خطاب رسمي للجهة الشريكة لتأمين السكن البديل. تقديمه اختياري ولا يؤثر على سير العمل.',
   },
   /* F-21 */
   {

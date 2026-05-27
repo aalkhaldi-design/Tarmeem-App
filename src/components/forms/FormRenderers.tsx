@@ -7,6 +7,8 @@ import { F02Creator, F02Renderer } from './FormF02';
 import { F07Renderer } from './FormF07';
 import { F23Creator, F23Renderer } from './FormF23';
 import { F52Creator, F52Renderer } from './FormF52';
+import { SearchablePeoplePicker } from './SearchablePeoplePicker';
+import { TitledFileUploader, TitledFile } from './TitledFileUploader';
 
 import React, { useEffect, useState } from 'react';
 import {
@@ -215,7 +217,6 @@ export const F08Creator: FormCreator = ({ user, api, context, onClose }) => {
   const [data, setData] = useState({
     visitDate: '', team: user.fullName,
     area: '', age: '', summary: '',
-    safetyHazard: false,
     civilNotes: '', elecNotes: '', plumbingNotes: '',
     finalRecommendation: '',
   });
@@ -269,13 +270,6 @@ export const F08Creator: FormCreator = ({ user, api, context, onClose }) => {
             <TextArea className="mt-2" label="أعمال السباكة" rows={2} value={data.plumbingNotes} onChange={e => setData(d => ({ ...d, plumbingNotes: e.target.value }))} />
           </Card>
           <Card title="السلامة والتوصية" icon={AlertTriangle}>
-            <label className={`flex items-start gap-2 cursor-pointer p-3 rounded-lg border-2 transition ${data.safetyHazard ? 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-700' : 'border-gray-200 dark:border-slate-700'}`}>
-              <input type="checkbox" checked={data.safetyHazard} onChange={e => setData(d => ({ ...d, safetyHazard: e.target.checked }))} className="mt-1" />
-              <span className="text-sm">
-                <strong className="text-red-700 dark:text-red-300">المنزل غير صالح للسكن أثناء الترميم</strong>
-                <p className="text-xs text-gray-500 dark:text-slate-400 mt-1">عند التفعيل سيتم فتح F-18 (إخلاء) و F-22 (سكن بديل) تلقائياً.</p>
-              </span>
-            </label>
             <TextArea className="mt-3" label="التوصية النهائية" rows={2} value={data.finalRecommendation} onChange={e => setData(d => ({ ...d, finalRecommendation: e.target.value }))} />
           </Card>
         </div>
@@ -323,7 +317,7 @@ export const F08Renderer: FormRenderer = ({ rec, user, api, context, users }) =>
     visitDate: new Date().toISOString().split('T')[0],
     type: 'منزل', area: '', age: '', team: '',
     diagnosisResult: 'قابل للترميم', diagnosisResultOther: '',
-    noEvacuation: false, safetyHazard: false, summary: '',
+    noEvacuation: false, summary: '',
     works: [],
     housingType: 'منزل', housingCondition: 'ترميم',
     familyCountFemale: 0, familyCountMale: 0,
@@ -522,18 +516,9 @@ export const F08Renderer: FormRenderer = ({ rec, user, api, context, users }) =>
 
             <div className={`mt-3 p-3 rounded-lg flex items-start gap-3 transition border-2 ${data.noEvacuation ? 'bg-[#05110e] border-[#43bba1]/50' : 'bg-surface-up border-subtle'}`}>
               <input disabled={!canEdit} type="checkbox" checked={data.noEvacuation}
-                onChange={(e) => setData({ ...data, noEvacuation: e.target.checked, safetyHazard: false })}
+                onChange={(e) => setData({ ...data, noEvacuation: e.target.checked })}
                 className="w-5 h-5 mt-0.5 rounded accent-[#43bba1] cursor-pointer" />
               <label className="cursor-pointer select-none font-bold text-sm text-[#43bba1] mt-1">المبنى ليس بحاجة إخلاء</label>
-            </div>
-
-            <div className={`mt-3 p-3 rounded-lg flex items-start gap-3 transition border-2 ${data.safetyHazard ? 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-700' : 'bg-surface-up border-subtle'}`}>
-              <input disabled={!canEdit || data.noEvacuation} type="checkbox" checked={data.safetyHazard}
-                onChange={(e) => setData({ ...data, safetyHazard: e.target.checked })}
-                className="w-5 h-5 mt-0.5 rounded accent-red-500 cursor-pointer" />
-              <label className="cursor-pointer select-none font-bold text-sm text-red-700 dark:text-red-300 mt-1">
-                خطر سلامة — يحتاج إخلاء (سيُفعّل F-18 و F-22 تلقائياً)
-              </label>
             </div>
 
             <TextArea readOnly={!canEdit} className="mt-4" label="ملخص تقييم المبنى المبدئي" rows={4}
@@ -1033,19 +1018,31 @@ export const F18Creator: FormCreator = ({ user, api, context, onClose }) => {
 
 export const F18Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
+  const canEdit = formIsEditableByUser(rec, user);
+  const [evacDate, setEvacDate] = useState<string>((d.evacDate as string) || '');
+  const [returnDate, setReturnDate] = useState<string>((d.returnDate as string) || '');
+  const [files, setFiles] = useState<TitledFile[]>((d.attachments as TitledFile[]) || []);
+  useEffect(() => {
+    if (!canEdit) return;
+    const t = setTimeout(() => { api.updateFormData(rec.id, { evacDate, returnDate }); }, 500);
+    return () => clearTimeout(t);
+  }, [evacDate, returnDate, canEdit]);
+  const updateFiles = (next: TitledFile[]) => { setFiles(next); api.updateFormData(rec.id, { attachments: next }); };
   return (
     <FormShell rec={rec} user={user} api={api}>
       <Card title="تواريخ الإخلاء" icon={Calendar}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <ReadOnlyField label="تاريخ الإخلاء" value={d.evacDate} />
-          <ReadOnlyField label="تاريخ العودة" value={d.returnDate} />
+          {canEdit
+            ? <Input type="date" label="تاريخ الإخلاء" value={evacDate} onChange={e => setEvacDate(e.target.value)} />
+            : <ReadOnlyField label="تاريخ الإخلاء" value={d.evacDate} />}
+          {canEdit
+            ? <Input type="date" label="تاريخ العودة" value={returnDate} onChange={e => setReturnDate(e.target.value)} />
+            : <ReadOnlyField label="تاريخ العودة" value={d.returnDate} />}
         </div>
       </Card>
-      {(rec.files || []).length > 0 && (
-        <Card title="مرفقات التعهد" icon={FileSignature}>
-          <FileUploader files={rec.files || []} onAdd={() => {}} onRemove={() => {}} label="" />
-        </Card>
-      )}
+      <Card title="مرفقات التعهد" icon={FileSignature}>
+        <TitledFileUploader files={files} onChange={updateFiles} pathPrefix="f18-uploads" disabled={!canEdit} />
+      </Card>
       {rec.notes && <Card title="ملاحظات" icon={ClipboardList}><ReadOnlyField label="" value={rec.notes} /></Card>}
     </FormShell>
   );
@@ -1057,6 +1054,9 @@ export const F18Renderer: FormRenderer = ({ rec, user, api }) => {
 
 export const F22Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
+  const canEdit = formIsEditableByUser(rec, user);
+  const [files, setFiles] = useState<TitledFile[]>((d.attachments as TitledFile[]) || []);
+  const updateFiles = (next: TitledFile[]) => { setFiles(next); api.updateFormData(rec.id, { attachments: next }); };
   return (
     <FormShell rec={rec} user={user} api={api}>
       <Card title="نص الخطاب الآلي للجهة الشريكة" icon={FileSignature}>
@@ -1071,11 +1071,9 @@ export const F22Renderer: FormRenderer = ({ rec, user, api }) => {
           إدارة البحث الاجتماعي — جمعية ترميم.
         </div>
       </Card>
-      {(rec.files || []).length > 0 && (
-        <Card title="مرفقات (بيان الأثاث)" icon={ClipboardList}>
-          <FileUploader files={rec.files || []} onAdd={() => {}} onRemove={() => {}} label="" />
-        </Card>
-      )}
+      <Card title="مرفقات (اختياري)" icon={ClipboardList}>
+        <TitledFileUploader files={files} onChange={updateFiles} pathPrefix="f22-uploads" disabled={!canEdit} />
+      </Card>
     </FormShell>
   );
 };
@@ -1730,10 +1728,12 @@ export const F32Renderer: FormRenderer = ({ rec, user, api, users }) => {
   const [engineerId, setEngineerId] = useState<string>((d.engineerId as string) || '');
   const [helpers, setHelpers] = useState<string[]>((d.helpers as string[]) || []);
   const supervisors = users.filter(u => u.role === 'DIAGNOSIS_ENGINEER' && u.status === 'active');
-  const projectsMembers = users.filter(u => u.department === 'PROJECTS' && u.status === 'active');
+  // فريق الفزعة pool: active PROJECTS members, EXCLUDING admins,
+  // مدير إدارة المشاريع (PROJECTS_MANAGER), and the chosen supervisor.
+  const helperPool = users.filter(u =>
+    u.department === 'PROJECTS' && u.status === 'active' &&
+    !u.isAdmin && u.role !== 'PROJECTS_MANAGER' && u.id !== engineerId);
   const selected = supervisors.find(e => e.id === engineerId);
-  const toggleHelper = (id: string) =>
-    setHelpers(hs => hs.includes(id) ? hs.filter(x => x !== id) : [...hs, id]);
 
   useEffect(() => {
     if (!engineerId || isReadOnly) return;
@@ -1744,10 +1744,15 @@ export const F32Renderer: FormRenderer = ({ rec, user, api, users }) => {
   return (
     <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد التعيين">
       <Card title="تعيين المهندس المشرف" icon={UsersIcon}>
-        <Select label="المهندس المشرف" value={engineerId} readOnly={isReadOnly}
-          onChange={e => setEngineerId(e.target.value)}
-          options={supervisors.map(e => ({ value: e.id, label: `${e.fullName} (${e.email})` }))}
-          placeholder="— اختر مهندساً —" />
+        <label className="block text-xs font-bold text-fg-muted mb-1">المهندس المشرف</label>
+        <SearchablePeoplePicker
+          people={supervisors}
+          selected={engineerId ? [engineerId] : []}
+          onChange={ids => setEngineerId(ids[0] || '')}
+          multi={false}
+          placeholder="ابحث واختر المهندس المشرف (بالاسم أو البريد)"
+          disabled={isReadOnly}
+        />
         {selected && (
           <div className="mt-3 bg-gray-50 dark:bg-slate-800 border border-[#43bba1] rounded-lg p-3">
             <p className="font-bold text-[#43bba1]">{selected.fullName}</p>
@@ -1759,36 +1764,18 @@ export const F32Renderer: FormRenderer = ({ rec, user, api, users }) => {
             <AlertTriangle className="w-3.5 h-3.5" /> لا يوجد مهندسون نشطون في النظام.
           </p>
         )}
-
         <div className="mt-4 border-t border-gray-200 dark:border-slate-700 pt-3">
           <p className="text-xs font-bold text-gray-700 dark:text-slate-200 flex items-center gap-1.5 mb-2">
             <UsersIcon className="w-3.5 h-3.5" /> فريق الفزعة (مساعدون اختياريون)
           </p>
-          {isReadOnly ? (
-            helpers.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {helpers.map(id => {
-                  const u = users.find(x => x.id === id);
-                  return <Pill key={id} tone="teal">{u?.fullName || id}</Pill>;
-                })}
-              </div>
-            ) : (
-              <p className="text-xs text-gray-400 dark:text-slate-500">لا يوجد مساعدون.</p>
-            )
-          ) : (
-            <div className="space-y-1.5">
-              {projectsMembers.filter(m => m.id !== engineerId).map(m => (
-                <label key={m.id} className="flex items-center gap-2 cursor-pointer text-sm">
-                  <input type="checkbox" checked={helpers.includes(m.id)} onChange={() => toggleHelper(m.id)}
-                    className="rounded border-gray-300 text-[#4A1F66] focus:ring-[#4A1F66] w-4 h-4" />
-                  <span className="text-gray-700 dark:text-slate-200">{m.fullName} <span className="text-[10px] text-gray-400">· {roleName(m.role)}</span></span>
-                </label>
-              ))}
-              {projectsMembers.filter(m => m.id !== engineerId).length === 0 && (
-                <p className="text-xs text-gray-400 dark:text-slate-500">لا يوجد أعضاء آخرون في إدارة المشاريع.</p>
-              )}
-            </div>
-          )}
+          <SearchablePeoplePicker
+            people={helperPool}
+            selected={helpers}
+            onChange={setHelpers}
+            multi={true}
+            placeholder="ابحث واختر فريق الفزعة (بالاسم أو البريد)"
+            disabled={isReadOnly}
+          />
         </div>
       </Card>
     </FormShell>

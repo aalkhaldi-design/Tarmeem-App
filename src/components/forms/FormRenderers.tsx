@@ -1054,26 +1054,63 @@ export const F18Renderer: FormRenderer = ({ rec, user, api }) => {
 
 export const F22Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
-  const canEdit = formIsEditableByUser(rec, user);
+  const state = (d.housingState as string) || 'dormant';
+  const isResearch = !!user.isAdmin || user.department === 'RESEARCH';
+  const isProjects = user.department === 'PROJECTS';
+  const canFill = state === 'active' && (!!user.isAdmin || user.department === 'RESEARCH');
   const [files, setFiles] = useState<TitledFile[]>((d.attachments as TitledFile[]) || []);
+  const [reqNote, setReqNote] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const setHousing = (next: string, extra: Record<string, unknown> = {}) => api.updateFormData(rec.id, { housingState: next, ...extra });
+  const requestActivation = () => {
+    if (!reqNote.trim()) { alert('اكتب سبب الطلب أولاً'); return; }
+    setHousing('requested', { housingRequestNote: reqNote.trim(), housingRequestedByName: user.fullName });
+  };
   const updateFiles = (next: TitledFile[]) => { setFiles(next); api.updateFormData(rec.id, { attachments: next }); };
+  const submit = async () => { setBusy(true); try { await api.approveForm(rec.id, user, ''); } finally { setBusy(false); } };
+
+  let action: React.ReactNode = <></>;
+  if (state === 'dormant' && isResearch) action = <button onClick={() => setHousing('active')} className="w-full py-2.5 rounded-lg bg-[#43bba1] text-white font-bold text-sm">تفعيل النموذج وتعبئته</button>;
+  else if (state === 'dormant' && isProjects) action = (
+    <div className="space-y-2">
+      <TextArea label="سبب طلب تفعيل النموذج" rows={2} value={reqNote} onChange={e => setReqNote(e.target.value)} />
+      <button onClick={requestActivation} className="w-full py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm">طلب التفعيل من البحث الاجتماعي</button>
+    </div>
+  );
+  else if (state === 'requested' && isResearch) action = <button onClick={() => setHousing('active')} className="w-full py-2.5 rounded-lg bg-[#43bba1] text-white font-bold text-sm">تفعيل وتعبئة</button>;
+  else if (state === 'active' && canFill) action = <button disabled={busy} onClick={submit} className="w-full py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">{busy ? 'جارٍ التقديم…' : 'تقديم الطلب'}</button>;
+
   return (
-    <FormShell rec={rec} user={user} api={api}>
-      <Card title="نص الخطاب الآلي للجهة الشريكة" icon={FileSignature}>
-        <div className="bg-gray-50 dark:bg-slate-800 rounded-lg p-4 text-sm leading-7">
-          إلى مدير الجهة الشريكة المحترم،<br />
-          نرجو منكم التكرم بتوفير سكن بديل وأثاث للأسرة المستفيدة <strong>{rec.beneficiaryName}</strong>{' '}
-          في مدينة <strong>{d.city || '—'}</strong> خلال فترة الترميم{' '}
-          {d.evacDate && <>اعتباراً من <strong>{d.evacDate}</strong></>}{' '}
-          {d.returnDate && <>وحتى <strong>{d.returnDate}</strong></>}.
-          <br /><br />
-          مع جزيل الشكر،<br />
-          إدارة البحث الاجتماعي — جمعية ترميم.
-        </div>
-      </Card>
-      <Card title="مرفقات (اختياري)" icon={ClipboardList}>
-        <TitledFileUploader files={files} onChange={updateFiles} pathPrefix="f22-uploads" disabled={!canEdit} />
-      </Card>
+    <FormShell rec={rec} user={user} api={api} approvalSection={action}>
+      {state !== 'active' && (
+        <Card title="طلب توفير سكن بديل (اختياري)" icon={HomeIcon}>
+          <div className="p-3 rounded-lg bg-surface-up border border-subtle">
+            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-fg-muted"><span className="w-2 h-2 rounded-full bg-gray-400" /> غير مفعّل</span>
+            <p className="text-xs text-fg-muted mt-2">نموذج اختياري يبقى غير مفعّل حتى يفعّله البحث الاجتماعي، أو تطلب إدارة المشاريع تفعيله مع ذكر السبب. تقديمه لا يؤثّر على سير العمل.</p>
+            {state === 'requested' && (
+              <div className="mt-3 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700">
+                <p className="text-xs font-bold text-amber-700 dark:text-amber-300">طلب تفعيل من: {(d.housingRequestedByName as string) || '—'}</p>
+                <p className="text-xs text-fg-muted mt-1">السبب: {(d.housingRequestNote as string) || '—'}</p>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+      {state === 'active' && (
+        <>
+          <Card title="نص الخطاب الآلي للجهة الشريكة" icon={FileSignature}>
+            <div className="bg-gray-50 dark:bg-slate-800 rounded-lg p-4 text-sm leading-7">
+              إلى مدير الجهة الشريكة المحترم،<br />
+              نرجو التكرم بتوفير سكن بديل للأسرة المستفيدة <strong>{rec.beneficiaryName}</strong> في مدينة <strong>{(d.city as string) || '—'}</strong> خلال فترة الترميم.
+              <br /><br />مع الشكر،<br />إدارة البحث الاجتماعي — جمعية ترميم.
+            </div>
+          </Card>
+          <Card title="مرفقات (اختياري)" icon={ClipboardList}>
+            <TitledFileUploader files={files} onChange={updateFiles} pathPrefix="f22-uploads" disabled={!canFill} />
+          </Card>
+        </>
+      )}
     </FormShell>
   );
 };

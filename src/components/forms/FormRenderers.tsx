@@ -445,10 +445,27 @@ export const F08Renderer: FormRenderer = ({ rec, user, api, context, users }) =>
     } finally { setSaving(false); }
   };
 
+  const [submitting, setSubmitting] = useState(false);
+  const submitBinder = async () => {
+    setSubmitting(true);
+    try {
+      const clean = JSON.parse(JSON.stringify(data)); // persist current edits before approving
+      await api.updateFormData(rec.id, clean);
+      await api.approveForm(rec.id, user, '');
+    } catch (e) {
+      console.error('F-08 submit failed:', e);
+      alert('تعذّر تقديم الكراسة — تحقق من الاتصال وحاول مجدداً');
+    } finally { setSubmitting(false); }
+  };
+
   const steps = ['الأساسية', 'حصر الأعمال', 'الأثاث والأجهزة', 'كروكي المبنى', 'الاعتماد والرفع'];
 
   return (
-    <FormShell rec={rec} user={user} api={api}>
+    <FormShell rec={rec} user={user} api={api} approvalSection={formAwaitsUser(rec, user) ? (
+      <button disabled={submitting} onClick={submitBinder} className="w-full py-2.5 bg-[#4A1F66] text-white rounded-lg font-bold text-sm hover:bg-[#3A1652] disabled:opacity-50 transition">
+        {submitting ? 'جارٍ التقديم…' : 'اعتماد وتقديم كراسة التشخيص'}
+      </button>
+    ) : undefined}>
       {/* Full-screen Croquis editor overlay */}
       {activeCroquis && (
         <CroquisEditorModal

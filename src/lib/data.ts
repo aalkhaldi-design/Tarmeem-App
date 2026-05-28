@@ -261,7 +261,7 @@ export const FORMS: FormDef[] = [
     code: 'F-21', title: 'حصر الأثاث والأجهزة والمواد', titleEn: 'Furniture, Appliances & Materials Inventory',
     category: 'BENEFICIARY', ownerDept: 'PROJECTS',
     originRoles: ['DIAGNOSIS_ENGINEER', 'ITQAN_HEAD', 'ITQAN_MEMBER'],
-    approvalChain: ['DIAGNOSIS_ENGINEER', 'PROJECTS_MANAGER', 'MARKETING_MANAGER', 'SUPPORT_MANAGER', 'FINANCE_HEAD'],
+    approvalChain: ['DIAGNOSIS_ENGINEER'],
     bridgesTo: ['MARKETING', 'SUPPORT', 'FINANCE'],
     slaDays: 7,
     description: 'تُعبأ الكميات من F-08 ولجنة إتقان. يراجعها التسويق/المشاريع ثم تُرسل لسلسلة التوريد والمالية.',

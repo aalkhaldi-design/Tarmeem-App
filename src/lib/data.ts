@@ -162,7 +162,7 @@ export const roleDepartment = (key: string): DepartmentKey | null =>
 export type FormCode =
   | 'F-02' | 'F-03' | 'F-03.1' | 'F-03.2'
   | 'F-04' | 'F-08' | 'F-18' | 'F-22' | 'F-21' | 'F-20'
-  | 'F-84' | 'F-85' | 'F-32' | 'F-33' | 'F-35' | 'F-34'
+  | 'F-84' | 'F-85' | 'F-32' | 'F-33' | 'F-33.1' | 'F-35' | 'F-34'
   | 'F-19' | 'F-14' | 'F-23' | 'F-15'
   | 'F-07' | 'F-52';
 
@@ -192,7 +192,7 @@ export interface FormDef {
   code: FormCode;
   title: string;
   titleEn: string;
-  category: 'BENEFICIARY' | 'EXECUTION' | 'SUPPLY' | 'COMMS';
+  category: 'BENEFICIARY' | 'EXECUTION' | 'SUPPLY' | 'COMMS' | 'PROJECT';
   ownerDept: DepartmentKey;
   /** أدوار يحقّ لها إنشاء النموذج */
   originRoles: RoleKey[];
@@ -268,7 +268,7 @@ export const FORMS: FormDef[] = [
   },
   /* F-20 */
   {
-    code: 'F-20', title: 'خطة توريد المواد', titleEn: 'Material Supply Plan',
+    code: 'F-20', title: 'خطة التوريد', titleEn: 'Material Supply Plan',
     category: 'SUPPLY', ownerDept: 'PROJECTS',
     originRoles: ['DIAGNOSIS_ENGINEER'],
     approvalChain: ['DIAGNOSIS_ENGINEER', 'SUPPORT_MANAGER'],
@@ -289,7 +289,7 @@ export const FORMS: FormDef[] = [
   },
   /* F-85 */
   {
-    code: 'F-85', title: 'اعتماد التسعيرات والترسية', titleEn: 'Pricing & Award Approval',
+    code: 'F-85', title: 'الترسية', titleEn: 'Pricing & Award Approval',
     category: 'EXECUTION', ownerDept: 'PROJECTS',
     originRoles: ['PROJECTS_MANAGER'],
     approvalChain: ['PROJECTS_MANAGER'],
@@ -409,9 +409,18 @@ export const FORMS: FormDef[] = [
     slaDays: 4,
     description: 'المهندس يجمع عروض الأسعار من المقاولين. عند الاعتماد يُطلق F-85 لقرار الترسية.',
   },
+  /* F-33.1 */
+  {
+    code: 'F-33.1', title: 'توقيع العقد', titleEn: 'Contract Signing',
+    category: 'PROJECT', ownerDept: 'PROJECTS',
+    originRoles: ['PROJECTS_MANAGER'],
+    approvalChain: ['PROJECTS_MANAGER'],
+    slaDays: 2,
+    description: 'توقيع العقد بين الجمعية والمقاول الفائز.',
+  },
   /* F-35 */
   {
-    code: 'F-35', title: 'طلب دفعة أولى (30%)', titleEn: 'First Payment Request (30%)',
+    code: 'F-35', title: 'طلب صرف دفعة اولى', titleEn: 'First Payment Request (30%)',
     category: 'EXECUTION', ownerDept: 'FINANCE',
     originRoles: ['ACCOUNTANT'],
     approvalChain: ['ACCOUNTANT', 'EXEC_DIRECTOR', 'ACCOUNTANT'],

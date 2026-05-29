@@ -116,13 +116,9 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
     return result;
   },
 
-  'F-20': (ctx) => {
-    const f32 = ctx.forms.find(f => f.code === 'F-32' && f.projectRefId === ctx.approvedRecord.projectRefId);
-    return {
-      projectPatch: { progressPct: 58 },
-      activate: f32 ? [{ formId: f32.id }] : [],
-    };
-  },
+  'F-20': () => ({
+    projectPatch: { progressPct: 58 },
+  }),
 
   'F-84': (ctx) => {
     const f85 = ctx.forms.find(f => f.code === 'F-85' && f.projectRefId === ctx.approvedRecord.projectRefId);
@@ -134,7 +130,8 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
 
   'F-85': (ctx) => {
     const projectRefId = ctx.approvedRecord.projectRefId!;
-    const f20 = ctx.forms.find(f => f.code === 'F-20' && f.projectRefId === projectRefId);
+    const f32 = ctx.forms.find(f => f.code === 'F-32' && f.projectRefId === projectRefId);
+    const f33_1 = ctx.forms.find(f => f.code === 'F-33.1' && f.projectRefId === projectRefId);
     const f35 = ctx.forms.find(f => f.code === 'F-35' && f.projectRefId === projectRefId);
     return {
       projectPatch: {
@@ -143,19 +140,36 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
         progressPct: 55,
       } as Partial<ProjectRecord>,
       activate: [
-        ...(f20 ? [{ formId: f20.id }] : []),
+        ...(f32 ? [{ formId: f32.id }] : []),
+        ...(f33_1 ? [{ formId: f33_1.id }] : []),
         ...(f35 ? [{ formId: f35.id }] : []),
       ],
     };
   },
 
   'F-32': (ctx) => {
+    const projectRefId = ctx.approvedRecord.projectRefId!;
     const supervisorId = (ctx.dataPatch?.engineerId as string) || (ctx.approvedRecord.data?.engineerId as string);
-    const f33 = ctx.forms.find(f => f.code === 'F-33' && f.projectRefId === ctx.approvedRecord.projectRefId);
+    const f33 = ctx.forms.find(f => f.code === 'F-33' && f.projectRefId === projectRefId);
+    const f33_1 = ctx.forms.find(f => f.code === 'F-33.1' && f.projectRefId === projectRefId);
+    const f20 = ctx.forms.find(f => f.code === 'F-20' && f.projectRefId === projectRefId);
+    const activate: { formId: string; assigneeId?: string }[] = [];
+    if (f33) activate.push({ formId: f33.id, assigneeId: supervisorId });
+    // Dual-lock: F-20 activates only when both F-32 (now) AND F-33.1 are approved
+    if (f20 && f33_1?.status === 'approved') activate.push({ formId: f20.id });
     return {
       projectPatch: { supervisingEngineerId: supervisorId } as Partial<ProjectRecord>,
-      activate: f33 ? [{ formId: f33.id, assigneeId: supervisorId }] : [],
+      activate,
     };
+  },
+
+  'F-33.1': (ctx) => {
+    const projectRefId = ctx.approvedRecord.projectRefId!;
+    const f32 = ctx.forms.find(f => f.code === 'F-32' && f.projectRefId === projectRefId);
+    const f20 = ctx.forms.find(f => f.code === 'F-20' && f.projectRefId === projectRefId);
+    // Dual-lock: F-20 activates only when both F-32 AND F-33.1 (now) are approved
+    if (f20 && f32?.status === 'approved') return { activate: [{ formId: f20.id }] };
+    return {};
   },
 
   'F-33': (ctx) => {

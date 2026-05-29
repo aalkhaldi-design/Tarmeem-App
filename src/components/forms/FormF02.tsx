@@ -175,7 +175,7 @@ export const F02Creator: FormCreator = ({ user, api, context, onClose }) => {
       // Drafts for the rest of the workflow (F-03/03.1/03.2 merged into F-02).
       const DRAFT_CODES: FormCode[] = [
         'F-04', 'F-08', 'F-18', 'F-22', 'F-21', 'F-20',
-        'F-84', 'F-85', 'F-32', 'F-33', 'F-35', 'F-34',
+        'F-84', 'F-85', 'F-32', 'F-33', 'F-33.1', 'F-35', 'F-34',
         'F-19', 'F-14', 'F-23',
         'F-07', 'F-52',
       ];

@@ -1958,31 +1958,79 @@ export const F32Renderer: FormRenderer = ({ rec, user, api, users }) => {
 
 export const F33Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
-  const awaits = formAwaitsUser(rec, user);
-  const isReadOnly = !awaits;
-  const [startDate, setStartDate] = useState<string>((d.startDate as string) || '');
-  const [supervisorNotes, setSupervisorNotes] = useState<string>((d.supervisorNotes as string) || '');
+  // Editable by رئيس قسم الإشراف + chosen supervising engineer (assignee from F-32) + فريق الفزعة (F-32 helpers) + admin.
+  const f32 = api.forms.find(f => f.code === 'F-32' && f.projectRefId === rec.projectRefId);
+  const helperIds = ((f32?.data?.helpers as string[]) || []);
+  const canEdit = rec.status === 'pending' && (
+    !!user.isAdmin || user.role === 'HEAD_SUPERVISION' || user.id === rec.assigneeId || helperIds.includes(user.id)
+  );
+  const [pledge, setPledge] = useState<boolean>(!!d.pledge);
+  const [files, setFiles] = useState<TitledFile[]>((d.attachments as TitledFile[]) || []);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (isReadOnly) return;
-    const t = setTimeout(() => { api.updateFormData(rec.id, { startDate, supervisorNotes }); }, 500);
-    return () => clearTimeout(t);
-  }, [startDate, supervisorNotes, isReadOnly]);
+  const updateFiles = (next: TitledFile[]) => { setFiles(next); api.updateFormData(rec.id, { attachments: next }); };
+  const submit = async () => {
+    if (!pledge) return;
+    setBusy(true);
+    try { await api.updateFormData(rec.id, { pledge, attachments: files }); await api.approveForm(rec.id, user, ''); }
+    finally { setBusy(false); }
+  };
 
   return (
-    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد البدء">
-      <Card title="توثيق بدء التنفيذ" icon={Calendar}>
-        {isReadOnly ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <ReadOnlyField label="تاريخ البدء" value={d.startDate as string} />
-            <ReadOnlyField label="ملاحظات المشرف" value={d.supervisorNotes as string} />
-          </div>
-        ) : (
-          <>
-            <Input type="date" label="تاريخ البدء الفعلي" value={startDate} onChange={e => setStartDate(e.target.value)} />
-            <TextArea className="mt-3" label="ملاحظات المشرف" rows={3} value={supervisorNotes} onChange={e => setSupervisorNotes(e.target.value)} />
-          </>
-        )}
+    <FormShell rec={rec} user={user} api={api} approvalSection={canEdit ? (
+      <button disabled={busy || !pledge} onClick={submit} className="w-full py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm hover:bg-[#3A1652] disabled:opacity-50 transition">{busy ? 'جارٍ الاعتماد…' : 'اعتماد توثيق البدء'}</button>
+    ) : <></>}>
+      <Card title="إقرار توثيق البدء" icon={ShieldCheck}>
+        <p className="text-sm leading-8 text-fg">أقر أنا عضو فريق الإشراف (<strong className="text-[#4A1F66] dark:text-purple-300">{user.fullName}</strong>) بصحة توثيق دخول المقاول وبدء التنفيذ الفعلي للمشروع رقم (<strong className="text-[#4A1F66] dark:text-purple-300">{rec.projectId || '—'}</strong>).</p>
+        <label className="mt-3 flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" checked={pledge} disabled={!canEdit} onChange={e => setPledge(e.target.checked)} className="w-4 h-4 accent-[#4A1F66]" />
+          <span className="text-sm font-bold">أؤكد صحة هذا الإقرار</span>
+        </label>
+      </Card>
+      <Card title="مرفقات (اختياري: صور الموقع / إثبات البدء)" icon={Camera}>
+        <TitledFileUploader files={files} onChange={updateFiles} pathPrefix="f33-uploads" disabled={!canEdit} />
+      </Card>
+    </FormShell>
+  );
+};
+
+export const F33_1Renderer: FormRenderer = ({ rec, user, api }) => {
+  const d = rec.data || {};
+  // Editable by مدير إدارة المشاريع + anyone from قسم الشؤون المالية + admin.
+  const canEdit = rec.status === 'pending' && (
+    !!user.isAdmin || user.role === 'PROJECTS_MANAGER' || user.department === 'FINANCE'
+  );
+  const [files, setFiles] = useState<TitledFile[]>((d.attachments as TitledFile[]) || []);
+  const [notes, setNotes] = useState<string>((d.notes as string) || '');
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const updateFiles = (next: TitledFile[]) => { setFiles(next); api.updateFormData(rec.id, { attachments: next }); };
+  const save = async () => {
+    setSaved(false);
+    try { await api.updateFormData(rec.id, { notes, attachments: files }); setSaved(true); setTimeout(() => setSaved(false), 2500); }
+    catch (e) { console.error('F-33.1 save failed:', e); alert('تعذّر الحفظ — حاول مجدداً'); }
+  };
+  const submit = async () => {
+    if (files.length === 0) return;
+    setBusy(true);
+    try { await api.updateFormData(rec.id, { notes, attachments: files }); await api.approveForm(rec.id, user, ''); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <FormShell rec={rec} user={user} api={api} approvalSection={canEdit ? (
+      <div className="flex gap-2">
+        <button onClick={save} className="flex-1 py-2.5 rounded-lg border-2 border-[#4A1F66] text-[#4A1F66] dark:text-purple-300 font-bold text-sm">{saved ? 'تم الحفظ ✓' : 'حفظ المسودة'}</button>
+        <button disabled={busy || files.length === 0} onClick={submit} className="flex-1 py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">{busy ? 'جارٍ الاعتماد…' : 'اعتماد توقيع العقد'}</button>
+      </div>
+    ) : <></>}>
+      <Card title="مرفقات العقد الموقّع" icon={FileSignature}>
+        <p className="text-xs text-fg-muted mb-2">أضف صوراً أو ملفات PDF للعقد الموقّع مع المقاول. كل صف له عنوان مخصّص وملف.</p>
+        <TitledFileUploader files={files} onChange={updateFiles} pathPrefix="f33_1-uploads" disabled={!canEdit} />
+      </Card>
+      <Card title="ملاحظات (اختياري)" icon={Edit3}>
+        <TextArea label="" rows={2} value={notes} readOnly={!canEdit} onChange={e => setNotes(e.target.value)} />
       </Card>
     </FormShell>
   );
@@ -2171,6 +2219,7 @@ export const RENDERERS: Record<string, FormRenderer | undefined> = {
   'F-03.2': F03_2Renderer,
   'F-32':   F32Renderer,
   'F-33':   F33Renderer,
+  'F-33.1': F33_1Renderer,
   'F-34':   F34Renderer,
   'F-35':   F35Renderer,
   'F-84':   F84Renderer,

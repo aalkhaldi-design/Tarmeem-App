@@ -1386,55 +1386,136 @@ export const F20Creator: FormCreator = ({ user, api, context, onClose }) => {
   );
 };
 
-export const F20Renderer: FormRenderer = ({ rec, user, api }) => {
-  const items: SupplyItem[] = rec.data?.items || [];
-  const awaitsSupport = formAwaitsUser(rec, user) && user.role === 'SUPPORT_MANAGER';
-  const [edited, setEdited] = useState(items);
-  useEffect(() => setEdited(items), [rec.id]);
+type F20Item = { id: string; label: string; qty: string; byContractor: boolean; providerType: string };
+type F20Sections = { furniture: F20Item[]; appliances: F20Item[]; materials: F20Item[] };
 
-  const persist = async () => api.updateFormData(rec.id, { items: edited });
+export const F20Renderer: FormRenderer = ({ rec, user, api }) => {
+  const d = rec.data || {};
+  const atStage = rec.approvalIndex ?? 0;
+
+  // Stage 1 actors come from F-32 (the supervision-assignment form), NOT F-04.
+  const f21 = api.forms.find(f => f.code === 'F-21' && f.projectRefId === rec.projectRefId);
+  const f32 = api.forms.find(f => f.code === 'F-32' && f.projectRefId === rec.projectRefId);
+  const supervisorId = (f32?.data?.engineerId as string) || '';
+  const supervisorHelperIds = ((f32?.data?.helpers as string[]) || []);
+
+  // Direct status+stage+actor gates (NOT formAwaitsUser — would block non-manager SUPPORT users at Stage 2)
+  const isStage1 = rec.status === 'pending' && atStage === 0 && (
+    !!user.isAdmin || user.role === 'HEAD_SUPERVISION' || user.id === supervisorId || supervisorHelperIds.includes(user.id)
+  );
+  const isStage2 = rec.status === 'pending' && atStage === 1 && (!!user.isAdmin || user.department === 'SUPPORT');
+
+  // Extract from F-21's verified data: data.f21_sections.{furniture|appliances|materials}.rows[{id,label,qty,comment}]
+  const extractFromF21 = (): F20Sections => {
+    const sections = (f21?.data?.f21_sections as any) || { furniture: { rows: [] }, appliances: { rows: [] }, materials: { rows: [] } };
+    const conv = (rows: any[]): F20Item[] => (rows || []).map((r: any) => ({
+      id: r.id || crypto.randomUUID(),
+      label: r.label || '',
+      qty: String(r.qty || ''),
+      byContractor: false,
+      providerType: '',
+    }));
+    return {
+      furniture: conv(sections.furniture?.rows),
+      appliances: conv(sections.appliances?.rows),
+      materials: conv(sections.materials?.rows),
+    };
+  };
+
+  const [items, setItems] = useState<F20Sections>(() => {
+    const saved = d.f20_items as unknown as F20Sections | undefined;
+    if (saved && (saved.furniture?.length || saved.appliances?.length || saved.materials?.length)) return saved;
+    return extractFromF21();
+  });
+  const [dueDate, setDueDate] = useState<string>((d.f20_dueDate as string) || '');
+  const [supervisionNotes, setSupervisionNotes] = useState<string>((d.f20_supervisionNotes as string) || '');
+  const [supportNotes, setSupportNotes] = useState<string>((d.f20_supportNotes as string) || '');
+  const [savedFlag, setSavedFlag] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const setItemField = (section: keyof F20Sections, id: string, field: keyof F20Item, value: any) => {
+    setItems(prev => ({ ...prev, [section]: prev[section].map(it => it.id === id ? { ...it, [field]: value } : it) }));
+  };
+
+  const persist = () => api.updateFormData(rec.id, JSON.parse(JSON.stringify({
+    f20_items: items, f20_dueDate: dueDate, f20_supervisionNotes: supervisionNotes, f20_supportNotes: supportNotes,
+  })));
+  const save = async () => {
+    setSavedFlag(false);
+    try { await persist(); setSavedFlag(true); setTimeout(() => setSavedFlag(false), 2500); }
+    catch (e) { console.error('F-20 save failed:', e); alert('تعذّر الحفظ — حاول مجدداً'); }
+  };
+  const submit = async () => {
+    setBusy(true);
+    try { await persist(); await api.approveForm(rec.id, user, ''); }
+    finally { setBusy(false); }
+  };
+
+  let action: React.ReactNode = <></>;
+  if (isStage1) {
+    action = (
+      <div className="flex gap-2">
+        <button onClick={save} className="flex-1 py-2.5 rounded-lg border-2 border-[#4A1F66] text-[#4A1F66] dark:text-purple-300 font-bold text-sm">{savedFlag ? 'تم الحفظ ✓' : 'حفظ المسودة'}</button>
+        <button disabled={busy} onClick={submit} className="flex-1 py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">{busy ? 'جارٍ الإرسال…' : 'تقديم للخدمات المساندة'}</button>
+      </div>
+    );
+  } else if (isStage2) {
+    action = (
+      <button disabled={busy} onClick={submit} className="w-full py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">{busy ? 'جارٍ الإغلاق…' : 'اعتماد خطة التوريد'}</button>
+    );
+  }
+
+  const renderSection = (title: string, icon: any, sectionKey: keyof F20Sections) => (
+    <Card title={title} icon={icon}>
+      {items[sectionKey].length === 0 ? (
+        <p className="text-xs text-fg-faint">لا بنود في هذا القسم.</p>
+      ) : (
+        <div className="space-y-2">
+          {items[sectionKey].map(it => (
+            <div key={it.id} className="p-2.5 rounded-xl border border-subtle bg-surface-up flex items-center gap-2 flex-wrap">
+              <span className="flex-1 min-w-[40%] text-sm font-bold">{it.label || '—'}</span>
+              <span className="text-xs text-fg-muted">الكمية: {it.qty || '—'}</span>
+              {isStage1 ? (
+                <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                  <input type="checkbox" checked={it.byContractor} onChange={e => setItemField(sectionKey, it.id, 'byContractor', e.target.checked)} className="w-4 h-4 accent-[#4A1F66]" />
+                  <span className="text-xs font-bold">يوفّره المقاول</span>
+                </label>
+              ) : it.byContractor ? (
+                <span className="text-xs font-bold text-purple-700 dark:text-purple-300 px-2 py-1 rounded bg-purple-50 dark:bg-purple-900/30">يوفّره المقاول (مجمَّد)</span>
+              ) : (
+                <select value={it.providerType} disabled={!isStage2} onChange={e => setItemField(sectionKey, it.id, 'providerType', e.target.value)} className="px-2 py-1 rounded border border-subtle bg-surface text-xs">
+                  <option value="">— جهة التوريد —</option>
+                  <option value="داخلي">داخلي</option>
+                  <option value="داعم/شريك">داعم/شريك</option>
+                </select>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
 
   return (
-    <FormShell rec={rec} user={user} api={api}>
-      <Card title="بنود التوريد" icon={Truck}>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead className="bg-gray-50 dark:bg-slate-800">
-              <tr>
-                <th className="px-2 py-2 text-right font-bold">المادة</th>
-                <th className="px-2 py-2 text-right font-bold">الوحدة</th>
-                <th className="px-2 py-2 text-right font-bold">الكمية</th>
-                <th className="px-2 py-2 text-right font-bold">المورد المقترح</th>
-                <th className="px-2 py-2 text-right font-bold">تاريخ التسليم</th>
-              </tr>
-            </thead>
-            <tbody>
-              {edited.map(it => (
-                <tr key={it.id} className="border-t dark:border-slate-700">
-                  <td className="px-2 py-1.5">{it.name}</td>
-                  <td className="px-2 py-1.5">{it.unit}</td>
-                  <td className="px-2 py-1.5">{it.qty}</td>
-                  <td className="px-2 py-1.5">
-                    {awaitsSupport ? (
-                      <input value={it.supplier || ''} onChange={e => setEdited(arr => arr.map(x => x.id === it.id ? { ...x, supplier: e.target.value } : x))}
-                        className="px-2 py-1 border border-gray-300 dark:border-slate-600 rounded bg-white dark:bg-slate-900 text-xs w-full" />
-                    ) : (it.supplier || '—')}
-                  </td>
-                  <td className="px-2 py-1.5">
-                    {awaitsSupport ? (
-                      <input type="date" value={it.eta || ''} onChange={e => setEdited(arr => arr.map(x => x.id === it.id ? { ...x, eta: e.target.value } : x))}
-                        className="px-2 py-1 border border-gray-300 dark:border-slate-600 rounded bg-white dark:bg-slate-900 text-xs" />
-                    ) : (it.eta || '—')}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {awaitsSupport && (
-          <button onClick={persist} className="mt-3 px-4 py-1.5 rounded-lg bg-[#56B894] text-white text-xs font-bold">حفظ التعديلات</button>
-        )}
-      </Card>
+    <FormShell rec={rec} user={user} api={api} approvalSection={action}>
+      {renderSection('الأثاث', Sofa, 'furniture')}
+      {renderSection('الأجهزة', ShoppingCart, 'appliances')}
+      {renderSection('المواد', Truck, 'materials')}
+      {(isStage1 || supervisionNotes) && (
+        <Card title="ملاحظات فريق الإشراف (اختياري)" icon={Edit3}>
+          <TextArea label="" rows={2} value={supervisionNotes} readOnly={!isStage1} onChange={e => setSupervisionNotes(e.target.value)} />
+        </Card>
+      )}
+      {(atStage >= 1 || rec.status === 'approved') && (
+        <>
+          <Card title="موعد التوريد" icon={Calendar}>
+            <Input type="date" label="موعد توفير كافة البنود" value={dueDate} readOnly={!isStage2} onChange={e => setDueDate(e.target.value)} />
+          </Card>
+          <Card title="ملاحظات الخدمات المساندة (اختياري)" icon={Edit3}>
+            <TextArea label="" rows={2} value={supportNotes} readOnly={!isStage2} onChange={e => setSupportNotes(e.target.value)} />
+          </Card>
+        </>
+      )}
     </FormShell>
   );
 };

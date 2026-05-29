@@ -14,7 +14,7 @@ import React, { useEffect, useState } from 'react';
 import {
   X, Send, Plus, Building2, Users as UsersIcon, Home as HomeIcon, Activity,
   ClipboardList, Calculator, Trophy, ShieldCheck, Camera, Truck, ShoppingCart,
-  DollarSign, Briefcase, FileSignature, AlertTriangle, CheckCircle2,
+  DollarSign, Briefcase, FileSignature, AlertTriangle, CheckCircle2, FileText,
   Calendar, PenTool, Edit3, Eye, Sofa, ChevronUp, ChevronDown, Trash2, RotateCcw,
 } from 'lucide-react';
 
@@ -2095,38 +2095,98 @@ export const F34Renderer: FormRenderer = ({ rec, user, api }) => {
   );
 };
 
-export const F35Renderer: FormRenderer = ({ rec, user, api }) => {
+export const F35Renderer: FormRenderer = ({ rec, user, api, context }) => {
   const d = rec.data || {};
   const awaits = formAwaitsUser(rec, user);
-  const canEditPayment = awaits && user.role === 'ACCOUNTANT';
-  const [paymentAmount, setPaymentAmount] = useState<string>((d.paymentAmount as string | number | undefined)?.toString() ?? '');
-  const [paymentNotes, setPaymentNotes] = useState<string>((d.paymentNotes as string) || '');
-  const currentStage = rec.approvalChain[rec.approvalIndex];
+  const atStage = rec.approvalIndex ?? 0;
 
+  // Stage gates (NO collab exception needed — chain natively matches roles)
+  const isStage0 = awaits && atStage === 0 && (!!user.isAdmin || user.role === 'ACCOUNTANT');
+  const isStage2 = awaits && atStage === 2 && (!!user.isAdmin || user.role === 'ACCOUNTANT');
+
+  // Awarded price comes from the project record (set by F-85 trigger as projectPatch.awardedPrice)
+  const project = context?.projects?.find((p: any) => p.id === rec.projectRefId);
+  const awardedPrice = Number(project?.awardedPrice) || 0;
+
+  // Bidirectional state — default to 30% of the awarded price when no prior data exists.
+  const [paymentPct, setPaymentPct] = useState<string>(d.paymentPct != null ? String(d.paymentPct) : '30');
+  const [paymentAmount, setPaymentAmount] = useState<string>(() => {
+    if (d.paymentAmount != null) return String(d.paymentAmount);
+    return awardedPrice > 0 ? (awardedPrice * 0.30).toFixed(2) : '';
+  });
+  const [accountantNotes, setAccountantNotes] = useState<string>((d.accountantNotes as string) || '');
+  const [transferNotes, setTransferNotes] = useState<string>((d.transferNotes as string) || '');
+  const [invoiceFiles, setInvoiceFiles] = useState<TitledFile[]>((d.invoiceFiles as TitledFile[]) || []);
+  const [transferFiles, setTransferFiles] = useState<TitledFile[]>((d.transferFiles as TitledFile[]) || []);
+
+  // Debounced auto-save while the current stage user is actively editing
   useEffect(() => {
-    if (!canEditPayment) return;
-    const t = setTimeout(() => { api.updateFormData(rec.id, { paymentAmount: Number(paymentAmount || 0), paymentNotes }); }, 500);
+    if (!awaits) return;
+    const t = setTimeout(() => {
+      api.updateFormData(rec.id, {
+        paymentPct: Number(paymentPct || 0),
+        paymentAmount: Number(paymentAmount || 0),
+        accountantNotes,
+        transferNotes,
+      });
+    }, 500);
     return () => clearTimeout(t);
-  }, [paymentAmount, paymentNotes, canEditPayment]);
+  }, [paymentPct, paymentAmount, accountantNotes, transferNotes, awaits]);
+
+  // Bidirectional recalculation
+  const handlePctChange = (val: string) => {
+    setPaymentPct(val);
+    if (awardedPrice > 0) setPaymentAmount(((Number(val || 0) / 100) * awardedPrice).toFixed(2));
+  };
+  const handleAmountChange = (val: string) => {
+    setPaymentAmount(val);
+    if (awardedPrice > 0) setPaymentPct(((Number(val || 0) / awardedPrice) * 100).toFixed(2));
+  };
+
+  // File handlers (TitledFileUploader handles its own "+ اضافة ملف" row pattern)
+  const updateInvoiceFiles = (next: TitledFile[]) => { setInvoiceFiles(next); api.updateFormData(rec.id, { invoiceFiles: next }); };
+  const updateTransferFiles = (next: TitledFile[]) => { setTransferFiles(next); api.updateFormData(rec.id, { transferFiles: next }); };
+
+  const stageLabel = atStage === 0 ? 'اعتماد ورفع الطلب' : atStage === 1 ? 'اعتماد المدير التنفيذي' : 'تأكيد التحويل وإغلاق الدفعة';
+  const showTransferCard = atStage >= 2 || rec.status === 'approved' || rec.status === 'completed';
 
   return (
-    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد الدفعة">
-      <Card title="طلب صرف الدفعة الأولى" icon={DollarSign}>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <ReadOnlyField label="الدفعة" value="الدفعة الأولى (30%)" />
-          <ReadOnlyField label="المرحلة الحالية" value={currentStage ? roleName(currentStage) : '—'} />
+    <FormShell rec={rec} user={user} api={api} approveLabel={stageLabel}>
+      <Card title="بيانات الدفعة" icon={DollarSign} accent="teal">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+          <ReadOnlyField label="قيمة الترسية (من الترسية F-85)" value={
+            <span className="flex items-center gap-1">{awardedPrice.toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>
+          } />
+          {isStage0 ? (
+            <>
+              <Input type="number" label="النسبة المئوية (%)" value={paymentPct} onChange={e => handlePctChange(e.target.value)} />
+              <Input type="number" value={paymentAmount} onChange={e => handleAmountChange(e.target.value)}
+                label={<span className="flex items-center gap-1">قيمة الدفعة <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
+            </>
+          ) : (
+            <>
+              <ReadOnlyField label="النسبة المئوية (%)" value={`${paymentPct || '0'}%`} />
+              <ReadOnlyField label="قيمة الدفعة" value={
+                <span className="flex items-center gap-1">{Number(paymentAmount || 0).toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>
+              } />
+            </>
+          )}
         </div>
-        {canEditPayment ? (
-          <>
-            <Input className="mt-3" type="number" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)}
-              label={<span className="flex items-center gap-1">قيمة الدفعة <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
-            <TextArea className="mt-3" label="ملاحظات الصرف" rows={2} value={paymentNotes} onChange={e => setPaymentNotes(e.target.value)} />
-          </>
-        ) : (
-          <ReadOnlyField className="mt-3" label="القيمة"
-            value={<span className="flex items-center gap-1">{Number(d.paymentAmount || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
-        )}
+        <TextArea label="ملاحظات وتوصية المحاسب (اختياري)" rows={2} value={accountantNotes} onChange={e => setAccountantNotes(e.target.value)} readOnly={!isStage0} />
       </Card>
+
+      <Card title="مرفقات المطالبة (الفواتير والمستندات)" icon={FileText}>
+        <p className="text-xs text-fg-muted mb-2">المحاسب يرفع الفواتير والمستندات المطلوبة. كل صف له عنوان مخصّص وملف.</p>
+        <TitledFileUploader files={invoiceFiles} onChange={updateInvoiceFiles} pathPrefix="f35-invoices" disabled={!isStage0} />
+      </Card>
+
+      {showTransferCard && (
+        <Card title="إثبات التحويل البنكي" icon={CheckCircle2} accent="purple">
+          <p className="text-xs text-fg-muted mb-2">بعد اعتماد المدير التنفيذي، يُنفّذ المحاسب التحويل ويرفع إثباته هنا.</p>
+          <TitledFileUploader files={transferFiles} onChange={updateTransferFiles} pathPrefix="f35-transfers" disabled={!isStage2} />
+          <TextArea className="mt-3" label="ملاحظات التحويل (اختياري)" rows={2} value={transferNotes} onChange={e => setTransferNotes(e.target.value)} readOnly={!isStage2} />
+        </Card>
+      )}
     </FormShell>
   );
 };

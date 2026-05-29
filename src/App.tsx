@@ -359,7 +359,9 @@ function App() {
     // of them sees the submit button (رئيس التشخيص / chosen engineer / فريق الفزعة).
     const isCollabSubmit = decision === 'approved' && (
       ((rec.code === 'F-21' || rec.code === 'F-84') && (user.isAdmin || user.department === 'PROJECTS')) ||
-      (rec.code === 'F-22' && (user.isAdmin || user.department === 'RESEARCH'))
+      (rec.code === 'F-22' && (user.isAdmin || user.department === 'RESEARCH')) ||
+      (rec.code === 'F-33' && (user.isAdmin || user.department === 'PROJECTS')) ||
+      (rec.code === 'F-33.1' && (user.isAdmin || user.role === 'PROJECTS_MANAGER' || user.department === 'FINANCE'))
     );
     if (!isCollabSubmit) {
       if (expected !== user.role && !user.isAdmin) return;

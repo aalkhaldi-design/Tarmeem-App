@@ -1,17 +1,44 @@
 import React, { useState } from 'react';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { storage } from '../../lib/firebase';
 import { Plus, Trash2, AlertTriangle } from 'lucide-react';
 import { Input } from '../ui';
 
-export interface TitledFile { name: string; title: string; url?: string; size?: number; uploadedAt?: string }
+export interface TitledFile { name: string; title: string; url?: string; size?: number; uploadedAt?: string; driveId?: string; viewUrl?: string }
+
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // keep under Netlify's ~6MB function payload after base64
+
+async function compressImage(file: File): Promise<Blob> {
+  if (!file.type.startsWith('image/')) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const maxDim = 1600;
+    const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return file;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.82));
+    return blob && blob.size < file.size ? blob : file;
+  } catch { return file; }
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(new Error('فشل قراءة الملف'));
+    reader.readAsDataURL(blob);
+  });
+}
 
 export const TitledFileUploader: React.FC<{
   files: TitledFile[];
   onChange: (files: TitledFile[]) => void;
   pathPrefix: string;
   disabled?: boolean;
-}> = ({ files, onChange, pathPrefix, disabled }) => {
+}> = ({ files, onChange, disabled }) => {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,13 +48,28 @@ export const TitledFileUploader: React.FC<{
     try {
       const added: TitledFile[] = [];
       for (const file of Array.from(fileList)) {
-        const sRef = ref(storage, `${pathPrefix}/${crypto.randomUUID()}/${file.name}`);
-        await Promise.race([
-          uploadBytes(sRef, file),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('انتهت مهلة الرفع — تحقق من تفعيل Firebase Storage والاتصال')), 60000)),
-        ]);
-        const url = await getDownloadURL(sRef);
-        added.push({ name: file.name, title: file.name, url, size: file.size, uploadedAt: new Date().toISOString() });
+        const blob = await compressImage(file);
+        if (blob.size > MAX_UPLOAD_BYTES) throw new Error(`الملف "${file.name}" كبير جداً (الحد ٤ ميجابايت بعد الضغط).`);
+        const dataBase64 = await blobToBase64(blob);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 90000);
+        let res: Response;
+        try {
+          res = await fetch('/.netlify/functions/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fileName: file.name, mimeType: file.type || 'application/octet-stream', dataBase64 }),
+            signal: controller.signal,
+          });
+        } finally { clearTimeout(timer); }
+        if (!res.ok) {
+          let msg = 'فشل رفع الملف';
+          try { const j = await res.json(); if (j && j.error) msg = j.error; } catch { /* ignore */ }
+          throw new Error(msg);
+        }
+        const j = await res.json();
+        const viewUrl = `/.netlify/functions/file?id=${encodeURIComponent(j.driveId)}`;
+        added.push({ name: file.name, title: file.name, url: viewUrl, viewUrl, driveId: j.driveId, size: blob.size, uploadedAt: new Date().toISOString() });
       }
       onChange([...files, ...added]);
     } catch (e) {

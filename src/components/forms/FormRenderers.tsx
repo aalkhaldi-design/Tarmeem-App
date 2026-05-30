@@ -301,6 +301,15 @@ interface F08Croquis {
   title?: string;     // derived "floor - room" for the simpler API surface
 }
 
+// Firestore forbids arrays-of-arrays. Croquis strokes are Point[][] in memory but must be
+// stored as {pts:Point[]}[] (array of objects). Wrap on write, unwrap on read.
+const wrapCroquisPaths = (list: any[]): any[] => (list || []).map((c: any) => ({
+  ...c, paths: (c.paths || []).map((stroke: any) => Array.isArray(stroke) ? { pts: stroke } : stroke),
+}));
+const unwrapCroquisPaths = (list: any[]): any[] => (list || []).map((c: any) => ({
+  ...c, paths: (c.paths || []).map((p: any) => Array.isArray(p) ? p : (p?.pts || [])),
+}));
+
 export const F08Renderer: FormRenderer = ({ rec, user, api, context, users }) => {
   const canEdit = formIsEditableByUser(rec, user);
   const awaitsMe = formAwaitsUser(rec, user);
@@ -327,9 +336,9 @@ export const F08Renderer: FormRenderer = ({ rec, user, api, context, users }) =>
     appliancesFixed: { acSplit1: 0, acSplit15: 0, acWindow15: 0, washer: 0, stove: 0, fridge: 0, vacuum: 0, waterCooler: 0 },
     appliancesCustom: [],
     appliancesNotes: {},
-    croquisList: [] as F08Croquis[],
     diagnosisNotes: '', pledge: false,
     ...(rec.data || {}),
+    croquisList: unwrapCroquisPaths((rec.data as any)?.croquisList),
   }));
 
   // Auto-fill from F-02 + F-04 on first mount (verbatim Gemini logic)
@@ -434,8 +443,8 @@ export const F08Renderer: FormRenderer = ({ rec, user, api, context, users }) =>
   const save = async () => {
     setSaving(true); setSaved(false);
     try {
-      // Firestore rejects `undefined` — strip it before writing, no submit/status change.
-      const clean = JSON.parse(JSON.stringify(data));
+      // Firestore rejects `undefined` AND arrays-of-arrays — wrap croquis strokes before writing.
+      const clean = JSON.parse(JSON.stringify({ ...data, croquisList: wrapCroquisPaths(data.croquisList) }));
       await api.updateFormData(rec.id, clean);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
@@ -449,7 +458,7 @@ export const F08Renderer: FormRenderer = ({ rec, user, api, context, users }) =>
   const submitBinder = async () => {
     setSubmitting(true);
     try {
-      const clean = JSON.parse(JSON.stringify(data)); // persist current edits before approving
+      const clean = JSON.parse(JSON.stringify({ ...data, croquisList: wrapCroquisPaths(data.croquisList) })); // wrap croquis (Firestore forbids arrays-of-arrays)
       await api.updateFormData(rec.id, clean);
       await api.approveForm(rec.id, user, '');
     } catch (e) {
@@ -2093,7 +2102,6 @@ export const F33_1Renderer: FormRenderer = ({ rec, user, api }) => {
     catch (e) { console.error('F-33.1 save failed:', e); alert('تعذّر الحفظ — حاول مجدداً'); }
   };
   const submit = async () => {
-    if (files.length === 0) return;
     setBusy(true);
     try { await api.updateFormData(rec.id, { notes, attachments: files }); await api.approveForm(rec.id, user, ''); }
     finally { setBusy(false); }
@@ -2103,7 +2111,7 @@ export const F33_1Renderer: FormRenderer = ({ rec, user, api }) => {
     <FormShell rec={rec} user={user} api={api} approvalSection={canEdit ? (
       <div className="flex gap-2">
         <button onClick={save} className="flex-1 py-2.5 rounded-lg border-2 border-[#4A1F66] text-[#4A1F66] dark:text-purple-300 font-bold text-sm">{saved ? 'تم الحفظ ✓' : 'حفظ المسودة'}</button>
-        <button disabled={busy || files.length === 0} onClick={submit} className="flex-1 py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">{busy ? 'جارٍ الاعتماد…' : 'اعتماد توقيع العقد'}</button>
+        <button disabled={busy} onClick={submit} className="flex-1 py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">{busy ? 'جارٍ الاعتماد…' : 'اعتماد توقيع العقد'}</button>
       </div>
     ) : <></>}>
       <Card title="مرفقات العقد الموقّع" icon={FileSignature}>

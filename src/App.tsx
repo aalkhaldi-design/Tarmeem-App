@@ -360,6 +360,7 @@ function App() {
     const isCollabSubmit = decision === 'approved' && (
       ((rec.code === 'F-21' || rec.code === 'F-84') && (user.isAdmin || user.department === 'PROJECTS')) ||
       (rec.code === 'F-20' && (user.isAdmin || user.department === 'PROJECTS' || user.department === 'SUPPORT')) ||
+      (rec.code === 'F-34' && (user.isAdmin || user.department === 'SUPPORT')) ||
       (rec.code === 'F-22' && (user.isAdmin || user.department === 'RESEARCH')) ||
       (rec.code === 'F-33' && (user.isAdmin || user.department === 'PROJECTS')) ||
       (rec.code === 'F-33.1' && (user.isAdmin || user.role === 'PROJECTS_MANAGER' || user.department === 'FINANCE'))
@@ -466,6 +467,12 @@ function App() {
     await updateDoc(doc(db, 'forms', formId), { data: { ...(rec.data || {}), ...dataPatch }, updatedAt: new Date().toISOString() });
   }, [forms]);
 
+  const activateForm: FormsApi['activateForm'] = useCallback(async (formId, dataPatch) => {
+    const rec = forms.find(f => f.id === formId);
+    if (!rec || rec.status !== 'draft') return;
+    await updateDoc(doc(db, 'forms', formId), { status: 'pending', data: { ...(rec.data || {}), ...(dataPatch || {}) }, updatedAt: new Date().toISOString() });
+  }, [forms]);
+
   const attachFiles: FormsApi['attachFiles'] = useCallback(async (formId, files) => {
     const rec = forms.find(f => f.id === formId);
     if (!rec) return;
@@ -481,8 +488,9 @@ function App() {
     deferForm: (id, user, note) => advanceForm(id, user, 'deferred', note),
     declineForm: (id, user, note) => advanceForm(id, user, 'declined', note),
     updateFormData,
+    activateForm,
     attachFiles,
-  }), [forms, createForm, createDraftForm, advanceForm, updateFormData, attachFiles]);
+  }), [forms, createForm, createDraftForm, advanceForm, updateFormData, activateForm, attachFiles]);
 
   /* ────────── Forms context for renderers ────────── */
   const formsContext: FormsContext = useMemo(() => ({

@@ -374,7 +374,7 @@ export const F08Renderer: FormRenderer = ({ rec, user, api, context, users }) =>
   const addWorkSpace = () => setData((prev: any) => ({
     ...prev,
     works: [...prev.works, {
-      id: Date.now(), name: '', isExpanded: true, images: [],
+      id: Date.now(), name: '', isExpanded: true, images: [], note: '',
       civilFixed: { ceiling: '', concrete: '', ceramic: '', insulation: '', plaster: '', paint: '', aluminum: '', wood: '' },
       civilCustom: [], civilNotes: '',
       electricalFixed: { ceilingLight: 0, breaker: 0, normalSocket: 0, spotlight: 0 },
@@ -690,6 +690,15 @@ export const F08Renderer: FormRenderer = ({ rec, user, api, context, users }) =>
                       )}
                       <TextArea className="mt-3" readOnly={!canEdit} label="ملاحظات أعمال السباكة" rows={2}
                         value={space.plumbingNotes} onChange={(e) => updateWorkSpace(space.id, null, 'plumbingNotes', e.target.value)} />
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-subtle space-y-3">
+                      <TextArea readOnly={!canEdit} label="ملاحظات عامة على المساحة (اختياري)" rows={2}
+                        value={space.note || ''} onChange={(e) => updateWorkSpace(space.id, null, 'note', e.target.value)} />
+                      <div>
+                        <p className="text-xs font-bold text-fg-muted mb-1.5">صور المساحة (اختياري)</p>
+                        <TitledFileUploader files={space.images || []} pathPrefix={`f08-work-${space.id}`} disabled={!canEdit}
+                          onChange={(next) => updateWorkSpace(space.id, null, 'images', next)} />
+                      </div>
                     </div>
                   </div>
                 </div>

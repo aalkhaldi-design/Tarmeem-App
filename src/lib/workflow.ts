@@ -116,9 +116,13 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
     return result;
   },
 
-  'F-20': () => ({
-    projectPatch: { progressPct: 58 },
-  }),
+  'F-20': (ctx) => {
+    const f34 = ctx.forms.find(f => f.code === 'F-34' && f.projectRefId === ctx.approvedRecord.projectRefId);
+    return {
+      projectPatch: { progressPct: 58 },
+      activate: f34 ? [{ formId: f34.id }] : [],
+    };
+  },
 
   'F-84': (ctx) => {
     const f85 = ctx.forms.find(f => f.code === 'F-85' && f.projectRefId === ctx.approvedRecord.projectRefId);
@@ -176,31 +180,16 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
     const projectRefId = ctx.approvedRecord.projectRefId!;
     const f14 = ctx.forms.find(f => f.code === 'F-14' && f.projectRefId === projectRefId);
     const f19 = ctx.forms.find(f => f.code === 'F-19' && f.projectRefId === projectRefId);
-    const f34 = ctx.forms.find(f => f.code === 'F-34' && f.projectRefId === projectRefId);
-    const f20 = ctx.forms.find(f => f.code === 'F-20' && f.projectRefId === projectRefId);
     const f08 = ctx.forms.find(f => f.code === 'F-08' && f.projectRefId === projectRefId);
 
     const f08works = ((f08?.data as { works?: Array<{ id: string; name: string }> })?.works || [])
       .map(w => ({ id: w.id, name: w.name }));
-
-    const f20src = (f20?.data || {}) as {
-      items?: unknown[]; directNotes?: string; inkindNotes?: string; partnershipNotes?: string;
-    };
 
     return {
       projectPatch: { phase: 'EXECUTION' as ProjectPhase, progressPct: 60 },
       activate: [
         ...(f14 ? [{ formId: f14.id, data: { f08_works: f08works, visitNumber: 1 } }] : []),
         ...(f19 ? [{ formId: f19.id }] : []),
-        ...(f34 ? [{
-          formId: f34.id,
-          data: {
-            f20_items: f20src.items || [],
-            f20_directNotes: f20src.directNotes,
-            f20_inkindNotes: f20src.inkindNotes,
-            f20_partnershipNotes: f20src.partnershipNotes,
-          },
-        }] : []),
       ],
     };
   },

@@ -2134,61 +2134,123 @@ export const F33_1Renderer: FormRenderer = ({ rec, user, api }) => {
   );
 };
 
+type F34Item = { id: string; label: string; qty: string; choice?: string; price?: string; delivered?: boolean; pledge?: boolean };
+type F34Group = { internal: F34Item[]; partner: F34Item[] };
+type F34Sections = { furniture: F34Group; appliances: F34Group; materials: F34Group };
+
 export const F34Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
-  const awaits = formAwaitsUser(rec, user);
-  const isReadOnly = !awaits;
-  const items = (d.f20_items as Array<{ id?: string; name?: string; unit?: string; qty?: number; supplier?: string }>) || [];
-  const [materialSummary, setMaterialSummary] = useState<string>((d.materialSummary as string) || '');
-  const [totalCost, setTotalCost] = useState<string>((d.totalCost as string | number | undefined)?.toString() ?? '');
+  const canEdit = rec.status === 'pending' && (!!user.isAdmin || user.department === 'SUPPORT');
 
-  useEffect(() => {
-    if (isReadOnly) return;
-    const t = setTimeout(() => { api.updateFormData(rec.id, { materialSummary, totalCost: Number(totalCost || 0) }); }, 500);
-    return () => clearTimeout(t);
-  }, [materialSummary, totalCost, isReadOnly]);
+  const extractFromF20 = (): F34Sections => {
+    const f20 = api.forms.find(f => f.code === 'F-20' && f.projectRefId === rec.projectRefId);
+    const src = (f20?.data?.f20_items as any) || { furniture: [], appliances: [], materials: [] };
+    const conv = (arr: any[]): F34Group => {
+      const internal: F34Item[] = []; const partner: F34Item[] = [];
+      (arr || []).forEach((it: any) => {
+        if (it.byContractor) return;
+        const item: F34Item = { id: it.id, label: it.label, qty: String(it.qty || ''), choice: '', price: '', delivered: false, pledge: false };
+        if (it.providerType === 'داخلي') internal.push(item);
+        else if (it.providerType === 'داعم/شريك') partner.push(item);
+      });
+      return { internal, partner };
+    };
+    return { furniture: conv(src.furniture), appliances: conv(src.appliances), materials: conv(src.materials) };
+  };
+
+  const [sections, setSections] = useState<F34Sections>(() => {
+    const saved = d.f34_items as F34Sections | undefined;
+    return saved && saved.furniture ? saved : extractFromF20();
+  });
+  const [savedFlag, setSavedFlag] = useState(false);
+
+  const updateItem = (cat: keyof F34Sections, group: 'internal' | 'partner', id: string, field: keyof F34Item, value: any) =>
+    setSections(prev => ({ ...prev, [cat]: { ...prev[cat], [group]: prev[cat][group].map(it => it.id === id ? { ...it, [field]: value } : it) } }));
+
+  const lineTotal = (it: F34Item) => Number(it.price || 0) * Number(it.qty || 0);
+  const purchaseTotal = (['furniture', 'appliances', 'materials'] as const)
+    .reduce((sum, cat) => sum + sections[cat].internal.filter(it => it.choice === 'طلب مشتريات').reduce((s, it) => s + lineTotal(it), 0), 0);
+
+  const save = async () => {
+    setSavedFlag(false);
+    try { await api.updateFormData(rec.id, { f34_items: JSON.parse(JSON.stringify(sections)) }); setSavedFlag(true); setTimeout(() => setSavedFlag(false), 2500); }
+    catch (e) { console.error('F-34 save failed:', e); alert('تعذّر الحفظ — حاول مجدداً'); }
+  };
+
+  const renderItem = (cat: keyof F34Sections, group: 'internal' | 'partner', it: F34Item) => (
+    <div key={it.id} className="p-2.5 rounded-xl border border-subtle bg-surface-up space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="flex-1 min-w-[40%] text-sm font-bold">{it.label || '—'}</span>
+        <span className="text-xs text-fg-muted">الكمية: {it.qty || '—'}</span>
+      </div>
+      {group === 'internal' && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <select value={it.choice || ''} disabled={!canEdit} onChange={e => updateItem(cat, group, it.id, 'choice', e.target.value)}
+            className="px-2 py-1 rounded border border-subtle bg-surface text-xs">
+            <option value="">— الحالة —</option>
+            <option value="متوفر">متوفر</option>
+            <option value="طلب مشتريات">طلب مشتريات</option>
+          </select>
+          {it.choice === 'طلب مشتريات' && (
+            <>
+              <input type="number" min="0" placeholder="سعر الوحدة" value={it.price || ''} disabled={!canEdit}
+                onChange={e => updateItem(cat, group, it.id, 'price', e.target.value)}
+                className="w-28 px-2 py-1 rounded border border-subtle bg-surface text-xs" />
+              <span className="text-xs font-bold text-[#4A1F66] dark:text-purple-300">الإجمالي: {lineTotal(it).toLocaleString()} ر.س</span>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderGroup = (cat: keyof F34Sections, group: 'internal' | 'partner', label: string) => {
+    const items = sections[cat][group];
+    if (items.length === 0) return null;
+    return (
+      <div className="space-y-2">
+        <p className="text-xs font-bold text-fg-muted border-r-2 border-[#43bba1] pr-2">{label}</p>
+        {items.map(it => renderItem(cat, group, it))}
+      </div>
+    );
+  };
+
+  const renderCategory = (cat: keyof F34Sections, title: string, icon: any) => {
+    const g = sections[cat];
+    if (g.internal.length === 0 && g.partner.length === 0) return null;
+    return (
+      <Card key={cat} title={title} icon={icon}>
+        <div className="space-y-3">
+          {renderGroup(cat, 'internal', 'توريد داخلي')}
+          {renderGroup(cat, 'partner', 'توريد داعم / شريك')}
+        </div>
+      </Card>
+    );
+  };
+
+  const empty = (['furniture', 'appliances', 'materials'] as const).every(c => sections[c].internal.length === 0 && sections[c].partner.length === 0);
 
   return (
-    <FormShell rec={rec} user={user} api={api} approveLabel="اعتماد الإحالة">
-      <Card title="بنود المواد (من F-20)" icon={Truck}>
-        {items.length === 0 ? (
-          <p className="text-xs text-gray-500 dark:text-slate-400">لم تُستخرج بنود من F-20 بعد.</p>
-        ) : (
-          <table className="w-full text-xs">
-            <thead className="bg-gray-50 dark:bg-slate-800">
-              <tr>
-                <th className="px-2 py-2 text-right">البند</th>
-                <th className="px-2 py-2 text-right">الكمية</th>
-                <th className="px-2 py-2 text-right">المصدر</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((it, i) => (
-                <tr key={it.id || i} className="border-t dark:border-slate-700">
-                  <td className="px-2 py-1.5 font-bold">{it.name || '—'}</td>
-                  <td className="px-2 py-1.5">{it.qty ?? '—'} {it.unit || ''}</td>
-                  <td className="px-2 py-1.5 text-gray-500">{it.supplier || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+    <FormShell rec={rec} user={user} api={api} approvalSection={canEdit ? (
+      <button onClick={save} className="w-full py-2.5 rounded-lg border-2 border-[#4A1F66] text-[#4A1F66] dark:text-purple-300 font-bold text-sm">{savedFlag ? 'تم الحفظ ✓' : 'حفظ الحصر'}</button>
+    ) : <></>}>
+      <Card title="حصر التوريد الداخلي" icon={Truck} accent="purple">
+        <p className="text-xs text-fg-muted leading-6">يُستخرج هذا الحصر تلقائياً من خطة التوريد (F-20): البنود المخصّصة للتوريد الداخلي أو من داعم/شريك فقط (تُستبعد بنود المقاول). حدّد حالة بنود التوريد الداخلي (متوفر / طلب مشتريات). أزرار «تم التسليم» و«طلب صرف مشتريات» ستُفعَّل في التحديث القادم.</p>
       </Card>
-      <Card title="ملخّص الإحالة" icon={ClipboardList}>
-        {isReadOnly ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <ReadOnlyField label="ملخّص المواد" value={d.materialSummary as string} />
-            <ReadOnlyField label="التكلفة الإجمالية"
-              value={<span className="flex items-center gap-1">{Number(d.totalCost || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
-          </div>
-        ) : (
-          <>
-            <TextArea label="ملخّص المواد" rows={3} value={materialSummary} onChange={e => setMaterialSummary(e.target.value)} />
-            <Input className="mt-3" type="number" value={totalCost} onChange={e => setTotalCost(e.target.value)}
-              label={<span className="flex items-center gap-1">التكلفة الإجمالية <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
-          </>
-        )}
-      </Card>
+      {empty ? (
+        <Card title="لا توجد بنود" icon={ClipboardList}><p className="text-xs text-fg-faint">لم تُسجَّل بنود توريد داخلي أو داعم/شريك في خطة التوريد (F-20) لهذا المشروع.</p></Card>
+      ) : (
+        <>
+          {renderCategory('furniture', 'الأثاث', Sofa)}
+          {renderCategory('appliances', 'الأجهزة', ShoppingCart)}
+          {renderCategory('materials', 'المواد', Truck)}
+          {purchaseTotal > 0 && (
+            <Card title="إجمالي طلب المشتريات (تقديري)" icon={Calculator}>
+              <p className="text-lg font-extrabold text-[#4A1F66] dark:text-purple-300">{purchaseTotal.toLocaleString()} ر.س</p>
+            </Card>
+          )}
+        </>
+      )}
     </FormShell>
   );
 };

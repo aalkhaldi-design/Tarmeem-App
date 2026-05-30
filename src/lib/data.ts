@@ -163,7 +163,7 @@ export type FormCode =
   | 'F-02' | 'F-03' | 'F-03.1' | 'F-03.2'
   | 'F-04' | 'F-08' | 'F-18' | 'F-22' | 'F-21' | 'F-20'
   | 'F-84' | 'F-85' | 'F-32' | 'F-33' | 'F-33.1' | 'F-35' | 'F-34'
-  | 'F-19' | 'F-14' | 'F-23' | 'F-15'
+  | 'F-19' | 'F-14' | 'F-23' | 'F-15' | 'F-15.1' | 'F-15.2'
   | 'F-07' | 'F-52';
 
 export type FormStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'deferred' | 'completed' | 'declined';
@@ -279,7 +279,7 @@ export const FORMS: FormDef[] = [
   },
   /* F-19 */
   {
-    code: 'F-19', title: 'تعميد المقاول بتوريد الموارد', titleEn: 'Internal Purchase / Contractor Order',
+    code: 'F-19', title: 'تعميد المقاول بالتوريد', titleEn: 'Contractor Supply Assignment',
     category: 'SUPPLY', ownerDept: 'SUPPORT',
     originRoles: ['PROCUREMENT_OFFICER'],
     approvalChain: ['PROCUREMENT_OFFICER'],
@@ -300,7 +300,7 @@ export const FORMS: FormDef[] = [
   },
   /* F-14 */
   {
-    code: 'F-14', title: 'تقرير الزيارة الميدانية', titleEn: 'Site Visit Report',
+    code: 'F-14', title: 'تقرير الإشراف', titleEn: 'Supervision Report',
     category: 'EXECUTION', ownerDept: 'PROJECTS',
     originRoles: ['DIAGNOSIS_ENGINEER'],
     approvalChain: ['DIAGNOSIS_ENGINEER'],
@@ -309,7 +309,7 @@ export const FORMS: FormDef[] = [
   },
   /* F-23 */
   {
-    code: 'F-23', title: 'اعتماد بنود الأعمال الإضافية', titleEn: 'Additional Works Approval',
+    code: 'F-23', title: 'تحديث بنود الأعمال', titleEn: 'Works Items Update',
     category: 'EXECUTION', ownerDept: 'PROJECTS',
     originRoles: ['DIAGNOSIS_ENGINEER', 'PROJECTS_MANAGER'],
     approvalChain: ['PROJECTS_MANAGER'],
@@ -325,6 +325,22 @@ export const FORMS: FormDef[] = [
     approvalChain: ['ACCOUNTANT', 'EXEC_DIRECTOR', 'ACCOUNTANT'],
     slaDays: 4,
     description: 'يُولَّد آلياً عند بلوغ نسب التقدم (60%/90%/100%) في F-14. محاسب ➡️ مدير تنفيذي ➡️ محاسب (تحويل).',
+  },
+  {
+    code: 'F-15.1', title: 'طلب صرف مشتريات', titleEn: 'Purchase Disbursement Request',
+    category: 'EXECUTION', ownerDept: 'SUPPORT',
+    originRoles: [],
+    approvalChain: ['SUPPORT_MANAGER', 'ACCOUNTANT', 'EXEC_DIRECTOR', 'ACCOUNTANT'],
+    slaDays: 4,
+    description: 'يُولَّد من F-34 لصرف المشتريات الداخلية. مدير الخدمات المساندة (مراجعة) ➡️ محاسب ➡️ مدير تنفيذي ➡️ محاسب (تحويل).',
+  },
+  {
+    code: 'F-15.2', title: 'طلب صرف تعميد المقاول', titleEn: 'Contractor Assignment Disbursement',
+    category: 'EXECUTION', ownerDept: 'FINANCE',
+    originRoles: [],
+    approvalChain: ['ACCOUNTANT', 'EXEC_DIRECTOR', 'ACCOUNTANT'],
+    slaDays: 4,
+    description: 'يُولَّد من F-19 لدفع تكاليف تعميد المقاول بالتوريد. محاسب ➡️ مدير تنفيذي ➡️ محاسب (تحويل).',
   },
   /* F-07 */
   {
@@ -393,7 +409,7 @@ export const FORMS: FormDef[] = [
   },
   /* F-34 */
   {
-    code: 'F-34', title: 'إحالة حصر المواد', titleEn: 'Material Transfer',
+    code: 'F-34', title: 'حصر التوريد الداخلي', titleEn: 'Internal Supply Inventory',
     category: 'EXECUTION', ownerDept: 'PROJECTS',
     originRoles: ['DIAGNOSIS_ENGINEER', 'HEAD_SUPERVISION'],
     approvalChain: ['DIAGNOSIS_ENGINEER'],

@@ -176,7 +176,7 @@ export const F02Creator: FormCreator = ({ user, api, context, onClose }) => {
       const DRAFT_CODES: FormCode[] = [
         'F-04', 'F-08', 'F-18', 'F-22', 'F-21', 'F-20',
         'F-84', 'F-85', 'F-32', 'F-33', 'F-33.1', 'F-35', 'F-34',
-        'F-19', 'F-14', 'F-23',
+        'F-15.1', 'F-15.2', 'F-19', 'F-14', 'F-23',
         'F-07', 'F-52',
       ];
       for (const code of DRAFT_CODES) {

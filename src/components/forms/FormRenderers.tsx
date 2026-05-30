@@ -2348,6 +2348,22 @@ export const F84Renderer: FormRenderer = ({ rec, user, api }) => {
    Registries
    ────────────────────────────────────────────────────────────────── */
 
+// Placeholder renderers — full UI lands in later Phase-4 sub-phases (4E / 4I).
+export const F15_1Renderer: FormRenderer = ({ rec, user, api }) => (
+  <FormShell rec={rec} user={user} api={api} approvalSection={<></>}>
+    <Card title="طلب صرف مشتريات" icon={ShoppingCart}>
+      <p className="text-sm text-fg-muted">هذا النموذج قيد الإعداد وسيُفعَّل في مرحلة لاحقة.</p>
+    </Card>
+  </FormShell>
+);
+export const F15_2Renderer: FormRenderer = ({ rec, user, api }) => (
+  <FormShell rec={rec} user={user} api={api} approvalSection={<></>}>
+    <Card title="طلب صرف تعميد المقاول" icon={DollarSign}>
+      <p className="text-sm text-fg-muted">هذا النموذج قيد الإعداد وسيُفعَّل في مرحلة لاحقة.</p>
+    </Card>
+  </FormShell>
+);
+
 export const RENDERERS: Record<string, FormRenderer | undefined> = {
   'F-02': F02Renderer,
   'F-03': F03Renderer,
@@ -2362,6 +2378,8 @@ export const RENDERERS: Record<string, FormRenderer | undefined> = {
   'F-14': F14Renderer,
   'F-23': F23Renderer,
   'F-15': F15Renderer,
+  'F-15.1': F15_1Renderer,
+  'F-15.2': F15_2Renderer,
   'F-07': F07Renderer,
   'F-52': F52Renderer,
   'F-03.1': F03_1Renderer,

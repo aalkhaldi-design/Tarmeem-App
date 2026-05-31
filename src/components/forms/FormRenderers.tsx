@@ -1783,6 +1783,8 @@ export const F14Creator: FormCreator = ({ user, api, context, onClose }) => {
 };
 
 type F14Room = { id: string; name: string; pct: string; note: string; images: TitledFile[] };
+type F14DeployItem = { id: string; label: string; qty: string; deployed: boolean; deployedQty: string; note: string };
+type F14Deploy = { furniture: F14DeployItem[]; appliances: F14DeployItem[]; materials: F14DeployItem[] };
 
 export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
@@ -1803,16 +1805,29 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
     const saved = d.f14_rooms as F14Room[] | undefined;
     return saved && saved.length ? saved : extractRooms();
   });
+  const extractDeploy = (): F14Deploy => {
+    const f21 = api.forms.find(f => f.code === 'F-21' && f.projectRefId === rec.projectRefId);
+    const sec = (f21?.data?.f21_sections as any) || {};
+    const conv = (s: any): F14DeployItem[] => (((s?.rows as any[]) || [])).map((r: any) => ({ id: String(r.id), label: r.label || '', qty: String(r.qty || ''), deployed: false, deployedQty: '', note: '' }));
+    return { furniture: conv(sec.furniture), appliances: conv(sec.appliances), materials: conv(sec.materials) };
+  };
+  const [deploy, setDeploy] = useState<F14Deploy>(() => {
+    const saved = d.f14_deploy as F14Deploy | undefined;
+    return saved && saved.furniture ? saved : extractDeploy();
+  });
   const [overallPct, setOverallPct] = useState<string>((d.f14_overallPct as string) || '');
   const [recommendation, setRecommendation] = useState<string>((d.f14_recommendation as string) || '');
   const [savedFlag, setSavedFlag] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const persist = (nextRooms: F14Room[]) =>
-    api.updateFormData(rec.id, { f14_rooms: JSON.parse(JSON.stringify(nextRooms)), f14_overallPct: overallPct, f14_recommendation: recommendation });
+  const persist = (nextRooms: F14Room[], nextDeploy?: F14Deploy) =>
+    api.updateFormData(rec.id, { f14_rooms: JSON.parse(JSON.stringify(nextRooms)), f14_deploy: JSON.parse(JSON.stringify(nextDeploy || deploy)), f14_overallPct: overallPct, f14_recommendation: recommendation });
 
   const updateRoom = (id: string, field: keyof F14Room, value: any) =>
     setRooms(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
+
+  const updateDeployItem = (cat: keyof F14Deploy, id: string, field: keyof F14DeployItem, value: any) =>
+    setDeploy(prev => ({ ...prev, [cat]: prev[cat].map(it => it.id === id ? { ...it, [field]: value } : it) }));
 
   const setRoomImages = (id: string, next: TitledFile[]) => {
     const nextRooms = rooms.map(r => r.id === id ? { ...r, images: next } : r);
@@ -1866,6 +1881,38 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
           </div>
         </Card>
       ))}
+
+      {(['furniture', 'appliances', 'materials'] as const).some(c => deploy[c].length > 0) && (
+        <Card title="حصر التنفيذ الميداني (التركيب/النشر)" icon={ClipboardList}>
+          <p className="text-xs text-fg-muted mb-2">حدد البنود التي تم تسليمها وتركيبها/نشرها في الموقع، وكمياتها وأي ملاحظة.</p>
+          <div className="space-y-3">
+            {([['furniture', 'الأثاث'], ['appliances', 'الأجهزة'], ['materials', 'المواد']] as const).map(([cat, title]) => (
+              deploy[cat].length === 0 ? null : (
+                <div key={cat} className="space-y-2">
+                  <p className="text-xs font-bold text-fg-muted border-r-2 border-[#43bba1] pr-2">{title}</p>
+                  {deploy[cat].map(it => (
+                    <div key={it.id} className="p-2.5 rounded-xl border border-subtle bg-surface-up space-y-2">
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="checkbox" checked={it.deployed} disabled={!canEdit} onChange={e => updateDeployItem(cat, it.id, 'deployed', e.target.checked)} className="w-4 h-4 accent-[#43bba1]" />
+                        <span className="flex-1 text-sm font-bold">{it.label || '—'}</span>
+                        <span className="text-xs text-fg-muted">الكمية: {it.qty || '—'}</span>
+                      </label>
+                      {it.deployed && (
+                        <div className="flex items-center gap-2 flex-wrap pr-6">
+                          {Number(it.qty || 0) > 1 && (
+                            <label className="text-xs text-fg-muted">المُنفَّذ <input type="number" min="0" max={Number(it.qty || 0)} value={it.deployedQty} disabled={!canEdit} onChange={e => updateDeployItem(cat, it.id, 'deployedQty', e.target.value)} className="w-16 mr-1 px-2 py-1 rounded border border-subtle bg-surface text-xs" /></label>
+                          )}
+                          <input placeholder="ملاحظة (اختياري)" value={it.note} disabled={!canEdit} onChange={e => updateDeployItem(cat, it.id, 'note', e.target.value)} className="flex-1 min-w-[50%] px-2 py-1 rounded border border-subtle bg-surface text-xs" />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Card title="نسبة الإنجاز التقديرية للمشروع" icon={Activity} accent="teal">
         <div className="flex items-center gap-2 mb-2">

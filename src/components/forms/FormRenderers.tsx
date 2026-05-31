@@ -2485,13 +2485,115 @@ export const F84Renderer: FormRenderer = ({ rec, user, api }) => {
    ────────────────────────────────────────────────────────────────── */
 
 // Placeholder renderers — full UI lands in later Phase-4 sub-phases (4E / 4I).
-export const F15_1Renderer: FormRenderer = ({ rec, user, api }) => (
-  <FormShell rec={rec} user={user} api={api} approvalSection={<></>}>
-    <Card title="طلب صرف مشتريات" icon={ShoppingCart}>
-      <p className="text-sm text-fg-muted">هذا النموذج قيد الإعداد وسيُفعَّل في مرحلة لاحقة.</p>
-    </Card>
-  </FormShell>
-);
+type ReceiptItem = { id: string; label: string; qty: string; price: string };
+
+export const F15_1Renderer: FormRenderer = ({ rec, user, api }) => {
+  const d = rec.data || {};
+  const awaits = formAwaitsUser(rec, user);
+  const atStage = rec.approvalIndex ?? 0;
+
+  const isStage0 = awaits && atStage === 0 && (!!user.isAdmin || user.role === 'SUPPORT_MANAGER');
+  const isStage1 = awaits && atStage === 1 && (!!user.isAdmin || user.role === 'ACCOUNTANT');
+  const isStage3 = awaits && atStage === 3 && (!!user.isAdmin || user.role === 'ACCOUNTANT');
+
+  const extractReceipt = (): ReceiptItem[] => {
+    const f34 = api.forms.find(f => f.code === 'F-34' && f.projectRefId === rec.projectRefId);
+    const items = (f34?.data?.f34_items as any) || {};
+    const out: ReceiptItem[] = [];
+    (['furniture', 'appliances', 'materials'] as const).forEach(cat => {
+      (items[cat]?.internal || []).forEach((it: any) => {
+        if (it.choice === 'طلب مشتريات') out.push({ id: it.id, label: it.label, qty: String(it.qty || ''), price: String(it.price || '') });
+      });
+    });
+    return out;
+  };
+
+  const [receipt, setReceipt] = useState<ReceiptItem[]>(() => {
+    const saved = d.f151_receipt as ReceiptItem[] | undefined;
+    return saved && saved.length ? saved : extractReceipt();
+  });
+  const [recommendation, setRecommendation] = useState<string>((d.f151_recommendation as string) || '');
+  const [invoiceFiles, setInvoiceFiles] = useState<TitledFile[]>((d.f151_invoiceFiles as TitledFile[]) || []);
+  const [accountantNotes, setAccountantNotes] = useState<string>((d.f151_accountantNotes as string) || '');
+  const [transferFiles, setTransferFiles] = useState<TitledFile[]>((d.f151_transferFiles as TitledFile[]) || []);
+  const [transferNotes, setTransferNotes] = useState<string>((d.f151_transferNotes as string) || '');
+
+  useEffect(() => {
+    if (!awaits) return;
+    const t = setTimeout(() => {
+      api.updateFormData(rec.id, {
+        f151_receipt: JSON.parse(JSON.stringify(receipt)),
+        f151_recommendation: recommendation,
+        f151_accountantNotes: accountantNotes,
+        f151_transferNotes: transferNotes,
+      });
+    }, 500);
+    return () => clearTimeout(t);
+  }, [receipt, recommendation, accountantNotes, transferNotes, awaits]);
+
+  const updateReceiptItem = (id: string, field: 'qty' | 'price', value: string) =>
+    setReceipt(prev => prev.map(it => it.id === id ? { ...it, [field]: value } : it));
+
+  const lineTotal = (it: ReceiptItem) => Number(it.price || 0) * Number(it.qty || 0);
+  const total = receipt.reduce((s, it) => s + lineTotal(it), 0);
+  const totalQty = receipt.reduce((s, it) => s + Number(it.qty || 0), 0);
+
+  const updateInvoiceFiles = (next: TitledFile[]) => { setInvoiceFiles(next); api.updateFormData(rec.id, { f151_invoiceFiles: next }); };
+  const updateTransferFiles = (next: TitledFile[]) => { setTransferFiles(next); api.updateFormData(rec.id, { f151_transferFiles: next }); };
+
+  const stageLabel = atStage === 0 ? 'مراجعة واعتماد الطلب' : atStage === 1 ? 'اعتماد ورفع الفاتورة' : atStage === 2 ? 'اعتماد المدير التنفيذي' : 'تأكيد التحويل وإغلاق الصرف';
+  const showTransferCard = atStage >= 3 || rec.status === 'approved' || rec.status === 'completed';
+
+  return (
+    <FormShell rec={rec} user={user} api={api} approveLabel={stageLabel}>
+      <Card title="إيصال طلب صرف المشتريات" icon={ShoppingCart} accent="purple">
+        <p className="text-xs text-fg-muted mb-3">بنود التوريد الداخلي المطلوب شراؤها، مستخرجة من حصر التوريد (F-34). يمكن لمدير الخدمات المساندة مراجعة الأسعار والكميات قبل الاعتماد.</p>
+        {receipt.length === 0 ? (
+          <p className="text-xs text-fg-faint">لا توجد بنود مشتريات.</p>
+        ) : (
+          <div className="space-y-2">
+            {receipt.map(it => (
+              <div key={it.id} className="p-2.5 rounded-xl border border-subtle bg-surface-up flex items-center gap-2 flex-wrap">
+                <span className="flex-1 min-w-[35%] text-sm font-bold">{it.label || '—'}</span>
+                {isStage0 ? (
+                  <>
+                    <label className="text-xs text-fg-muted">الكمية <input type="number" min="0" value={it.qty} onChange={e => updateReceiptItem(it.id, 'qty', e.target.value)} className="w-16 mr-1 px-2 py-1 rounded border border-subtle bg-surface text-xs" /></label>
+                    <label className="text-xs text-fg-muted">السعر <input type="number" min="0" value={it.price} onChange={e => updateReceiptItem(it.id, 'price', e.target.value)} className="w-20 mr-1 px-2 py-1 rounded border border-subtle bg-surface text-xs" /></label>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-xs text-fg-muted">الكمية: {it.qty || '—'}</span>
+                    <span className="text-xs text-fg-muted">السعر: {Number(it.price || 0).toLocaleString()}</span>
+                  </>
+                )}
+                <span className="text-xs font-bold text-[#4A1F66] dark:text-purple-300">= {lineTotal(it).toLocaleString()} ر.س</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between pt-2 mt-1 border-t border-subtle">
+              <span className="text-sm font-bold">الإجمالي (إجمالي الكمية: {totalQty})</span>
+              <span className="text-lg font-extrabold text-[#4A1F66] dark:text-purple-300 flex items-center gap-1">{total.toLocaleString()} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>
+            </div>
+          </div>
+        )}
+        <TextArea className="mt-3" label="توصية مدير الخدمات المساندة (اختياري)" rows={2} value={recommendation} onChange={e => setRecommendation(e.target.value)} readOnly={!isStage0} />
+      </Card>
+
+      <Card title="مرفقات الفاتورة" icon={FileText}>
+        <p className="text-xs text-fg-muted mb-2">يرفع المحاسب الفواتير والمستندات المطلوبة.</p>
+        <TitledFileUploader files={invoiceFiles} onChange={updateInvoiceFiles} pathPrefix="f151-invoices" disabled={!isStage1} />
+        <TextArea className="mt-3" label="ملاحظات المحاسب (اختياري)" rows={2} value={accountantNotes} onChange={e => setAccountantNotes(e.target.value)} readOnly={!isStage1} />
+      </Card>
+
+      {showTransferCard && (
+        <Card title="إثبات التحويل البنكي" icon={CheckCircle2} accent="teal">
+          <p className="text-xs text-fg-muted mb-2">بعد اعتماد المدير التنفيذي، يُنفّذ المحاسب التحويل ويرفع إثباته هنا.</p>
+          <TitledFileUploader files={transferFiles} onChange={updateTransferFiles} pathPrefix="f151-transfers" disabled={!isStage3} />
+          <TextArea className="mt-3" label="ملاحظات التحويل (اختياري)" rows={2} value={transferNotes} onChange={e => setTransferNotes(e.target.value)} readOnly={!isStage3} />
+        </Card>
+      )}
+    </FormShell>
+  );
+};
 export const F15_2Renderer: FormRenderer = ({ rec, user, api }) => (
   <FormShell rec={rec} user={user} api={api} approvalSection={<></>}>
     <Card title="طلب صرف تعميد المقاول" icon={DollarSign}>

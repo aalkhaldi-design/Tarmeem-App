@@ -111,6 +111,7 @@ export interface FormsApi {
   updateFormData: (formId: string, dataPatch: Record<string, any>) => Promise<void>;
   /** يحوّل نموذجاً من مسودة إلى نشِط (pending) مع دمج بيانات اختيارية — لتفعيل نموذج من زر داخل نموذج آخر */
   activateForm: (formId: string, dataPatch?: Record<string, any>) => Promise<void>;
+  reviseForm: (formId: string, dataPatch?: Record<string, any>) => Promise<void>;
   attachFiles: (formId: string, files: FormRecord['files']) => Promise<void>;
 }
 

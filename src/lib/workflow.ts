@@ -221,19 +221,7 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
       });
     }
 
-    // إنشاء زيارة إشراف تالية عندما يكون التنفيذ جارياً
-    if (overall < 100) {
-      const f08 = ctx.forms.find(f => f.code === 'F-08' && f.projectRefId === projectRefId);
-      const f08works = ((f08?.data as { works?: Array<{ id: string; name: string }> })?.works || [])
-        .map(w => ({ id: w.id, name: w.name }));
-      const currentVisit = Number((ctx.approvedRecord.data as { visitNumber?: number })?.visitNumber || 1);
-      const nextVisit = currentVisit + 1;
-      createForms.push({
-        code: 'F-14',
-        data: { f08_works: f08works, visitNumber: nextVisit, previousVisitProgress: overall },
-        title: `تقرير الإشراف — الزيارة ${nextVisit}`,
-      });
-    }
+    // (التقارير الدورية أصبحت بزرٍّ يدوي بيد رئيس الإشراف داخل F-14 — لا إنشاء تلقائي هنا)
 
     return {
       projectPatch: { progressPct: Math.max(60, Math.min(99, overall)) },

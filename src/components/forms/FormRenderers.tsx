@@ -1823,6 +1823,7 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
   const [busy, setBusy] = useState(false);
   const version = Number((d.f14_version as number) || 1);
   const history = ((d.f14_history as any[]) || []);
+  const prev = (d.f14_prev as { rooms?: Record<string, string>; overallPct?: string } | undefined);
   const [showHistory, setShowHistory] = useState(false);
   const [openVer, setOpenVer] = useState<number | null>(null);
   const isSupervisionLead = !!user.isAdmin || user.role === 'HEAD_SUPERVISION';
@@ -1837,7 +1838,7 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
   }, [d.f14_version]);
 
   const persist = (nextRooms: F14Room[], nextDeploy?: F14Deploy) =>
-    api.updateFormData(rec.id, { f14_rooms: JSON.parse(JSON.stringify(nextRooms)), f14_deploy: JSON.parse(JSON.stringify(nextDeploy || deploy)), f14_overallPct: overallPct, f14_recommendation: recommendation });
+    api.updateFormData(rec.id, { f14_rooms: JSON.parse(JSON.stringify(nextRooms)), f14_deploy: JSON.parse(JSON.stringify(nextDeploy || deploy)), f14_overallPct: overallPct, f14_recommendation: recommendation, overallProgress: Number(overallPct || 0) });
 
   const updateRoom = (id: string, field: keyof F14Room, value: any) =>
     setRooms(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
@@ -1860,7 +1861,14 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
   const submit = async () => {
     if (busy) return;
     setBusy(true);
-    try { await persist(rooms); await api.approveForm(rec.id, user, ''); }
+    try {
+      // LOAD-BEARING: pass overallProgress (top-level, per RENDERER_CONTRACT) so the F-14
+      // TRIGGER_MAP fires the ≥60/90/100 payments + F-07 handover + F-23 auto-create.
+      // Without it the trigger reads undefined → 0 and nothing downstream ever activates.
+      const overallProgress = Number(overallPct || 0);
+      await persist(rooms);
+      await api.approveForm(rec.id, user, '', { overallProgress });
+    }
     finally { setBusy(false); }
   };
 
@@ -1936,6 +1944,9 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
       ) : rooms.map(room => (
         <Card key={room.id} title={room.name} icon={HomeIcon}>
           <div className="space-y-3">
+            {prev?.rooms?.[room.id] != null && prev.rooms[room.id] !== '' && (
+              <p className="text-[10px] text-fg-faint">التقرير السابق: {prev.rooms[room.id]}%</p>
+            )}
             <div className="flex items-center gap-2">
               <label className="text-xs font-bold text-fg-muted whitespace-nowrap">نسبة الإنجاز %</label>
               <input type="number" min="0" max="100" value={room.pct} disabled={!canEdit}
@@ -1987,6 +1998,9 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
       )}
 
       <Card title="نسبة الإنجاز التقديرية للمشروع" icon={Activity} accent="teal">
+        {prev?.overallPct != null && prev.overallPct !== '' && (
+          <p className="text-[10px] text-fg-faint mb-1.5">التقرير السابق: {prev.overallPct}%</p>
+        )}
         <div className="flex items-center gap-2 mb-2">
           <input type="number" min="0" max="100" value={overallPct} disabled={!canEdit}
             onChange={e => setOverallPct(e.target.value)}

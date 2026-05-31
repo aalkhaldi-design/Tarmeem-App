@@ -449,7 +449,7 @@ const FormAccordionItem: React.FC<{
               التالي: {roleName(rec.approvalChain[rec.approvalIndex])}
             </p>
           )}
-          {rec.status === 'draft' && (
+          {rec.status === 'draft' && rec.code !== 'F-19' && (
             <div className="text-[11px] text-gray-500 dark:text-slate-400 mt-0.5 flex items-start gap-1.5">
               <Lock className="w-3 h-3 mt-0.5 shrink-0" />
               <span>
@@ -466,7 +466,7 @@ const FormAccordionItem: React.FC<{
       </button>
       {open && (
         <div className="border-t border-gray-200 dark:border-slate-700 p-3 bg-gray-50/50 dark:bg-slate-900/40">
-          {rec.status === 'draft' && (
+          {rec.status === 'draft' && rec.code !== 'F-19' && (
             <div className="mb-3 p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 text-xs text-purple-900 dark:text-purple-200 leading-relaxed">
               🔒 <strong>هذا النموذج مقفل حالياً.</strong> سيُفتح للتعبئة بواسطة <strong>{roleName(rec.approvalChain[0])}</strong> فور اعتماد النموذج السابق في سلسلة المشروع. يمكنك مطالعة بنيته أدناه للاطلاع.
             </div>

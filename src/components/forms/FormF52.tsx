@@ -7,7 +7,7 @@
  */
 
 import React, { useState } from 'react';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { uploadFileToDrive } from './TitledFileUploader';
 import {
   Camera, FileText, Link2, CalendarDays, ClipboardList, CheckCircle2, Upload,
 } from 'lucide-react';
@@ -16,7 +16,6 @@ import { FormRenderer, FormCreator, formIsEditableByUser } from '../Forms';
 import type { FormRecord, FormsApi } from '../Forms';
 import type { UserProfile } from '../Auth';
 import { FormShell } from './FormShell';
-import { storage } from '../../lib/firebase';
 
 /* ─── Domain type ────────────────────────────────────────────────── */
 
@@ -68,11 +67,8 @@ const CommsDeliverySection: React.FC<{
     try {
       const uploaded: FileEntry[] = [];
       for (const file of Array.from(fileList)) {
-        const uuid = crypto.randomUUID();
-        const path = `projects/${rec.projectRefId}/forms/${rec.id}/${uuid}-${file.name}`;
-        await uploadBytes(ref(storage, path), file);
-        const url = await getDownloadURL(ref(storage, path));
-        uploaded.push({ name: file.name, url, size: file.size, uploadedAt: new Date().toISOString() });
+        const up = await uploadFileToDrive(file);
+        uploaded.push({ name: file.name, url: up.url, size: up.size, uploadedAt: new Date().toISOString() });
       }
       await api.attachFiles(rec.id, uploaded);
       setLocalFiles(prev => [...prev, ...uploaded]);
@@ -288,11 +284,8 @@ export const F52Renderer: FormRenderer = ({ rec, user, api }) => {
     try {
       const uploaded: FileEntry[] = [];
       for (const file of Array.from(fileList)) {
-        const uuid = crypto.randomUUID();
-        const path = `projects/${rec.projectRefId}/forms/${rec.id}/${uuid}-${file.name}`;
-        await uploadBytes(ref(storage, path), file);
-        const url = await getDownloadURL(ref(storage, path));
-        uploaded.push({ name: file.name, url, size: file.size, uploadedAt: new Date().toISOString() });
+        const up = await uploadFileToDrive(file);
+        uploaded.push({ name: file.name, url: up.url, size: up.size, uploadedAt: new Date().toISOString() });
       }
       await api.attachFiles(rec.id, uploaded);
       setLocalFiles(prev => [...prev, ...uploaded]);

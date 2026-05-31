@@ -212,12 +212,19 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
     if (overall >= 100 && !existingF15.some(f => (f.data as { paymentIndex?: number })?.paymentIndex === 4))
       createForms.push({ code: 'F-15', data: { paymentIndex: 4 }, title: 'طلب صرف الدفعة الأخيرة (10%)' });
 
-    // تغيير النطاق → إنشاء F-23
+    // تغيير النطاق → إنشاء F-23 (يحمل قائمتي الإضافة/الحذف من منتقي F-14)
     if (ctx.dataPatch?.requestScopeChange || (ctx.approvedRecord.data as { requestScopeChange?: boolean })?.requestScopeChange) {
+      const sd = (ctx.dataPatch ?? {}) as { f23_add?: unknown; f23_remove?: unknown; f23_note?: unknown };
+      const rd = (ctx.approvedRecord.data ?? {}) as { f23_add?: unknown; f23_remove?: unknown; f23_note?: unknown };
       createForms.push({
         code: 'F-23',
-        data: { triggeredByF14: ctx.approvedRecord.id },
-        title: 'اعتماد بنود أعمال إضافية (مولّد آلياً)',
+        data: {
+          triggeredByF14: ctx.approvedRecord.id,
+          f23_add: sd.f23_add ?? rd.f23_add ?? [],
+          f23_remove: sd.f23_remove ?? rd.f23_remove ?? [],
+          f23_note: sd.f23_note ?? rd.f23_note ?? '',
+        },
+        title: 'تحديث بنود الأعمال (مولّد آلياً)',
       });
     }
 

@@ -33,6 +33,32 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
+/** Reusable Drive upload (compress → base64 → Netlify function). Returns the view URL + Drive id. */
+export async function uploadFileToDrive(file: File): Promise<{ url: string; viewUrl: string; driveId: string; size: number }> {
+  const blob = await compressImage(file);
+  if (blob.size > MAX_UPLOAD_BYTES) throw new Error(`الملف "${file.name}" كبير جداً (الحد ٤ ميجابايت بعد الضغط).`);
+  const dataBase64 = await blobToBase64(blob);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 90000);
+  let res: Response;
+  try {
+    res = await fetch('/.netlify/functions/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName: file.name, mimeType: file.type || 'application/octet-stream', dataBase64 }),
+      signal: controller.signal,
+    });
+  } finally { clearTimeout(timer); }
+  if (!res.ok) {
+    let msg = 'فشل رفع الملف';
+    try { const j = await res.json(); if (j && j.error) msg = j.error; } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  const j = await res.json();
+  const viewUrl = `/.netlify/functions/file?id=${encodeURIComponent(j.driveId)}`;
+  return { url: viewUrl, viewUrl, driveId: j.driveId, size: blob.size };
+}
+
 export const TitledFileUploader: React.FC<{
   files: TitledFile[];
   onChange: (files: TitledFile[]) => void;

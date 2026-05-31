@@ -380,7 +380,8 @@ function App() {
       (rec.code === 'F-14' && (user.isAdmin || user.department === 'PROJECTS')) ||
       (rec.code === 'F-22' && (user.isAdmin || user.department === 'RESEARCH')) ||
       (rec.code === 'F-33' && (user.isAdmin || user.department === 'PROJECTS')) ||
-      (rec.code === 'F-33.1' && (user.isAdmin || user.role === 'PROJECTS_MANAGER' || user.department === 'FINANCE'))
+      (rec.code === 'F-33.1' && (user.isAdmin || user.role === 'PROJECTS_MANAGER' || user.department === 'FINANCE')) ||
+      (rec.code === 'F-23' && (user.isAdmin || user.department === 'PROJECTS' || user.department === 'SUPPORT'))
     );
     if (!isCollabSubmit) {
       if (expected !== user.role && !user.isAdmin) return;

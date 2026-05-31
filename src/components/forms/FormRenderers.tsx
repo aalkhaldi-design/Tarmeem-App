@@ -1828,17 +1828,48 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
   const [openVer, setOpenVer] = useState<number | null>(null);
   const isSupervisionLead = !!user.isAdmin || user.role === 'HEAD_SUPERVISION';
 
+  // ── طلب تحديث بنود الأعمال (نطاق): منتقٍ يولد F-23 عند الاعتماد ──
+  const f21Sec = (api.forms.find(f => f.code === 'F-21' && f.projectRefId === rec.projectRefId)?.data?.f21_sections as any) || {};
+  const f21Cat = (k: 'furniture' | 'appliances' | 'materials') =>
+    (((f21Sec?.[k]?.rows as any[]) || [])).map((r: any) => ({ id: String(r.id), label: r.label || 'بند', qty: String(r.qty || '') }));
+  type ScopeAddItem = { id: string; label: string; cat: 'furniture' | 'appliances' | 'materials'; addQty: string; custom?: boolean };
+  type ScopeRemoveItem = { id: string; label: string; cat: 'furniture' | 'appliances' | 'materials'; currentQty: string; cancelQty: string };
+  const SCOPE_SECTIONS: { key: 'furniture' | 'appliances' | 'materials'; title: string }[] = [
+    { key: 'furniture', title: 'الأثاث' }, { key: 'appliances', title: 'الأجهزة' }, { key: 'materials', title: 'المواد' },
+  ];
+  const [scopeOpen, setScopeOpen] = useState<boolean>(!!d.requestScopeChange);
+  const [scopeAdd, setScopeAdd] = useState<ScopeAddItem[]>((d.f23_add as ScopeAddItem[]) || []);
+  const [scopeRemove, setScopeRemove] = useState<ScopeRemoveItem[]>((d.f23_remove as ScopeRemoveItem[]) || []);
+  const [scopeNote, setScopeNote] = useState<string>((d.f23_note as string) || '');
+  const isAdded = (id: string) => scopeAdd.some(a => a.id === id);
+  const toggleAdd = (cat: 'furniture' | 'appliances' | 'materials', row: { id: string; label: string }) =>
+    setScopeAdd(p => p.some(a => a.id === row.id) ? p.filter(a => a.id !== row.id) : [...p, { id: row.id, label: row.label, cat, addQty: '1' }]);
+  const setAddQty = (id: string, q: string) => setScopeAdd(p => p.map(a => a.id === id ? { ...a, addQty: q } : a));
+  const addCustom = (cat: 'furniture' | 'appliances' | 'materials') =>
+    setScopeAdd(p => [...p, { id: `cust_${cat}_${Date.now()}`, label: '', cat, addQty: '1', custom: true }]);
+  const setCustomLabel = (id: string, label: string) => setScopeAdd(p => p.map(a => a.id === id ? { ...a, label } : a));
+  const dropAdd = (id: string) => setScopeAdd(p => p.filter(a => a.id !== id));
+  const isRemoved = (id: string) => scopeRemove.some(r => r.id === id);
+  const toggleRemove = (cat: 'furniture' | 'appliances' | 'materials', row: { id: string; label: string; qty: string }) =>
+    setScopeRemove(p => p.some(r => r.id === row.id) ? p.filter(r => r.id !== row.id) : [...p, { id: row.id, label: row.label, cat, currentQty: row.qty, cancelQty: row.qty }]);
+  const setCancelQty = (id: string, q: string) => setScopeRemove(p => p.map(r => r.id === id ? { ...r, cancelQty: q } : r));
+  const scopeActive = scopeOpen && (scopeAdd.length > 0 || scopeRemove.length > 0);
+
   // When a new report is opened (version bumps via reviseForm), reload local state from the fresh record.
   useEffect(() => {
     setRooms((d.f14_rooms as F14Room[]) || extractRooms());
     setDeploy((d.f14_deploy as F14Deploy) || extractDeploy());
     setOverallPct((d.f14_overallPct as string) || '');
     setRecommendation((d.f14_recommendation as string) || '');
+    setScopeAdd((d.f23_add as ScopeAddItem[]) || []);
+    setScopeRemove((d.f23_remove as ScopeRemoveItem[]) || []);
+    setScopeNote((d.f23_note as string) || '');
+    setScopeOpen(!!d.requestScopeChange);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d.f14_version]);
 
   const persist = (nextRooms: F14Room[], nextDeploy?: F14Deploy) =>
-    api.updateFormData(rec.id, { f14_rooms: JSON.parse(JSON.stringify(nextRooms)), f14_deploy: JSON.parse(JSON.stringify(nextDeploy || deploy)), f14_overallPct: overallPct, f14_recommendation: recommendation, overallProgress: Number(overallPct || 0) });
+    api.updateFormData(rec.id, { f14_rooms: JSON.parse(JSON.stringify(nextRooms)), f14_deploy: JSON.parse(JSON.stringify(nextDeploy || deploy)), f14_overallPct: overallPct, f14_recommendation: recommendation, overallProgress: Number(overallPct || 0), requestScopeChange: scopeOpen && (scopeAdd.length > 0 || scopeRemove.length > 0), f23_add: JSON.parse(JSON.stringify(scopeAdd)), f23_remove: JSON.parse(JSON.stringify(scopeRemove)), f23_note: scopeNote });
 
   const updateRoom = (id: string, field: keyof F14Room, value: any) =>
     setRooms(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
@@ -1867,7 +1898,10 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
       // Without it the trigger reads undefined → 0 and nothing downstream ever activates.
       const overallProgress = Number(overallPct || 0);
       await persist(rooms);
-      await api.approveForm(rec.id, user, '', { overallProgress });
+      await api.approveForm(rec.id, user, '', {
+        overallProgress,
+        ...(scopeActive ? { requestScopeChange: true, f23_add: scopeAdd, f23_remove: scopeRemove, f23_note: scopeNote } : {}),
+      });
     }
     finally { setBusy(false); }
   };
@@ -1887,6 +1921,10 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
         f14_deploy: deploy,
         f14_overallPct: '',
         f14_recommendation: '',
+        requestScopeChange: false,
+        f23_add: [],
+        f23_remove: [],
+        f23_note: '',
       })));
     } finally { setBusy(false); }
   };
@@ -2011,6 +2049,75 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
         <TextArea className="mt-2" label="توصية المهندس المشرف (اختياري)" rows={2} value={recommendation} readOnly={!canEdit}
           onChange={e => setRecommendation(e.target.value)} />
       </Card>
+
+      {(canEdit || scopeActive || scopeOpen) && (
+        <Card title="طلب تحديث بنود الأعمال (اختياري)" icon={Edit3} accent="purple">
+          <button type="button" disabled={!canEdit} onClick={() => setScopeOpen(o => !o)}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg bg-surface-up border border-subtle text-fg disabled:opacity-50">
+            {scopeOpen ? 'إخفاء' : 'فتح طلب تحديث البنود'}
+          </button>
+          {scopeOpen && (
+            <div className="mt-3 space-y-4">
+              <div>
+                <p className="text-sm font-bold text-fg mb-2">إضافة بنود</p>
+                {SCOPE_SECTIONS.map(sec => (
+                  <div key={`add-${sec.key}`} className="mb-3">
+                    <p className="text-xs font-bold text-fg-muted mb-1">{sec.title}</p>
+                    <div className="space-y-1">
+                      {f21Cat(sec.key).length === 0 && <p className="text-[11px] text-fg-faint">لا توجد بنود في المخزون.</p>}
+                      {f21Cat(sec.key).map(row => (
+                        <div key={row.id} className="flex items-center gap-2 text-xs">
+                          <input type="checkbox" disabled={!canEdit} checked={isAdded(row.id)} onChange={() => toggleAdd(sec.key, row)} />
+                          <span className="flex-1 text-fg">{row.label}</span>
+                          {isAdded(row.id) && (
+                            <input type="number" min="1" disabled={!canEdit} value={scopeAdd.find(a => a.id === row.id)?.addQty || ''} onChange={e => setAddQty(row.id, e.target.value)}
+                              className="w-16 px-2 py-1 rounded border border-subtle bg-surface text-xs" placeholder="كمية" />
+                          )}
+                        </div>
+                      ))}
+                      {scopeAdd.filter(a => a.custom && a.cat === sec.key).map(a => (
+                        <div key={a.id} className="flex items-center gap-2 text-xs">
+                          <input type="text" disabled={!canEdit} value={a.label} onChange={e => setCustomLabel(a.id, e.target.value)}
+                            className="flex-1 px-2 py-1 rounded border border-subtle bg-surface text-xs" placeholder="اسم البند" />
+                          <input type="number" min="1" disabled={!canEdit} value={a.addQty} onChange={e => setAddQty(a.id, e.target.value)}
+                            className="w-16 px-2 py-1 rounded border border-subtle bg-surface text-xs" placeholder="كمية" />
+                          <button type="button" disabled={!canEdit} onClick={() => dropAdd(a.id)} className="p-1 rounded bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </div>
+                      ))}
+                      {canEdit && (
+                        <button type="button" onClick={() => addCustom(sec.key)} className="inline-flex items-center gap-1 text-[11px] font-bold text-[#56B894]"><Plus className="w-3 h-3" /> إضافة بند آخر</button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <p className="text-sm font-bold text-fg mb-2">حذف بنود (يمكن إلغاء جزء من الكمية)</p>
+                {SCOPE_SECTIONS.map(sec => (
+                  <div key={`rem-${sec.key}`} className="mb-3">
+                    <p className="text-xs font-bold text-fg-muted mb-1">{sec.title}</p>
+                    <div className="space-y-1">
+                      {f21Cat(sec.key).length === 0 && <p className="text-[11px] text-fg-faint">لا توجد بنود.</p>}
+                      {f21Cat(sec.key).map(row => (
+                        <div key={row.id} className="flex items-center gap-2 text-xs">
+                          <input type="checkbox" disabled={!canEdit} checked={isRemoved(row.id)} onChange={() => toggleRemove(sec.key, row)} />
+                          <span className="flex-1 text-fg">{row.label} <span className="text-fg-faint">(الكمية: {row.qty || '0'})</span></span>
+                          {isRemoved(row.id) && (
+                            <input type="number" min="1" max={Number(row.qty || 0)} disabled={!canEdit} value={scopeRemove.find(r => r.id === row.id)?.cancelQty || ''} onChange={e => setCancelQty(row.id, e.target.value)}
+                              className="w-16 px-2 py-1 rounded border border-subtle bg-surface text-xs" placeholder="إلغاء" />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <TextArea label="ملاحظات تحديث البنود (اختياري)" rows={2} value={scopeNote} readOnly={!canEdit} onChange={e => setScopeNote(e.target.value)} />
+              {scopeActive && <p className="text-[11px] text-amber-600 dark:text-amber-300">سيتم توليد نموذج «تحديث بنود الأعمال» (F-23) عند اعتماد هذا التقرير.</p>}
+            </div>
+          )}
+        </Card>
+      )}
     </FormShell>
   );
 };

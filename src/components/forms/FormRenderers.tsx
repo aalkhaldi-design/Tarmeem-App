@@ -1782,26 +1782,102 @@ export const F14Creator: FormCreator = ({ user, api, context, onClose }) => {
   );
 };
 
+type F14Room = { id: string; name: string; pct: string; note: string; images: TitledFile[] };
+
 export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
-  const overall = Number(d.overallProgress ?? 0);
+  const f32 = api.forms.find(f => f.code === 'F-32' && f.projectRefId === rec.projectRefId);
+  const engineerId = (f32?.data?.engineerId as string) || '';
+  const helperIds = ((f32?.data?.helpers as string[]) || []);
+  const canEdit = rec.status === 'pending' && (
+    !!user.isAdmin || user.role === 'HEAD_SUPERVISION' || user.id === engineerId || helperIds.includes(user.id)
+  );
+
+  const extractRooms = (): F14Room[] => {
+    const f08 = api.forms.find(f => f.code === 'F-08' && f.projectRefId === rec.projectRefId);
+    const works = ((f08?.data?.works as any[]) || []);
+    return works.map((w: any) => ({ id: String(w.id), name: w.name || 'مساحة', pct: '', note: '', images: [] }));
+  };
+
+  const [rooms, setRooms] = useState<F14Room[]>(() => {
+    const saved = d.f14_rooms as F14Room[] | undefined;
+    return saved && saved.length ? saved : extractRooms();
+  });
+  const [overallPct, setOverallPct] = useState<string>((d.f14_overallPct as string) || '');
+  const [recommendation, setRecommendation] = useState<string>((d.f14_recommendation as string) || '');
+  const [savedFlag, setSavedFlag] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const persist = (nextRooms: F14Room[]) =>
+    api.updateFormData(rec.id, { f14_rooms: JSON.parse(JSON.stringify(nextRooms)), f14_overallPct: overallPct, f14_recommendation: recommendation });
+
+  const updateRoom = (id: string, field: keyof F14Room, value: any) =>
+    setRooms(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
+
+  const setRoomImages = (id: string, next: TitledFile[]) => {
+    const nextRooms = rooms.map(r => r.id === id ? { ...r, images: next } : r);
+    setRooms(nextRooms);
+    api.updateFormData(rec.id, { f14_rooms: JSON.parse(JSON.stringify(nextRooms)) });
+  };
+
+  const save = async () => {
+    setSavedFlag(false);
+    try { await persist(rooms); setSavedFlag(true); setTimeout(() => setSavedFlag(false), 2500); }
+    catch (e) { console.error('F-14 save failed:', e); alert('تعذّر الحفظ — حاول مجدداً'); }
+  };
+
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    try { await persist(rooms); await api.approveForm(rec.id, user, ''); }
+    finally { setBusy(false); }
+  };
+
   return (
-    <FormShell rec={rec} user={user} api={api}>
-      <Card title="ملخص التقرير" icon={Activity}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <ReadOnlyField label="تاريخ الزيارة" value={d.visitDate as string} />
-          <ReadOnlyField label="نسبة الإنجاز الكلية" value={`${overall}%`} />
-          <ReadOnlyField label="رقم الزيارة" value={String(d.visitNumber ?? '—')} />
-        </div>
-        <div className="mt-3"><ProgressBar value={overall} /></div>
-        <ReadOnlyField className="mt-3" label="ملاحظات" value={d.notes as string} />
-        {d.requestScopeChange && <Pill tone="amber" className="mt-2">تغيير نطاق — يستلزم F-23</Pill>}
+    <FormShell rec={rec} user={user} api={api} approvalSection={canEdit ? (
+      <div className="flex gap-2">
+        <button onClick={save} className="flex-1 py-2.5 rounded-lg border-2 border-[#4A1F66] text-[#4A1F66] dark:text-purple-300 font-bold text-sm">{savedFlag ? 'تم الحفظ ✓' : 'حفظ التقرير'}</button>
+        <button disabled={busy} onClick={submit} className="flex-1 py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">{busy ? 'جارٍ الإرسال…' : 'اعتماد التقرير'}</button>
+      </div>
+    ) : <></>}>
+      <Card title="تقرير الإشراف الميداني" icon={ClipboardList} accent="purple">
+        <p className="text-xs text-fg-muted leading-6">قيّم نسبة إنجاز كل مساحة، وأضف ملاحظاتك وصور الموقع. في الأسفل قدّر نسبة الإنجاز الكلية للمشروع.</p>
       </Card>
-      {(rec.files || []).length > 0 && (
-        <Card title="الصور" icon={Camera}>
-          <FileUploader files={rec.files || []} onAdd={() => {}} onRemove={() => {}} label="" />
+
+      {rooms.length === 0 ? (
+        <Card title="لا توجد مساحات" icon={HomeIcon}><p className="text-xs text-fg-faint">لم تُسجَّل مساحات في كراسة التشخيص (F-08).</p></Card>
+      ) : rooms.map(room => (
+        <Card key={room.id} title={room.name} icon={HomeIcon}>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-bold text-fg-muted whitespace-nowrap">نسبة الإنجاز %</label>
+              <input type="number" min="0" max="100" value={room.pct} disabled={!canEdit}
+                onChange={e => updateRoom(room.id, 'pct', e.target.value)}
+                className="w-20 px-2 py-1 rounded border border-subtle bg-surface text-xs" />
+              <div className="flex-1"><ProgressBar value={Number(room.pct || 0)} /></div>
+            </div>
+            <TextArea label="ملاحظات المساحة (اختياري)" rows={2} value={room.note} readOnly={!canEdit}
+              onChange={e => updateRoom(room.id, 'note', e.target.value)} />
+            <div>
+              <p className="text-xs font-bold text-fg-muted mb-1.5">صور المساحة (اختياري)</p>
+              <TitledFileUploader files={room.images || []} pathPrefix={`f14-${room.id}`} disabled={!canEdit}
+                onChange={next => setRoomImages(room.id, next)} />
+            </div>
+          </div>
         </Card>
-      )}
+      ))}
+
+      <Card title="نسبة الإنجاز التقديرية للمشروع" icon={Activity} accent="teal">
+        <div className="flex items-center gap-2 mb-2">
+          <input type="number" min="0" max="100" value={overallPct} disabled={!canEdit}
+            onChange={e => setOverallPct(e.target.value)}
+            className="w-24 px-2 py-1.5 rounded border border-subtle bg-surface text-sm font-bold" />
+          <span className="text-sm font-bold">%</span>
+          <div className="flex-1"><ProgressBar value={Number(overallPct || 0)} /></div>
+        </div>
+        <TextArea className="mt-2" label="توصية المهندس المشرف (اختياري)" rows={2} value={recommendation} readOnly={!canEdit}
+          onChange={e => setRecommendation(e.target.value)} />
+      </Card>
     </FormShell>
   );
 };

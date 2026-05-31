@@ -9,7 +9,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { MoreVertical, Pause, Play, Ban, XCircle, RotateCcw, Archive } from 'lucide-react';
+import { MoreVertical, Pause, Play, Ban, XCircle, RotateCcw, Archive, Trash2 } from 'lucide-react';
 import { businessDaysBetween } from '../lib/sla';
 import type { ProjectRecord, FormsContext } from './forms/FormRenderers';
 import type { UserProfile } from './Auth';
@@ -116,6 +116,24 @@ export const ProjectActionsMenu: React.FC<Props> = ({ project, user, context }) 
   const onArchive = () =>
     run('سيتم أرشفة المشروع. متابعة؟', () => ({ archived: true }) as Partial<ProjectRecord>);
 
+  const onDelete = async () => {
+    const typed = window.prompt(
+      `⚠️ حذف نهائي لا رجعة فيه — سيُمحى المشروع وجميع نماذجه نهائياً وكأنه لم يكن.\nاكتب رقم المشروع للتأكيد:\n${project.projectId}`,
+    );
+    if (typed === null) return;
+    if (typed.trim() !== project.projectId) { alert('رقم المشروع غير مطابق — أُلغي الحذف.'); return; }
+    if (!context.deleteProject) { alert('الحذف غير متاح في هذه النسخة.'); return; }
+    setBusy(true);
+    try {
+      const ok = await context.deleteProject(project.id);
+      if (!ok) { alert('تعذّر حذف المشروع. حاول مرة أخرى.'); return; }
+      setOpen(false);
+    } catch (e) {
+      console.error('deleteProject:', e);
+      alert('تعذّر حذف المشروع. حاول مرة أخرى.');
+    } finally { setBusy(false); }
+  };
+
   const items: { label: string; icon: React.ReactNode; onClick: () => void; tone: 'amber' | 'green' | 'red' | 'gray' }[] = [];
   if (!isTerminal && !isOnHold) items.push({ label: 'تعليق المشروع', icon: <Pause className="w-4 h-4" />, onClick: onHold, tone: 'amber' });
   if (isOnHold)                  items.push({ label: 'استئناف المشروع', icon: <Play className="w-4 h-4" />, onClick: onResume, tone: 'green' });
@@ -123,6 +141,7 @@ export const ProjectActionsMenu: React.FC<Props> = ({ project, user, context }) 
   if (!isTerminal)               items.push({ label: 'وضع كمرفوض', icon: <Ban className="w-4 h-4" />, onClick: onReject, tone: 'red' });
   if (isTerminal)                items.push({ label: 'إعادة فتح', icon: <RotateCcw className="w-4 h-4" />, onClick: onReopen, tone: 'gray' });
   if (isTerminal && !isArchived) items.push({ label: 'أرشفة', icon: <Archive className="w-4 h-4" />, onClick: onArchive, tone: 'gray' });
+  if (user.isAdmin)              items.push({ label: 'حذف نهائي', icon: <Trash2 className="w-4 h-4" />, onClick: onDelete, tone: 'red' });
 
   if (items.length === 0) return null;
 

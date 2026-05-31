@@ -5,7 +5,7 @@ import {
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
   collection, onSnapshot, doc, updateDoc, addDoc, runTransaction,
-  query, where, orderBy, limit, writeBatch, serverTimestamp, arrayUnion,
+  query, where, orderBy, limit, writeBatch, serverTimestamp, arrayUnion, getDocs, deleteDoc,
 } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
 import { getUserProfile, AuthScreen, type UserProfile } from './components/Auth';
@@ -232,6 +232,22 @@ function App() {
   const updateProject = useCallback(async (projectRefId: string, patch: Partial<ProjectRecord>) => {
     try { await updateDoc(doc(db, 'projects', projectRefId), { ...patch, updatedAt: new Date().toISOString() }); }
     catch (e) { console.error('updateProject:', e); }
+  }, []);
+
+  /** حذف نهائي (أدمن فقط): يمحو المشروع وكل نماذجه دفعةً واحدة — كأنه لم يكن. */
+  const deleteProject = useCallback(async (projectRefId: string): Promise<boolean> => {
+    try {
+      const snap = await getDocs(query(collection(db, 'forms'), where('projectRefId', '==', projectRefId)));
+      const ids = snap.docs.map(d => d.id);
+      // Firestore batch hard-limit is 500 ops — chunk to stay safe on large projects.
+      for (let i = 0; i < ids.length; i += 400) {
+        const batch = writeBatch(db);
+        for (const fid of ids.slice(i, i + 400)) batch.delete(doc(db, 'forms', fid));
+        await batch.commit();
+      }
+      await deleteDoc(doc(db, 'projects', projectRefId));
+      return true;
+    } catch (e) { console.error('deleteProject:', e); return false; }
   }, []);
 
 
@@ -507,10 +523,11 @@ function App() {
     generateProjectId,
     createProject,
     updateProject,
+    deleteProject,
     findProjectForm: (projectRefId, code) =>
       formsApi.forms.find(f => f.projectRefId === projectRefId && f.code === code) || null,
     userById: (id) => users.find(u => u.id === id),
-  }), [projects, generateProjectId, createProject, updateProject, formsApi.forms, users]);
+  }), [projects, generateProjectId, createProject, updateProject, deleteProject, formsApi.forms, users]);
 
   /* ────────── Users API ────────── */
   const approveUser = useCallback(async (userId: string, edits: any, approverId: string) => {

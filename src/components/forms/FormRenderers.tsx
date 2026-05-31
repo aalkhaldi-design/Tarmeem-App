@@ -44,6 +44,8 @@ export interface FormsContext {
   findProjectForm: (projectRefId: string | null | undefined, code: FormCode) => FormRecord | null;
   /** يحدّث وثيقة المشروع (عند التحويل، حالة، إلخ) */
   updateProject: (projectRefId: string, patch: Partial<ProjectRecord>) => Promise<void>;
+  /** حذف نهائي للمشروع وكل نماذجه (أدمن فقط) */
+  deleteProject?: (projectRefId: string) => Promise<boolean>;
   /** ينشئ مشروعاً جديداً (يستخدم في F-03.transfer) */
   createProject: (data: Partial<ProjectRecord>) => Promise<string | null>;
   /** الحصول على المستخدم */

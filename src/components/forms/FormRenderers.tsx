@@ -1586,15 +1586,143 @@ export const F19Creator: FormCreator = ({ user, api, context, onClose }) => {
 
 export const F19Renderer: FormRenderer = ({ rec, user, api }) => {
   const d = rec.data || {};
+  const isDraft = rec.status === 'draft';
+  const isPending = rec.status === 'pending';
+
+  const authorized = !!user.isAdmin || user.role === 'PROJECTS_MANAGER' || user.role === 'HEAD_SUPERVISION'
+    || user.role === 'SUPPORT_MANAGER' || user.department === 'FINANCE';
+
+  // Variant by who activated (set at activation time)
+  const actRole = (d.f19_activatorRole as string) || '';
+  const actDept = (d.f19_activatorDept as string) || '';
+  const variant: 'pm' | 'support' | 'finance' =
+    actRole === 'SUPPORT_MANAGER' ? 'support' : actDept === 'FINANCE' ? 'finance' : 'pm';
+  const REASONS: Record<'pm' | 'support' | 'finance', string[]> = {
+    pm: ['تأخر الخدمات المساندة', 'تفادياً لتعقيدات العمل الميداني', 'أخرى'],
+    support: ['عجز لوجستي', 'خطأ سجلات المخازن', 'سلاسل التوريد', 'تأخر المالية بالدفع', 'مصطفى نايم', 'أخرى'],
+    finance: ['تأخر الخدمات المساندة', 'تفضيل تكاليف المقاول', 'أخرى'],
+  };
+  const showTiming = variant === 'pm';
+
+  // Sources: F-34 (داخلي/داعم-شريك) + F-23 new works (only while F-23 is still active)
+  const cats = ['furniture', 'appliances', 'materials'] as const;
+  const catTitle: Record<string, string> = { furniture: 'الأثاث', appliances: 'الأجهزة', materials: 'المواد' };
+  const f34items = (api.forms.find(f => f.code === 'F-34' && f.projectRefId === rec.projectRefId)?.data?.f34_items as any) || {};
+  const internalItems = cats.flatMap(c => ((f34items[c]?.internal as any[]) || []).map((it: any) => ({ id: it.id, label: it.label, qty: String(it.qty || ''), cat: c })));
+  const partnerItems = cats.flatMap(c => ((f34items[c]?.partner as any[]) || []).map((it: any) => ({ id: it.id, label: it.label, qty: String(it.qty || ''), cat: c })));
+  const f23 = api.forms.find(f => f.code === 'F-23' && f.projectRefId === rec.projectRefId);
+  const f23Active = !!f23 && f23.status === 'pending';
+  const newWorks = f23Active ? (((f23?.data?.f23_add as any[]) || []).map((a: any) => ({ id: a.id, label: a.label, qty: String(a.addQty || ''), cat: a.cat }))) : [];
+
+  const [reason, setReason] = useState<string>((d.f19_reason as string) || '');
+  const [reasonOther, setReasonOther] = useState<string>((d.f19_reasonOther as string) || '');
+  const [recommendation, setRecommendation] = useState<string>((d.f19_recommendation as string) || '');
+  const [timing, setTiming] = useState<string>((d.f19_timing as string) || '');
+  const [deadline, setDeadline] = useState<string>((d.f19_deadline as string) || '');
+  const [selected, setSelected] = useState<string[]>((d.f19_selected as string[]) || []);
+  const [busy, setBusy] = useState(false);
+
+  const canEdit = isPending && authorized;
+  const toggle = (id: string) => setSelected(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+  const selectAll = (ids: string[], on: boolean) => setSelected(p => on ? Array.from(new Set([...p, ...ids])) : p.filter(x => !ids.includes(x)));
+  const allInternal = internalItems.map(i => i.id);
+  const allPartner = partnerItems.map(i => i.id);
+  const allNew = newWorks.map(i => i.id);
+  const isAllSel = (ids: string[]) => ids.length > 0 && ids.every(id => selected.includes(id));
+
+  const activate = async () => {
+    setBusy(true);
+    try { await api.activateForm(rec.id, { f19_activatorId: user.id, f19_activatorRole: user.role, f19_activatorDept: user.department || '' }); }
+    finally { setBusy(false); }
+  };
+  const save = async () => {
+    setBusy(true);
+    try { await api.updateFormData(rec.id, { f19_reason: reason, f19_reasonOther: reasonOther, f19_recommendation: recommendation, f19_timing: timing, f19_deadline: deadline, f19_selected: JSON.parse(JSON.stringify(selected)) }); }
+    finally { setBusy(false); }
+  };
+
+  if (isDraft) {
+    return (
+      <FormShell rec={rec} user={user} api={api} approvalSection={<div />}>
+        <Card title="تعميد المقاول بالتوريد" icon={Truck} accent="purple">
+          <p className="text-xs text-fg-muted leading-6 mb-3">يُفعَّل عند الحاجة لتعميد المقاول بتوريد بعض/كل المواد بدلاً من الخدمات المساندة. التفعيل متاح لـ: مدير المشاريع، رئيس الإشراف، مدير الخدمات المساندة، أو الشؤون المالية.</p>
+          {authorized
+            ? <button disabled={busy} onClick={activate} className="px-4 py-2 rounded-lg bg-[#4A1F66] text-white text-sm font-bold disabled:opacity-50">تفعيل تعميد المقاول</button>
+            : <p className="text-[11px] text-fg-faint">ليست لديك صلاحية تفعيل هذا النموذج.</p>}
+        </Card>
+      </FormShell>
+    );
+  }
+
   return (
-    <FormShell rec={rec} user={user} api={api}>
-      <Card title="تفاصيل التعميد" icon={Truck}>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <ReadOnlyField label="المقاول" value={d.contractor} />
-          <ReadOnlyField label="القيمة" value={<span className="flex items-center gap-1">{Number(d.amount || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
-          <ReadOnlyField label="آلية التوريد" value={d.supplyMethod} />
+    <FormShell rec={rec} user={user} api={api} approvalSection={
+      canEdit ? (
+        <div className="space-y-2">
+          <button disabled={busy} onClick={save} className="w-full py-2.5 rounded-lg bg-surface-up border border-subtle text-fg font-bold text-sm disabled:opacity-50">حفظ المدخلات</button>
+          <p className="text-[11px] text-fg-faint text-center">التنفيذ والتعميد على النماذج المرتبطة وطلب الصرف تُضاف في المراحل التالية.</p>
         </div>
-        <ReadOnlyField className="mt-3" label="تفاصيل المواد" value={d.items} />
+      ) : <div />
+    }>
+      {f23Active && (
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg p-3 text-[11px] text-amber-900 dark:text-amber-200 leading-6">
+          معاملة تحديث بنود الأعمال قيد العمل ولا تُعتبر مدخلاتها الحالية نهائية. إذا كانت مواد بنود الأعمال الجديدة داخلة ضمن تعميد المقاول فيُنصح بانتظار إتمام تحديث بنود الأعمال أو التأكد من الموظفين المعنيين لتفادي الأخطاء.
+        </div>
+      )}
+
+      <Card title="بيانات التعميد" icon={Truck} accent="purple">
+        <p className="text-xs text-fg-muted mb-2">المُفعِّل: {actRole || actDept || '—'}</p>
+        <p className="text-xs font-bold text-fg-muted mb-1">سبب تعميد المقاول</p>
+        <div className="space-y-1 mb-2">
+          {REASONS[variant].map(r => (
+            <label key={r} className="flex items-center gap-2 text-xs text-fg">
+              <input type="radio" name="f19reason" disabled={!canEdit} checked={reason === r} onChange={() => setReason(r)} /> {r}
+            </label>
+          ))}
+        </div>
+        {reason === 'أخرى' && (
+          <Input label="حدد السبب" value={reasonOther} onChange={e => setReasonOther(e.target.value)} readOnly={!canEdit} />
+        )}
+        {variant === 'pm' && (
+          <TextArea className="mt-2" label="توصية (اختياري)" rows={2} value={recommendation} readOnly={!canEdit} onChange={e => setRecommendation(e.target.value)} />
+        )}
+      </Card>
+
+      {showTiming && (
+        <Card title="آلية التعميد" icon={Calendar}>
+          <div className="space-y-2 text-xs text-fg">
+            <label className="flex items-center gap-2"><input type="radio" name="f19timing" disabled={!canEdit} checked={timing === 'deadline'} onChange={() => setTiming('deadline')} /> منح مهلة قبل التعميد</label>
+            {timing === 'deadline' && (
+              <input type="date" disabled={!canEdit} value={deadline} onChange={e => setDeadline(e.target.value)} className="px-2 py-1 rounded border border-subtle bg-surface text-xs" />
+            )}
+            <label className="flex items-center gap-2"><input type="radio" name="f19timing" disabled={!canEdit} checked={timing === 'immediate'} onChange={() => setTiming('immediate')} /> تعميد المقاول فوراً</label>
+          </div>
+        </Card>
+      )}
+
+      <Card title="البنود المُعمَّدة للمقاول" icon={ClipboardList} accent="teal">
+        <div className="flex flex-wrap gap-3 mb-3 text-[11px] text-fg">
+          <label className="flex items-center gap-1"><input type="checkbox" disabled={!canEdit} checked={isAllSel(allInternal)} onChange={e => selectAll(allInternal, e.target.checked)} /> جميع التوريد الداخلي</label>
+          <label className="flex items-center gap-1"><input type="checkbox" disabled={!canEdit} checked={isAllSel(allPartner)} onChange={e => selectAll(allPartner, e.target.checked)} /> جميع التوريد من داعم/شريك</label>
+          {f23Active && <label className="flex items-center gap-1"><input type="checkbox" disabled={!canEdit} checked={isAllSel(allNew)} onChange={e => selectAll(allNew, e.target.checked)} /> جميع بنود الأعمال الجديدة</label>}
+        </div>
+        {[{ title: 'التوريد الداخلي', items: internalItems }, { title: 'التوريد من داعم/شريك', items: partnerItems }, ...(f23Active ? [{ title: 'بنود الأعمال الجديدة (F-23)', items: newWorks }] : [])].map(group => (
+          group.items.length > 0 ? (
+            <div key={group.title} className="mb-3">
+              <p className="text-xs font-bold text-fg-muted mb-1">{group.title}</p>
+              <div className="space-y-1">
+                {group.items.map((it: any) => (
+                  <label key={it.id} className="flex items-center gap-2 text-xs text-fg">
+                    <input type="checkbox" disabled={!canEdit} checked={selected.includes(it.id)} onChange={() => toggle(it.id)} />
+                    <span className="flex-1">[{catTitle[it.cat] || it.cat}] {it.label} <span className="text-fg-faint">(الكمية: {it.qty})</span></span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null
+        ))}
+        {internalItems.length === 0 && partnerItems.length === 0 && newWorks.length === 0 && (
+          <p className="text-xs text-fg-faint">لا توجد بنود قابلة للتعميد في حصر التوريد (F-34).</p>
+        )}
       </Card>
     </FormShell>
   );

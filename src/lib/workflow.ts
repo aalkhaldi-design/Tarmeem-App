@@ -179,7 +179,6 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
   'F-33': (ctx) => {
     const projectRefId = ctx.approvedRecord.projectRefId!;
     const f14 = ctx.forms.find(f => f.code === 'F-14' && f.projectRefId === projectRefId);
-    const f19 = ctx.forms.find(f => f.code === 'F-19' && f.projectRefId === projectRefId);
     const f08 = ctx.forms.find(f => f.code === 'F-08' && f.projectRefId === projectRefId);
 
     const f08works = ((f08?.data as { works?: Array<{ id: string; name: string }> })?.works || [])
@@ -189,7 +188,7 @@ export const TRIGGER_MAP: Partial<Record<FormCode, (ctx: CascadeContext) => Casc
       projectPatch: { phase: 'EXECUTION' as ProjectPhase, progressPct: 60 },
       activate: [
         ...(f14 ? [{ formId: f14.id, data: { f08_works: f08works, visitNumber: 1 } }] : []),
-        ...(f19 ? [{ formId: f19.id }] : []),
+        // F-19 (تعميد المقاول) is now activated on-demand by an authorized role from its own card — not here.
       ],
     };
   },

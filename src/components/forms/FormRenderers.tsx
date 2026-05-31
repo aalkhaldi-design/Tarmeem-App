@@ -2061,17 +2061,119 @@ export const F15Creator: FormCreator = ({ user, api, context, onClose }) => {
   );
 };
 
-export const F15Renderer: FormRenderer = ({ rec, user, api }) => {
+export const F15Renderer: FormRenderer = ({ rec, user, api, context }) => {
   const d = rec.data || {};
+  const awaits = formAwaitsUser(rec, user);
+  const atStage = rec.approvalIndex ?? 0;
+
+  // Same 3-stage chain as F-35: ACCOUNTANT → EXEC_DIRECTOR → ACCOUNTANT
+  const isStage0 = awaits && atStage === 0 && (!!user.isAdmin || user.role === 'ACCOUNTANT');
+  const isStage2 = awaits && atStage === 2 && (!!user.isAdmin || user.role === 'ACCOUNTANT');
+
+  // Awarded price from the project (set by the F-85 trigger). Default % depends on which payment this is.
+  const project = context?.projects?.find((p: any) => p.id === rec.projectRefId);
+  const awardedPrice = Number(project?.awardedPrice) || 0;
+  const paymentIndex = Number(d.paymentIndex || 1);
+  const idxLabel =
+    paymentIndex === 2 ? 'الدفعة الثانية' :
+    paymentIndex === 3 ? 'الدفعة الثالثة' :
+    paymentIndex === 4 ? 'الدفعة الأخيرة' : 'الدفعة';
+  const defaultPct = paymentIndex === 4 ? 10 : 30;
+
+  // Reviewer context: total already disbursed on this project (approved F-15/F-35), and remaining.
+  const paidSoFar = api.forms
+    .filter(f => f.projectRefId === rec.projectRefId && (f.code === 'F-15' || f.code === 'F-35')
+      && f.id !== rec.id && (f.status === 'approved' || f.status === 'completed'))
+    .reduce((s, f) => s + Number((f.data as { paymentAmount?: number } | undefined)?.paymentAmount || 0), 0);
+  const remaining = Math.max(0, awardedPrice - paidSoFar);
+
+  const [paymentPct, setPaymentPct] = useState<string>(d.paymentPct != null ? String(d.paymentPct) : String(defaultPct));
+  const [paymentAmount, setPaymentAmount] = useState<string>(() => {
+    if (d.paymentAmount != null) return String(d.paymentAmount);
+    if (d.amount != null && Number(d.amount) > 0) return String(d.amount); // backward-compat with manual creator
+    return awardedPrice > 0 ? (awardedPrice * (defaultPct / 100)).toFixed(2) : '';
+  });
+  const [accountantNotes, setAccountantNotes] = useState<string>((d.accountantNotes as string) || '');
+  const [transferNotes, setTransferNotes] = useState<string>((d.transferNotes as string) || '');
+  const [invoiceFiles, setInvoiceFiles] = useState<TitledFile[]>((d.invoiceFiles as TitledFile[]) || []);
+  const [transferFiles, setTransferFiles] = useState<TitledFile[]>((d.transferFiles as TitledFile[]) || []);
+
+  useEffect(() => {
+    if (!awaits) return;
+    const t = setTimeout(() => {
+      api.updateFormData(rec.id, {
+        paymentPct: Number(paymentPct || 0),
+        paymentAmount: Number(paymentAmount || 0),
+        accountantNotes,
+        transferNotes,
+      });
+    }, 500);
+    return () => clearTimeout(t);
+  }, [paymentPct, paymentAmount, accountantNotes, transferNotes, awaits]);
+
+  const handlePctChange = (val: string) => {
+    setPaymentPct(val);
+    if (awardedPrice > 0) setPaymentAmount(((Number(val || 0) / 100) * awardedPrice).toFixed(2));
+  };
+  const handleAmountChange = (val: string) => {
+    setPaymentAmount(val);
+    if (awardedPrice > 0) setPaymentPct(((Number(val || 0) / awardedPrice) * 100).toFixed(2));
+  };
+
+  const updateInvoiceFiles = (next: TitledFile[]) => { setInvoiceFiles(next); api.updateFormData(rec.id, { invoiceFiles: next }); };
+  const updateTransferFiles = (next: TitledFile[]) => { setTransferFiles(next); api.updateFormData(rec.id, { transferFiles: next }); };
+
+  const stageLabel = atStage === 0 ? 'اعتماد ورفع الطلب' : atStage === 1 ? 'اعتماد المدير التنفيذي' : 'تأكيد التحويل وإغلاق الدفعة';
+  const showTransferCard = atStage >= 2 || rec.status === 'approved' || rec.status === 'completed';
+
   return (
-    <FormShell rec={rec} user={user} api={api}>
-      <Card title="بيانات الدفعة" icon={DollarSign}>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <ReadOnlyField label="محطة الإنجاز" value={d.milestone} />
-          <ReadOnlyField label="القيمة" value={<span className="flex items-center gap-1">{Number(d.amount || 0)} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
+    <FormShell rec={rec} user={user} api={api} approveLabel={stageLabel}>
+      <Card title={`طلب صرف ${idxLabel}`} icon={DollarSign} accent="teal">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+          <ReadOnlyField label="قيمة الترسية (من F-85)" value={
+            <span className="flex items-center gap-1">{awardedPrice.toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>
+          } />
+          <ReadOnlyField label="المصروف المعتمد سابقاً" value={
+            <span className="flex items-center gap-1">{paidSoFar.toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>
+          } />
+          <ReadOnlyField label="المتبقي من الترسية" value={
+            <span className="flex items-center gap-1">{remaining.toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>
+          } />
         </div>
-        <ReadOnlyField className="mt-3" label="ملاحظات" value={rec.notes} />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {isStage0 ? (
+            <>
+              <Input type="number" label="النسبة المئوية (%)" value={paymentPct} onChange={e => handlePctChange(e.target.value)} />
+              <Input type="number" value={paymentAmount} onChange={e => handleAmountChange(e.target.value)}
+                label={<span className="flex items-center gap-1">قيمة الدفعة <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>} />
+            </>
+          ) : (
+            <>
+              <ReadOnlyField label="النسبة المئوية (%)" value={`${paymentPct || '0'}%`} />
+              <ReadOnlyField label="قيمة الدفعة" value={
+                <span className="flex items-center gap-1">{Number(paymentAmount || 0).toLocaleString('ar-SA')} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>
+              } />
+            </>
+          )}
+        </div>
+        {isStage0 && Number(paymentAmount || 0) > remaining && remaining >= 0 && awardedPrice > 0 && (
+          <p className="text-[11px] text-amber-600 dark:text-amber-300 mt-2">تنبيه: قيمة الدفعة تتجاوز المتبقي من قيمة الترسية.</p>
+        )}
+        <TextArea className="mt-3" label="ملاحظات وتوصية المحاسب (اختياري)" rows={2} value={accountantNotes} onChange={e => setAccountantNotes(e.target.value)} readOnly={!isStage0} />
       </Card>
+
+      <Card title="مرفقات المطالبة (الفواتير والمستندات)" icon={FileText}>
+        <p className="text-xs text-fg-muted mb-2">المحاسب يرفع الفواتير والمستندات المطلوبة. كل صف له عنوان مخصّص وملف.</p>
+        <TitledFileUploader files={invoiceFiles} onChange={updateInvoiceFiles} pathPrefix="f15-invoices" disabled={!isStage0} />
+      </Card>
+
+      {showTransferCard && (
+        <Card title="إثبات التحويل البنكي" icon={CheckCircle2} accent="purple">
+          <p className="text-xs text-fg-muted mb-2">بعد اعتماد المدير التنفيذي، يُنفّذ المحاسب التحويل ويرفع إثباته هنا.</p>
+          <TitledFileUploader files={transferFiles} onChange={updateTransferFiles} pathPrefix="f15-transfers" disabled={!isStage2} />
+          <TextArea className="mt-3" label="ملاحظات التحويل (اختياري)" rows={2} value={transferNotes} onChange={e => setTransferNotes(e.target.value)} readOnly={!isStage2} />
+        </Card>
+      )}
     </FormShell>
   );
 };

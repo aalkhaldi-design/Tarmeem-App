@@ -1622,7 +1622,14 @@ export const F19Renderer: FormRenderer = ({ rec, user, api }) => {
   const [selected, setSelected] = useState<string[]>((d.f19_selected as string[]) || []);
   const [busy, setBusy] = useState(false);
 
-  const canEdit = isPending && authorized;
+  const stage = (d.f19_stage as string) || 'input';
+  const isPMorHS = !!user.isAdmin || user.role === 'PROJECTS_MANAGER' || user.role === 'HEAD_SUPERVISION';
+  const EARLY_REASONS = ['عجز لوجستي', 'خطأ سجلات المخازن', 'سلاسل التوريد', 'تأخر المالية بالدفع', 'مصطفى نايم', 'أخرى'];
+  const deadlinePassed = stage === 'deadline' && !!deadline && new Date(deadline).getTime() < Date.now();
+  const [earlyOpen, setEarlyOpen] = useState(false);
+  const [earlyReason, setEarlyReason] = useState<string>((d.f19_earlyReason as string) || '');
+  const [earlyOther, setEarlyOther] = useState<string>((d.f19_earlyReasonOther as string) || '');
+  const canEdit = isPending && authorized && stage === 'input';
   const toggle = (id: string) => setSelected(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
   const selectAll = (ids: string[], on: boolean) => setSelected(p => on ? Array.from(new Set([...p, ...ids])) : p.filter(x => !ids.includes(x)));
   const allInternal = internalItems.map(i => i.id);
@@ -1635,11 +1642,79 @@ export const F19Renderer: FormRenderer = ({ rec, user, api }) => {
     try { await api.activateForm(rec.id, { f19_activatorId: user.id, f19_activatorRole: user.role, f19_activatorDept: user.department || '' }); }
     finally { setBusy(false); }
   };
-  const save = async () => {
+  const persistInputs = () => api.updateFormData(rec.id, { f19_reason: reason, f19_reasonOther: reasonOther, f19_recommendation: recommendation, f19_timing: timing, f19_deadline: deadline, f19_selected: JSON.parse(JSON.stringify(selected)) });
+  const save = async () => { setBusy(true); try { await persistInputs(); } finally { setBusy(false); } };
+
+  // Pull selected items out of F-34 (and F-23 new works, and the F-15.1 receipt if unsettled),
+  // record them on F-19, and advance to payment-choice. onlyUndelivered is used at deadline expiry.
+  const applyDeputation = async (onlyUndelivered: boolean) => {
+    const pulled: Array<{ id: string; label: string; qty: string; cat: string }> = [];
+    const f34 = api.forms.find(f => f.code === 'F-34' && f.projectRefId === rec.projectRefId);
+    if (f34 && f34.status === 'pending') {
+      const sec: any = JSON.parse(JSON.stringify(f34.data?.f34_items || {}));
+      let changed = false;
+      for (const c of cats) {
+        const grp = sec[c]; if (!grp) continue;
+        (['internal', 'partner'] as const).forEach(g => {
+          const arr = grp[g] || [];
+          for (let i = arr.length - 1; i >= 0; i--) {
+            const it = arr[i];
+            if (selected.includes(it.id) && !(onlyUndelivered && it.delivered)) {
+              if (!pulled.some(p => p.id === it.id)) pulled.push({ id: it.id, label: it.label, qty: String(it.qty || ''), cat: c });
+              arr.splice(i, 1); changed = true;
+            }
+          }
+        });
+      }
+      if (changed) await api.updateFormData(f34.id, { f34_items: sec });
+    }
+    const f23f = api.forms.find(f => f.code === 'F-23' && f.projectRefId === rec.projectRefId);
+    if (f23f && f23f.status === 'pending') {
+      const adds: any[] = JSON.parse(JSON.stringify(f23f.data?.f23_add || []));
+      let changed = false;
+      for (let i = adds.length - 1; i >= 0; i--) {
+        if (selected.includes(adds[i].id)) {
+          if (!pulled.some(p => p.id === adds[i].id)) pulled.push({ id: adds[i].id, label: adds[i].label, qty: String(adds[i].addQty || ''), cat: adds[i].cat });
+          adds.splice(i, 1); changed = true;
+        }
+      }
+      if (changed) await api.updateFormData(f23f.id, { f23_add: adds });
+    }
+    const f151 = api.forms.find(f => f.code === 'F-15.1' && f.projectRefId === rec.projectRefId);
+    if (f151 && f151.status !== 'approved' && f151.status !== 'completed') {
+      const receipt: any[] = JSON.parse(JSON.stringify(f151.data?.f151_receipt || []));
+      const next = receipt.filter((it: any) => !selected.includes(it.id));
+      if (next.length !== receipt.length) await api.updateFormData(f151.id, { f151_receipt: next });
+    }
+    await api.updateFormData(rec.id, { f19_pulledItems: pulled, f19_stage: 'payment_choice', f19_appliedAt: new Date().toISOString() });
+  };
+
+  const submitInput = async () => {
+    if (!reason) { alert('اختر سبب التعميد.'); return; }
+    if (reason === 'أخرى' && !reasonOther.trim()) { alert('حدد السبب.'); return; }
+    if (selected.length === 0) { alert('اختر بنداً واحداً على الأقل لتعميده للمقاول.'); return; }
+    if (variant === 'pm' && !timing) { alert('اختر آلية التعميد (مهلة أو فوري).'); return; }
+    if (variant === 'pm' && timing === 'deadline' && !deadline) { alert('حدد تاريخ المهلة.'); return; }
     setBusy(true);
-    try { await api.updateFormData(rec.id, { f19_reason: reason, f19_reasonOther: reasonOther, f19_recommendation: recommendation, f19_timing: timing, f19_deadline: deadline, f19_selected: JSON.parse(JSON.stringify(selected)) }); }
+    try {
+      await persistInputs();
+      if (variant === 'pm' && timing === 'immediate') await applyDeputation(false);
+      else if (variant === 'pm' && timing === 'deadline') await api.updateFormData(rec.id, { f19_stage: 'deadline' });
+      else await api.updateFormData(rec.id, { f19_stage: 'await_confirm' });
+    } finally { setBusy(false); }
+  };
+
+  const confirmDeputation = async () => { setBusy(true); try { await applyDeputation(false); } finally { setBusy(false); } };
+  const runDeadlineNow = async () => { setBusy(true); try { await applyDeputation(true); } finally { setBusy(false); } };
+  const confirmEarly = async () => {
+    if (!earlyReason) { alert('اختر سبب التعميد المبكر.'); return; }
+    if (earlyReason === 'أخرى' && !earlyOther.trim()) { alert('حدد السبب.'); return; }
+    setBusy(true);
+    try { await api.updateFormData(rec.id, { f19_earlyReason: earlyReason, f19_earlyReasonOther: earlyOther }); await applyDeputation(true); }
     finally { setBusy(false); }
   };
+  const choosePaymentIncluded = async () => { setBusy(true); try { await api.approveForm(rec.id, user, 'تعميد مضمّن في تكاليف العقد', { f19_paymentMode: 'included', f19_stage: 'done' }); } finally { setBusy(false); } };
+  const choosePaymentDisbursement = async () => { setBusy(true); try { await api.updateFormData(rec.id, { f19_paymentMode: 'disbursement', f19_stage: 'pricing' }); } finally { setBusy(false); } };
 
   if (isDraft) {
     return (
@@ -1656,11 +1731,26 @@ export const F19Renderer: FormRenderer = ({ rec, user, api }) => {
 
   return (
     <FormShell rec={rec} user={user} api={api} approvalSection={
-      canEdit ? (
+      stage === 'input' && canEdit ? (
         <div className="space-y-2">
-          <button disabled={busy} onClick={save} className="w-full py-2.5 rounded-lg bg-surface-up border border-subtle text-fg font-bold text-sm disabled:opacity-50">حفظ المدخلات</button>
-          <p className="text-[11px] text-fg-faint text-center">التنفيذ والتعميد على النماذج المرتبطة وطلب الصرف تُضاف في المراحل التالية.</p>
+          <button disabled={busy} onClick={save} className="w-full py-2 rounded-lg bg-surface-up border border-subtle text-fg font-bold text-sm disabled:opacity-50">حفظ المدخلات</button>
+          <button disabled={busy} onClick={submitInput} className="w-full py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">
+            {variant === 'pm' && timing === 'immediate' ? 'تعميد المقاول فوراً' : variant === 'pm' && timing === 'deadline' ? 'بدء المهلة' : 'إرسال للاعتماد'}
+          </button>
         </div>
+      ) : stage === 'await_confirm' ? (
+        isPMorHS
+          ? <button disabled={busy} onClick={confirmDeputation} className="w-full py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">تم تعميد المقاول</button>
+          : <p className="text-xs text-fg-muted text-center">بانتظار اعتماد مدير المشاريع أو رئيس الإشراف (تم تعميد المقاول).</p>
+      ) : stage === 'payment_choice' ? (
+        isPMorHS ? (
+          <div className="space-y-2">
+            <button disabled={busy} onClick={choosePaymentDisbursement} className="w-full py-2.5 rounded-lg bg-[#56B894] text-white font-bold text-sm disabled:opacity-50">تفعيل طلب صرف تعميد المقاول</button>
+            <button disabled={busy} onClick={choosePaymentIncluded} className="w-full py-2 rounded-lg bg-surface-up border border-subtle text-fg font-bold text-sm disabled:opacity-50">تعميد المقاول مضمّن في تكاليف العقد</button>
+          </div>
+        ) : <p className="text-xs text-fg-muted text-center">بانتظار قرار الصرف من مدير المشاريع أو رئيس الإشراف.</p>
+      ) : stage === 'pricing' ? (
+        <p className="text-xs text-fg-muted text-center">مرحلة تسعير بنود التعميد (تُضاف في المرحلة التالية) ثم يُولَّد طلب الصرف F-15.2.</p>
       ) : <div />
     }>
       {f23Active && (
@@ -1724,6 +1814,45 @@ export const F19Renderer: FormRenderer = ({ rec, user, api }) => {
           <p className="text-xs text-fg-faint">لا توجد بنود قابلة للتعميد في حصر التوريد (F-34).</p>
         )}
       </Card>
+
+      {stage === 'deadline' && (
+        <Card title="مهلة قبل التعميد" icon={Calendar} accent="purple">
+          <p className="text-xs text-fg-muted mb-2">المهلة حتى: <strong className="text-fg">{deadline || '—'}</strong>. على الخدمات المساندة تسليم البنود المحددة قبل انتهائها (تم التسليم في F-34)، وإلا يتولّاها المقاول وتُسحب.</p>
+          {deadlinePassed && authorized && (
+            <button disabled={busy} onClick={runDeadlineNow} className="px-4 py-2 rounded-lg bg-[#4A1F66] text-white text-sm font-bold disabled:opacity-50">تنفيذ التعميد (انتهت المهلة)</button>
+          )}
+          {!deadlinePassed && (user.isAdmin || user.role === 'SUPPORT_MANAGER' || isPMorHS) && (
+            <div>
+              {!earlyOpen && (
+                <button disabled={busy} onClick={() => setEarlyOpen(true)} className="px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-bold disabled:opacity-50">تفعيل التعميد فوراً</button>
+              )}
+              {earlyOpen && (
+                <div className="mt-2 space-y-1">
+                  <p className="text-xs font-bold text-fg-muted">سبب التعميد المبكر</p>
+                  {EARLY_REASONS.map(r => (
+                    <label key={r} className="flex items-center gap-2 text-xs text-fg">
+                      <input type="radio" name="f19early" checked={earlyReason === r} onChange={() => setEarlyReason(r)} /> {r}
+                    </label>
+                  ))}
+                  {earlyReason === 'أخرى' && <Input label="حدد السبب" value={earlyOther} onChange={e => setEarlyOther(e.target.value)} />}
+                  <button disabled={busy} onClick={confirmEarly} className="mt-2 px-4 py-2 rounded-lg bg-[#4A1F66] text-white text-sm font-bold disabled:opacity-50">تأكيد التعميد الفوري</button>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {(stage === 'payment_choice' || stage === 'pricing' || stage === 'done') && (
+        <Card title="البنود المُعمَّدة (تم سحبها للمقاول)" icon={Truck} accent="teal">
+          {(((d.f19_pulledItems as any[]) || []).length === 0) && <p className="text-xs text-fg-faint">لا توجد بنود مسحوبة.</p>}
+          <div className="space-y-1">
+            {((d.f19_pulledItems as any[]) || []).map((it: any) => (
+              <div key={it.id} className="text-xs text-fg">[{catTitle[it.cat] || it.cat}] {it.label} <span className="text-fg-faint">(الكمية: {it.qty})</span></div>
+            ))}
+          </div>
+        </Card>
+      )}
     </FormShell>
   );
 };

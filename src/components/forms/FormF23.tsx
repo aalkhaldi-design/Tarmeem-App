@@ -104,17 +104,99 @@ export const F23Renderer: FormRenderer = ({ rec, user, api }) => {
   const setProvider = (id: string, v: 'داخلي' | 'داعم/شريك') => setAddItems(prev => prev.map(a => a.id === id ? { ...a, providerType: v } : a));
   const saveAdd = async () => { setBusy(true); try { await persist({ f23_add: JSON.parse(JSON.stringify(addItems)) }); } finally { setBusy(false); } };
 
+  // ── F-34 helpers: read persisted sections, or rebuild the base from F-20 if F-34 hasn't saved yet (never clobber) ──
+  const buildF34FromF20 = (): any => {
+    const f20 = api.forms.find(f => f.code === 'F-20' && f.projectRefId === rec.projectRefId);
+    const src: any = f20?.data?.f20_items || {};
+    const conv = (arr: any[]) => {
+      const internal: any[] = []; const partner: any[] = [];
+      (arr || []).forEach((it: any) => {
+        if (it.byContractor) return;
+        const item = { id: it.id, label: it.label, qty: String(it.qty || ''), choice: '', price: '', delivered: false, pledge: false };
+        if (it.providerType === 'داخلي') internal.push(item);
+        else if (it.providerType === 'داعم/شريك') partner.push(item);
+      });
+      return { internal, partner };
+    };
+    return { furniture: conv(src.furniture), appliances: conv(src.appliances), materials: conv(src.materials) };
+  };
+  const getF34Sections = (f34: any) => {
+    const saved = f34?.data?.f34_items;
+    return (saved && saved.furniture) ? JSON.parse(JSON.stringify(saved)) : buildF34FromF20();
+  };
+
   // ── حذف track ──
   const approveRemovePM = async () => { setBusy(true); try { await persist({ f23_removeStage: 1 }); setRemoveStage(1); } finally { setBusy(false); } };
-  const approveRemoveSM = async () => { setBusy(true); try { /* NEXT PHASE: delete these items from F-34 + F-15.1 */ await persist({ f23_removeStage: 2 }); setRemoveStage(2); } finally { setBusy(false); } };
+  const approveRemoveSM = async () => {
+    setBusy(true);
+    try {
+      const f34 = api.forms.find(f => f.code === 'F-34' && f.projectRefId === rec.projectRefId);
+      if (f34 && f34.status === 'pending') {
+        const sections: any = getF34Sections(f34);
+        for (const rm of removeItems) {
+          const grp = sections[rm.cat]; if (!grp) continue;
+          (['internal', 'partner'] as const).forEach(g => {
+            const arr = grp[g] || [];
+            const idx = arr.findIndex((it: any) => it.id === rm.id);
+            if (idx >= 0) {
+              const next = Number(arr[idx].qty || 0) - Number(rm.cancelQty || 0);
+              if (next > 0) arr[idx].qty = String(next); else arr.splice(idx, 1);
+            }
+          });
+        }
+        await api.updateFormData(f34.id, { f34_items: sections });
+      } else if (f34) {
+        alert('تنبيه: حصر التوريد (F-34) غير نشط حالياً — سُجِّل الحذف في هذا النموذج دون تعديله. قد تلزم متابعة يدوية.');
+      }
+      const f151 = api.forms.find(f => f.code === 'F-15.1' && f.projectRefId === rec.projectRefId);
+      if (f151 && f151.status !== 'approved' && f151.status !== 'completed') {
+        const receipt: any[] = JSON.parse(JSON.stringify(f151.data?.f151_receipt || []));
+        let changed = false;
+        for (const rm of removeItems) {
+          const idx = receipt.findIndex((it: any) => it.id === rm.id);
+          if (idx >= 0) {
+            const next = Number(receipt[idx].qty || 0) - Number(rm.cancelQty || 0);
+            if (next > 0) receipt[idx].qty = String(next); else receipt.splice(idx, 1);
+            changed = true;
+          }
+        }
+        if (changed) await api.updateFormData(f151.id, { f151_receipt: receipt });
+      }
+      await persist({ f23_removeStage: 2 });
+      setRemoveStage(2);
+    } catch (e) {
+      console.error('F-23 remove effect failed:', e);
+      alert('تعذّر تطبيق الحذف على النماذج المرتبطة — حاول مجدداً.');
+    } finally { setBusy(false); }
+  };
 
   // ── اضافة track ──
   const submitAddSupervision = async () => { setBusy(true); try { await persist({ f23_add: JSON.parse(JSON.stringify(addItems)), f23_addStage: 1 }); setAddStage(1); } finally { setBusy(false); } };
   const submitAddSupport = async () => {
     if (addItems.some(a => !a.byContractor && !a.providerType)) { alert('حدد طريقة توريد كل بند غير مُسند للمقاول (داخلي أو داعم/شريك).'); return; }
     setBusy(true);
-    try { /* NEXT PHASE: inject non-contractor adds into F-34 داخلي/شريك sections */ await persist({ f23_add: JSON.parse(JSON.stringify(addItems)), f23_addStage: 2 }); setAddStage(2); }
-    finally { setBusy(false); }
+    try {
+      const f34 = api.forms.find(f => f.code === 'F-34' && f.projectRefId === rec.projectRefId);
+      if (f34 && f34.status === 'pending') {
+        const sections: any = getF34Sections(f34);
+        for (const a of addItems) {
+          if (a.byContractor) continue;
+          const grp = sections[a.cat] || (sections[a.cat] = { internal: [], partner: [] });
+          const g = a.providerType === 'داخلي' ? 'internal' : 'partner';
+          if (!grp[g]) grp[g] = [];
+          if (grp[g].some((it: any) => it.id === a.id)) continue;
+          grp[g].push({ id: a.id, label: a.label || 'بند', qty: String(a.addQty || ''), choice: '', price: '', delivered: false, pledge: false });
+        }
+        await api.updateFormData(f34.id, { f34_items: sections });
+      } else if (f34) {
+        alert('تنبيه: حصر التوريد (F-34) غير نشط حالياً — سُجِّلت الإضافة في هذا النموذج دون حقنها فيه. قد تلزم متابعة يدوية.');
+      }
+      await persist({ f23_add: JSON.parse(JSON.stringify(addItems)), f23_addStage: 2 });
+      setAddStage(2);
+    } catch (e) {
+      console.error('F-23 add effect failed:', e);
+      alert('تعذّر إضافة البنود إلى حصر التوريد (F-34) — حاول مجددا.');
+    } finally { setBusy(false); }
   };
 
   const removeDone = !hasRemove || removeStage >= 2;

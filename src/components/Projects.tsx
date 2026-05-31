@@ -51,7 +51,9 @@ export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, 
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return projects.filter(p => {
+    return [...projects]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .filter(p => {
       if (phaseFilter !== 'all' && p.phase !== phaseFilter) return false;
       if (!q) return true;
       return (
@@ -193,8 +195,8 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, user, use
       const records = projectForms.filter(f => f.code === code);
       if (code === 'F-14') {
         records.sort((a, b) =>
-          Number((a.data as { visitNumber?: number } | undefined)?.visitNumber || 1) -
-          Number((b.data as { visitNumber?: number } | undefined)?.visitNumber || 1));
+          Number((a.data as { f14_version?: number } | undefined)?.f14_version || 1) -
+          Number((b.data as { f14_version?: number } | undefined)?.f14_version || 1));
       } else if (code === 'F-15') {
         records.sort((a, b) =>
           Number((a.data as { paymentIndex?: number } | undefined)?.paymentIndex || 1) -
@@ -389,10 +391,10 @@ const FormAccordionItem: React.FC<{
   const Renderer = RENDERERS[rec.code];
   const awaits = formAwaitsUser(rec, user);
   const isClosed = rec.status === 'approved' || rec.status === 'completed';
-  const visitN = (rec.data as { visitNumber?: number } | undefined)?.visitNumber;
+  const reportN = Number((rec.data as { f14_version?: number } | undefined)?.f14_version || 1);
   const paymentIdx = (rec.data as { paymentIndex?: number } | undefined)?.paymentIndex;
   const suffix =
-    rec.code === 'F-14' && visitN ? ` · زيارة ${visitN}` :
+    rec.code === 'F-14' ? ` ${reportN}` :
     rec.code === 'F-15' && paymentIdx ? ` · دفعة ${paymentIdx}` :
     '';
   const statusTone =

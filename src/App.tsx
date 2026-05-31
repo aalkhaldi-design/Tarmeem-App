@@ -474,6 +474,13 @@ function App() {
     await updateDoc(doc(db, 'forms', formId), { status: 'pending', data: { ...(rec.data || {}), ...(dataPatch || {}) }, updatedAt: new Date().toISOString() });
   }, [forms]);
 
+  // Reopen an approved form for a new revision (F-14 periodic reports): back to pending, restart its chain.
+  const reviseForm: FormsApi['reviseForm'] = useCallback(async (formId, dataPatch) => {
+    const rec = forms.find(f => f.id === formId);
+    if (!rec || rec.status !== 'approved') return;
+    await updateDoc(doc(db, 'forms', formId), { status: 'pending', approvalIndex: 0, data: { ...(rec.data || {}), ...(dataPatch || {}) }, updatedAt: new Date().toISOString() });
+  }, [forms]);
+
   const attachFiles: FormsApi['attachFiles'] = useCallback(async (formId, files) => {
     const rec = forms.find(f => f.id === formId);
     if (!rec) return;
@@ -490,8 +497,9 @@ function App() {
     declineForm: (id, user, note) => advanceForm(id, user, 'declined', note),
     updateFormData,
     activateForm,
+    reviseForm,
     attachFiles,
-  }), [forms, createForm, createDraftForm, advanceForm, updateFormData, activateForm, attachFiles]);
+  }), [forms, createForm, createDraftForm, advanceForm, updateFormData, activateForm, reviseForm, attachFiles]);
 
   /* ────────── Forms context for renderers ────────── */
   const formsContext: FormsContext = useMemo(() => ({

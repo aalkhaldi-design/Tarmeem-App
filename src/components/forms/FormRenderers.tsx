@@ -1819,6 +1819,20 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
   const [recommendation, setRecommendation] = useState<string>((d.f14_recommendation as string) || '');
   const [savedFlag, setSavedFlag] = useState(false);
   const [busy, setBusy] = useState(false);
+  const version = Number((d.f14_version as number) || 1);
+  const history = ((d.f14_history as any[]) || []);
+  const [showHistory, setShowHistory] = useState(false);
+  const [openVer, setOpenVer] = useState<number | null>(null);
+  const isSupervisionLead = !!user.isAdmin || user.role === 'HEAD_SUPERVISION';
+
+  // When a new report is opened (version bumps via reviseForm), reload local state from the fresh record.
+  useEffect(() => {
+    setRooms((d.f14_rooms as F14Room[]) || extractRooms());
+    setDeploy((d.f14_deploy as F14Deploy) || extractDeploy());
+    setOverallPct((d.f14_overallPct as string) || '');
+    setRecommendation((d.f14_recommendation as string) || '');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.f14_version]);
 
   const persist = (nextRooms: F14Room[], nextDeploy?: F14Deploy) =>
     api.updateFormData(rec.id, { f14_rooms: JSON.parse(JSON.stringify(nextRooms)), f14_deploy: JSON.parse(JSON.stringify(nextDeploy || deploy)), f14_overallPct: overallPct, f14_recommendation: recommendation });
@@ -1848,6 +1862,25 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
     finally { setBusy(false); }
   };
 
+  const startNewReport = async () => {
+    if (busy) return;
+    if (!confirm('سيتم حفظ هذا التقرير في الأرشيف وفتح تقرير إشراف جديد. متابعة؟')) return;
+    setBusy(true);
+    try {
+      const snapshot = { version, rooms: JSON.parse(JSON.stringify(rooms)), overallPct, recommendation, archivedAt: new Date().toISOString() };
+      const resetRooms = rooms.map(r => ({ ...r, pct: '', note: '', images: [] }));
+      await api.reviseForm(rec.id, JSON.parse(JSON.stringify({
+        f14_version: version + 1,
+        f14_history: [...history, snapshot],
+        f14_prev: { rooms: Object.fromEntries(rooms.map(r => [r.id, r.pct])), overallPct },
+        f14_rooms: resetRooms,
+        f14_deploy: deploy,
+        f14_overallPct: '',
+        f14_recommendation: '',
+      })));
+    } finally { setBusy(false); }
+  };
+
   return (
     <FormShell rec={rec} user={user} api={api} approvalSection={canEdit ? (
       <div className="flex gap-2">
@@ -1855,9 +1888,46 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
         <button disabled={busy} onClick={submit} className="flex-1 py-2.5 rounded-lg bg-[#4A1F66] text-white font-bold text-sm disabled:opacity-50">{busy ? 'جارٍ الإرسال…' : 'اعتماد التقرير'}</button>
       </div>
     ) : <></>}>
-      <Card title="تقرير الإشراف الميداني" icon={ClipboardList} accent="purple">
+      <Card title={`تقرير الإشراف الميداني — التقرير ${version}`} icon={ClipboardList} accent="purple">
         <p className="text-xs text-fg-muted leading-6">قيّم نسبة إنجاز كل مساحة، وأضف ملاحظاتك وصور الموقع. في الأسفل قدّر نسبة الإنجاز الكلية للمشروع.</p>
+        {rec.status === 'approved' && isSupervisionLead && (
+          <button onClick={startNewReport} disabled={busy} className="mt-3 w-full py-2.5 rounded-lg bg-[#43bba1] text-white font-bold text-sm disabled:opacity-50">
+            {busy ? 'جارٍ الفتح…' : '➕ بدء تقرير إشراف جديد'}
+          </button>
+        )}
       </Card>
+
+      {history.length > 0 && (
+        <Card title="تقارير الإشراف السابقة" icon={ClipboardList}>
+          <button onClick={() => setShowHistory(s => !s)} className="w-full flex items-center justify-between text-sm font-bold text-[#4A1F66] dark:text-purple-300">
+            <span>عرض {history.length} تقرير سابق</span>
+            <span>{showHistory ? '▲' : '▼'}</span>
+          </button>
+          {showHistory && (
+            <div className="mt-2 space-y-2">
+              {[...history].reverse().map((h: any) => (
+                <div key={h.version} className="rounded-xl border border-subtle bg-surface-up">
+                  <button onClick={() => setOpenVer(v => v === h.version ? null : h.version)} className="w-full flex items-center justify-between px-3 py-2 text-sm font-bold">
+                    <span>التقرير {h.version}</span>
+                    <span className="text-xs text-fg-muted">نسبة الإنجاز: {h.overallPct || '—'}%</span>
+                  </button>
+                  {openVer === h.version && (
+                    <div className="px-3 pb-3 space-y-2 text-xs">
+                      {(h.rooms || []).map((r: any) => (
+                        <div key={r.id} className="flex items-center justify-between border-t border-subtle pt-1.5">
+                          <span className="font-bold">{r.name}</span>
+                          <span className="text-fg-muted">{r.pct || '—'}%{r.note ? ` — ${r.note}` : ''}</span>
+                        </div>
+                      ))}
+                      {h.recommendation && <p className="text-fg-muted border-t border-subtle pt-1.5">التوصية: {h.recommendation}</p>}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       {rooms.length === 0 ? (
         <Card title="لا توجد مساحات" icon={HomeIcon}><p className="text-xs text-fg-faint">لم تُسجَّل مساحات في كراسة التشخيص (F-08).</p></Card>

@@ -1716,6 +1716,29 @@ export const F19Renderer: FormRenderer = ({ rec, user, api }) => {
   const choosePaymentIncluded = async () => { setBusy(true); try { await api.approveForm(rec.id, user, 'تعميد مضمّن في تكاليف العقد', { f19_paymentMode: 'included', f19_stage: 'done' }); } finally { setBusy(false); } };
   const choosePaymentDisbursement = async () => { setBusy(true); try { await api.updateFormData(rec.id, { f19_paymentMode: 'disbursement', f19_stage: 'pricing' }); } finally { setBusy(false); } };
 
+  // ── Pricing stage: رئيس الإشراف/المهندس المشرف/فريق الفزعة price each pulled item; HS/admin submits → finalize F-19 + ignite F-15.2 ──
+  const f32 = api.forms.find(f => f.code === 'F-32' && f.projectRefId === rec.projectRefId);
+  const engId = (f32?.data?.engineerId as string) || '';
+  const helperIds = ((f32?.data?.helpers as string[]) || []);
+  const isHSorAdmin = !!user.isAdmin || user.role === 'HEAD_SUPERVISION';
+  const canPrice = isHSorAdmin || user.id === engId || helperIds.includes(user.id);
+  const pulled = ((d.f19_pulledItems as Array<{ id: string; label: string; qty: string; cat: string }>) || []);
+  const [prices, setPrices] = useState<Record<string, string>>((d.f19_prices as Record<string, string>) || {});
+  const setPrice = (id: string, v: string) => setPrices(p => ({ ...p, [id]: v }));
+  const pricingTotal = pulled.reduce((s, it) => s + Number(prices[it.id] || 0) * Number(it.qty || 0), 0);
+  const savePrices = async () => { setBusy(true); try { await api.updateFormData(rec.id, { f19_prices: prices }); } finally { setBusy(false); } };
+  const submitPricing = async () => {
+    if (pulled.length === 0) { alert('لا توجد بنود لتسعيرها.'); return; }
+    if (pulled.some(it => !prices[it.id] || Number(prices[it.id]) <= 0)) { alert('أدخل سعراً صالحاً لكل بند.'); return; }
+    setBusy(true);
+    try {
+      const receipt = pulled.map(it => ({ id: it.id, label: it.label, qty: String(it.qty || ''), price: String(prices[it.id] || '') }));
+      const f152 = api.forms.find(f => f.code === 'F-15.2' && f.projectRefId === rec.projectRefId);
+      if (f152 && f152.status === 'draft') await api.activateForm(f152.id, { f152_receipt: receipt });
+      await api.approveForm(rec.id, user, 'تم اعتماد تسعير التعميد وتفعيل طلب الصرف', { f19_prices: prices, f19_pricedItems: receipt, f19_stage: 'done' });
+    } finally { setBusy(false); }
+  };
+
   if (isDraft) {
     return (
       <FormShell rec={rec} user={user} api={api} approvalSection={<div />}>
@@ -1750,7 +1773,14 @@ export const F19Renderer: FormRenderer = ({ rec, user, api }) => {
           </div>
         ) : <p className="text-xs text-fg-muted text-center">بانتظار قرار الصرف من مدير المشاريع أو رئيس الإشراف.</p>
       ) : stage === 'pricing' ? (
-        <p className="text-xs text-fg-muted text-center">مرحلة تسعير بنود التعميد (تُضاف في المرحلة التالية) ثم يُولَّد طلب الصرف F-15.2.</p>
+        canPrice ? (
+          <div className="space-y-2">
+            <button disabled={busy} onClick={savePrices} className="w-full py-2 rounded-lg bg-surface-up border border-subtle text-fg font-bold text-sm disabled:opacity-50">حفظ الأسعار</button>
+            {isHSorAdmin
+              ? <button disabled={busy} onClick={submitPricing} className="w-full py-2.5 rounded-lg bg-[#56B894] text-white font-bold text-sm disabled:opacity-50">اعتماد التسعير وتفعيل طلب الصرف (F-15.2)</button>
+              : <p className="text-[11px] text-fg-faint text-center">يعتمد رئيس الإشراف التسعير النهائي.</p>}
+          </div>
+        ) : <p className="text-xs text-fg-muted text-center">بانتظار تسعير بنود التعميد من رئيس الإشراف والمهندس المشرف وفريق الفزعة.</p>
       ) : <div />
     }>
       {f23Active && (
@@ -1845,11 +1875,26 @@ export const F19Renderer: FormRenderer = ({ rec, user, api }) => {
 
       {(stage === 'payment_choice' || stage === 'pricing' || stage === 'done') && (
         <Card title="البنود المُعمَّدة (تم سحبها للمقاول)" icon={Truck} accent="teal">
-          {(((d.f19_pulledItems as any[]) || []).length === 0) && <p className="text-xs text-fg-faint">لا توجد بنود مسحوبة.</p>}
-          <div className="space-y-1">
-            {((d.f19_pulledItems as any[]) || []).map((it: any) => (
-              <div key={it.id} className="text-xs text-fg">[{catTitle[it.cat] || it.cat}] {it.label} <span className="text-fg-faint">(الكمية: {it.qty})</span></div>
-            ))}
+          {pulled.length === 0 && <p className="text-xs text-fg-faint">لا توجد بنود مسحوبة.</p>}
+          <div className="space-y-1.5">
+            {pulled.map(it => {
+              const unit = Number(prices[it.id] || (d.f19_pricedItems as any[])?.find((x: any) => x.id === it.id)?.price || 0);
+              return (
+                <div key={it.id} className="flex items-center gap-2 flex-wrap text-xs">
+                  <span className="flex-1 min-w-[40%] text-fg">[{catTitle[it.cat] || it.cat}] {it.label} <span className="text-fg-faint">(الكمية: {it.qty})</span></span>
+                  {stage === 'pricing'
+                    ? <input type="number" min="0" disabled={!canPrice} value={prices[it.id] || ''} onChange={e => setPrice(it.id, e.target.value)} placeholder="سعر الوحدة" className="w-24 px-2 py-1 rounded border border-subtle bg-surface text-xs" />
+                    : <span className="text-fg-muted">السعر: {unit.toLocaleString()}</span>}
+                  <span className="font-bold text-[#4A1F66] dark:text-purple-300">= {(unit * Number(it.qty || 0)).toLocaleString()} ر.س</span>
+                </div>
+              );
+            })}
+            {pulled.length > 0 && (
+              <div className="flex items-center justify-between pt-2 mt-1 border-t border-subtle">
+                <span className="text-sm font-bold text-fg">الإجمالي</span>
+                <span className="text-base font-extrabold text-[#4A1F66] dark:text-purple-300 flex items-center gap-1">{pricingTotal.toLocaleString()} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>
+              </div>
+            )}
           </div>
         </Card>
       )}
@@ -3269,13 +3314,76 @@ export const F15_1Renderer: FormRenderer = ({ rec, user, api }) => {
     </FormShell>
   );
 };
-export const F15_2Renderer: FormRenderer = ({ rec, user, api }) => (
-  <FormShell rec={rec} user={user} api={api} approvalSection={<></>}>
-    <Card title="طلب صرف تعميد المقاول" icon={DollarSign}>
-      <p className="text-sm text-fg-muted">هذا النموذج قيد الإعداد وسيُفعَّل في مرحلة لاحقة.</p>
-    </Card>
-  </FormShell>
-);
+export const F15_2Renderer: FormRenderer = ({ rec, user, api }) => {
+  const d = rec.data || {};
+  const awaits = formAwaitsUser(rec, user);
+  const atStage = rec.approvalIndex ?? 0;
+  // Chain: ACCOUNTANT → EXEC_DIRECTOR → ACCOUNTANT
+  const isStage0 = awaits && atStage === 0 && (!!user.isAdmin || user.role === 'ACCOUNTANT');
+  const isStage2 = awaits && atStage === 2 && (!!user.isAdmin || user.role === 'ACCOUNTANT');
+
+  const receipt = ((d.f152_receipt as ReceiptItem[]) || []);
+  const lineTotal = (it: ReceiptItem) => Number(it.price || 0) * Number(it.qty || 0);
+  const total = receipt.reduce((s, it) => s + lineTotal(it), 0);
+  const totalQty = receipt.reduce((s, it) => s + Number(it.qty || 0), 0);
+
+  const [invoiceFiles, setInvoiceFiles] = useState<TitledFile[]>((d.f152_invoiceFiles as TitledFile[]) || []);
+  const [accountantNotes, setAccountantNotes] = useState<string>((d.f152_accountantNotes as string) || '');
+  const [transferFiles, setTransferFiles] = useState<TitledFile[]>((d.f152_transferFiles as TitledFile[]) || []);
+  const [transferNotes, setTransferNotes] = useState<string>((d.f152_transferNotes as string) || '');
+
+  useEffect(() => {
+    if (!awaits) return;
+    const t = setTimeout(() => { api.updateFormData(rec.id, { f152_accountantNotes: accountantNotes, f152_transferNotes: transferNotes }); }, 500);
+    return () => clearTimeout(t);
+  }, [accountantNotes, transferNotes, awaits]);
+
+  const updateInvoiceFiles = (next: TitledFile[]) => { setInvoiceFiles(next); api.updateFormData(rec.id, { f152_invoiceFiles: next }); };
+  const updateTransferFiles = (next: TitledFile[]) => { setTransferFiles(next); api.updateFormData(rec.id, { f152_transferFiles: next }); };
+
+  const stageLabel = atStage === 0 ? 'اعتماد ورفع الفاتورة' : atStage === 1 ? 'اعتماد المدير التنفيذي' : 'تأكيد التحويل وإغلاق الصرف';
+  const showTransferCard = atStage >= 2 || rec.status === 'approved' || rec.status === 'completed';
+
+  return (
+    <FormShell rec={rec} user={user} api={api} approveLabel={stageLabel}>
+      <Card title="إيصال طلب صرف تعميد المقاول" icon={Truck} accent="purple">
+        <p className="text-xs text-fg-muted mb-3">بنود التعميد المسحوبة من الخدمات المساندة وأسعارها، مستخرجة من نموذج تعميد المقاول (F-19).</p>
+        {receipt.length === 0 ? (
+          <p className="text-xs text-fg-faint">لا توجد بنود.</p>
+        ) : (
+          <div className="space-y-2">
+            {receipt.map(it => (
+              <div key={it.id} className="p-2.5 rounded-xl border border-subtle bg-surface-up flex items-center gap-2 flex-wrap">
+                <span className="flex-1 min-w-[35%] text-sm font-bold">{it.label || '—'}</span>
+                <span className="text-xs text-fg-muted">الكمية: {it.qty || '—'}</span>
+                <span className="text-xs text-fg-muted">السعر: {Number(it.price || 0).toLocaleString()}</span>
+                <span className="text-xs font-bold text-[#4A1F66] dark:text-purple-300">= {lineTotal(it).toLocaleString()} ر.س</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between pt-2 mt-1 border-t border-subtle">
+              <span className="text-sm font-bold">الإجمالي (إجمالي الكمية: {totalQty})</span>
+              <span className="text-lg font-extrabold text-[#4A1F66] dark:text-purple-300 flex items-center gap-1">{total.toLocaleString()} <SaudiRiyalGlassIcon className="w-4 h-4 inline" /></span>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      <Card title="مرفقات الفاتورة" icon={FileText}>
+        <p className="text-xs text-fg-muted mb-2">يرفع المحاسب الفواتير والمستندات المطلوبة.</p>
+        <TitledFileUploader files={invoiceFiles} onChange={updateInvoiceFiles} pathPrefix="f152-invoices" disabled={!isStage0} />
+        <TextArea className="mt-3" label="ملاحظات المحاسب (اختياري)" rows={2} value={accountantNotes} onChange={e => setAccountantNotes(e.target.value)} readOnly={!isStage0} />
+      </Card>
+
+      {showTransferCard && (
+        <Card title="إثبات التحويل البنكي" icon={CheckCircle2} accent="teal">
+          <p className="text-xs text-fg-muted mb-2">بعد اعتماد المدير التنفيذي، يُنفّذ المحاسب التحويل ويرفع إثباته هنا.</p>
+          <TitledFileUploader files={transferFiles} onChange={updateTransferFiles} pathPrefix="f152-transfers" disabled={!isStage2} />
+          <TextArea className="mt-3" label="ملاحظات التحويل (اختياري)" rows={2} value={transferNotes} onChange={e => setTransferNotes(e.target.value)} readOnly={!isStage2} />
+        </Card>
+      )}
+    </FormShell>
+  );
+};
 
 export const RENDERERS: Record<string, FormRenderer | undefined> = {
   'F-02': F02Renderer,

@@ -116,6 +116,12 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // ── config/{docId} ── (admin-managed app settings, e.g. notifications)
+    match /config/{docId} {
+      allow read: if authed();
+      allow write: if isAdmin();
+    }
+
     // ── audit_log/{entryId} ───────────────────────────────────────────────
     match /audit_log/{entryId} {
       // Admins can read; app code writes (authed users can create via writeAuditEntry)

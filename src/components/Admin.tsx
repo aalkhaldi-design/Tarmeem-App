@@ -1,8 +1,10 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import {
   Users, UserPlus, CheckCircle, XCircle, CreditCard as Edit, Shield, Clock,
-  UserCheck, ChevronDown, RefreshCw,
+  UserCheck, ChevronDown, RefreshCw, Bell,
 } from 'lucide-react';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import {
   ROLES_DEF, ROLE_BY_KEY, RoleKey, DEPARTMENTS, DEPT_BY_KEY,
   REGION_LABELS, formatRelativeTime, roleName,
@@ -288,6 +290,68 @@ function UserTable({
    AdminUsersPortal
    ────────────────────────────────────────────────────────────────── */
 
+/* ─────────────────────────────────────────────────────────────────────────
+   AdminNotificationsConfig — admin-managed email notification settings.
+   Stored in config/notifications. The provider API key lives in Netlify env
+   (RESEND_API_KEY); this UI only controls enabled + sender identity.
+   ───────────────────────────────────────────────────────────────────────── */
+function AdminNotificationsConfig({ currentUser }: { currentUser: UserProfile }) {
+  const [open, setOpen] = useState(false);
+  const [enabled, setEnabled] = useState(false);
+  const [senderName, setSenderName] = useState('جمعية ترميم');
+  const [senderEmail, setSenderEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'config', 'notifications'), snap => {
+      const d = snap.data() as { enabled?: boolean; senderName?: string; senderEmail?: string } | undefined;
+      if (d) { setEnabled(!!d.enabled); setSenderName(d.senderName || 'جمعية ترميم'); setSenderEmail(d.senderEmail || ''); }
+    }, e => console.error('notif config:', e));
+    return () => unsub();
+  }, []);
+
+  const save = async () => {
+    setBusy(true); setSaved(false);
+    try {
+      await setDoc(doc(db, 'config', 'notifications'),
+        { enabled, senderName: senderName.trim(), senderEmail: senderEmail.trim(), updatedAt: new Date().toISOString(), updatedBy: currentUser.id },
+        { merge: true });
+      setSaved(true); setTimeout(() => setSaved(false), 2500);
+    } catch (e) { console.error('save notif config:', e); alert('تعذّر حفظ الإعدادات.'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Card title="إعدادات الإشعارات بالبريد" icon={Bell}>
+      <button onClick={() => setOpen(o => !o)} className="text-xs font-bold text-fg-muted mb-2">{open ? 'إخفاء الإعدادات' : 'عرض الإعدادات'}</button>
+      {open && (
+        <div className="space-y-3">
+          <label className="flex items-center gap-2 text-sm text-fg cursor-pointer select-none">
+            <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} className="w-4 h-4 accent-[#43bba1]" />
+            تفعيل إرسال الإشعارات بالبريد الإلكتروني
+          </label>
+          <div>
+            <label className="block text-xs font-semibold text-fg-muted mb-1">اسم المُرسِل</label>
+            <input value={senderName} onChange={e => setSenderName(e.target.value)} placeholder="جمعية ترميم"
+              className="w-full px-3 py-2 rounded-lg border border-border-default bg-input-bg text-fg text-sm focus:outline-none focus:ring-2 focus:ring-[#4A1F66]" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-fg-muted mb-1">بريد المُرسِل (لا للرد)</label>
+            <input type="email" dir="ltr" value={senderEmail} onChange={e => setSenderEmail(e.target.value)} placeholder="noreply@tarmeem.org"
+              className="w-full px-3 py-2 rounded-lg border border-border-default bg-input-bg text-fg text-sm text-left focus:outline-none focus:ring-2 focus:ring-[#4A1F66]" />
+          </div>
+          <p className="text-[11px] text-fg-faint leading-5">يتطلب الإرسال الفعلي إعداد مزوّد البريد (Resend) ومفتاح API في إعدادات Netlify، والتحقق من نطاق tarmeem.org لمرة واحدة. هذه الإعدادات منفصلة تماماً عن حساب Google Drive.</p>
+          <div className="flex items-center gap-2">
+            <button disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-[#4A1F66] text-white text-sm font-bold disabled:opacity-50">{busy ? 'جارٍ الحفظ…' : 'حفظ'}</button>
+            {saved && <span className="text-xs text-[#43bba1] font-bold">تم الحفظ ✓</span>}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUser, reactivateUser, rejectUser, resetUserRole, currentUser, onOpenProfile }: AdminProps) {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<UserProfile | null>(null);
@@ -378,6 +442,7 @@ export function AdminUsersPortal({ users, approveUser, updateUser, deactivateUse
 
   return (
     <div dir="rtl" className="space-y-4">
+      {isAdmin && <AdminNotificationsConfig currentUser={currentUser} />}
       <Card title="بوابة إدارة المستخدمين والصلاحيات" icon={Shield} accent="gradient">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex-1 max-w-sm"><SearchBar value={search} onChange={setSearch} placeholder="بحث بالاسم أو البريد..." /></div>

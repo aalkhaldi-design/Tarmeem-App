@@ -136,6 +136,7 @@ export const F02Creator: FormCreator = ({ user, api, context, onClose }) => {
         caseRef:         data.caseRef,
         phase:           'RESEARCH',
         progressPct:     5,
+        projectType:     'restoration',
         createdBy:       user.id,
       });
       if (!projectRefId) throw new Error('Failed to create project');

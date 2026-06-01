@@ -468,6 +468,13 @@ export const portalAccessForRole = (role: RoleKey): DepartmentKey[] => {
    مساعدة: أرقام المشاريع المخصصة (TRM-YYYY-NNN)
    ────────────────────────────────────────────────────────────────── */
 
+export const PROJECT_TYPES: { key: string; label: string }[] = [
+  { key: 'restoration', label: 'ترميم' },
+  { key: 'maintenance', label: 'صيانة' },
+  { key: 'furnishing', label: 'تأثيث' },
+  { key: 'other', label: 'أخرى' },
+];
+
 export const formatProjectId = (year: number, serial: number) =>
   `TRM-${year}-${String(serial).padStart(3, '0')}`;
 

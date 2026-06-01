@@ -78,6 +78,14 @@ export interface ProjectRecord {
   createdBy: string;
   /** بيانات إضافية — مفتوحة لكنها مصنّفة */
   extraData?: Record<string, unknown>;
+  /** مشروع سابق مُسجَّل تاريخياً (يتخطّى مسار النماذج) */
+  legacy?: boolean;
+  /** نوع المشروع */
+  projectType?: string;
+  /** تاريخ إنجاز المشروع السابق */
+  completedAt?: string;
+  /** ملاحظة تسجيل المشروع السابق */
+  legacyNote?: string;
 }
 
 /* ──────────────────────────────────────────────────────────────────

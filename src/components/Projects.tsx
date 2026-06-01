@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Building2, MapPin, FileText, Activity, ArrowLeft, ChevronDown, ChevronUp, Lock, Plus,
+  Building2, MapPin, FileText, Activity, ArrowLeft, ChevronDown, ChevronUp, Lock, Plus, Archive,
 } from 'lucide-react';
 import { Card, Pill, ProgressBar, SearchBar, EmptyState } from './ui';
 import { FORM_BY_CODE, FormCode, FormDef, roleName, SaudiRiyalGlassIcon } from '../lib/data';
@@ -10,6 +10,7 @@ import type { ProjectRecord, FormsContext } from './forms/FormRenderers';
 import { RENDERERS } from './forms/FormRenderers';
 import type { UserProfile } from './Auth';
 import { ProjectActionsMenu } from './ProjectActionsMenu';
+import { LegacyProjectModal } from './LegacyProjectModal';
 import { FormErrorBoundary } from './forms/FormErrorBoundary';
 
 const PHASE_LABELS: Record<ProjectRecord['phase'], string> = {
@@ -43,11 +44,13 @@ interface MasterProjectListProps {
   users: UserProfile[];
   onOpenProject: (id: string) => void;
   onCreateForm: (code?: FormCode) => void;
+  context: FormsContext;
 }
 
-export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, onOpenProject, api, user, onCreateForm }) => {
+export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, onOpenProject, api, user, onCreateForm, context }) => {
   const [search, setSearch] = useState('');
   const [phaseFilter, setPhaseFilter] = useState<'all' | ProjectRecord['phase']>('all');
+  const [showLegacy, setShowLegacy] = useState(false);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -66,6 +69,7 @@ export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, 
 
   return (
     <div dir="rtl" className="space-y-4">
+      {showLegacy && <LegacyProjectModal user={user} context={context} onClose={() => setShowLegacy(false)} />}
       <Card title="قائمة المشاريع الرئيسية" icon={Building2} accent="gradient">
         <div className="flex flex-col md:flex-row gap-3 mb-4">
           <div className="flex-1"><SearchBar value={search} onChange={setSearch} placeholder="بحث برقم المشروع أو اسم المستفيد..." /></div>
@@ -73,6 +77,12 @@ export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, 
             <button onClick={() => onCreateForm('F-02')}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-[#4A1F66] text-white hover:bg-[#3A1652] transition shadow whitespace-nowrap">
               <Plus className="w-4 h-4" /> استمارة بحث جديدة
+            </button>
+          )}
+          {user.isAdmin && (
+            <button onClick={() => setShowLegacy(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-surface-up border border-subtle text-fg hover:bg-surface transition whitespace-nowrap">
+              <Archive className="w-4 h-4" /> تسجيل مشروع سابق
             </button>
           )}
           <div className="flex flex-wrap gap-2">

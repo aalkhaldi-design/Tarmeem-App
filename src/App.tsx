@@ -713,7 +713,7 @@ function App() {
           context={formsContext}
           onBack={() => setActiveProjectId(null)} onOpenForm={openForm} />
       ) : (
-        <MasterProjectList user={userProfile} api={formsApi} projects={projects} users={users} onOpenProject={openProject} onCreateForm={(c) => openCreator(c)} />
+        <MasterProjectList user={userProfile} api={formsApi} projects={projects} users={users} onOpenProject={openProject} onCreateForm={(c) => openCreator(c)} context={formsContext} />
       );
     }
     if (active === 'PROFILE' && profileTarget) {

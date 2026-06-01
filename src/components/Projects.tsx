@@ -3,7 +3,7 @@ import {
   Building2, MapPin, FileText, Activity, ArrowLeft, ChevronDown, ChevronUp, Lock, Plus, Archive,
 } from 'lucide-react';
 import { Card, Pill, ProgressBar, SearchBar, EmptyState } from './ui';
-import { FORM_BY_CODE, FormCode, FormDef, roleName, SaudiRiyalGlassIcon } from '../lib/data';
+import { FORM_BY_CODE, FormCode, FormDef, roleName, SaudiRiyalGlassIcon, PROJECT_TYPES } from '../lib/data';
 import { FormsApi, formAwaitsUser } from './Forms';
 import type { FormRecord } from './Forms';
 import type { ProjectRecord, FormsContext } from './forms/FormRenderers';
@@ -113,8 +113,8 @@ export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, 
                 <button key={p.id} onClick={() => onOpenProject(p.id)}
                   className="text-right rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:shadow-lg hover:border-[#4A1F66]/30 transition-all overflow-hidden group">
                   <div className="bg-gradient-to-l from-[#4A1F66] to-[#6B3D87] px-4 py-2.5 flex items-center justify-between text-white">
-                    <span className="text-sm font-bold truncate">{p.projectId}</span>
-                    <Pill tone={PHASE_TONES[p.phase]}>{PHASE_LABELS[p.phase]}</Pill>
+                    <span className="text-sm font-bold truncate flex items-center gap-1.5">{p.legacy && <Archive className="w-3.5 h-3.5 shrink-0" />}{p.projectId}</span>
+                    <Pill tone={PHASE_TONES[p.phase]}>{p.legacy ? 'مشروع سابق' : PHASE_LABELS[p.phase]}</Pill>
                   </div>
                   <div className="p-4 space-y-2">
                     <div>
@@ -125,7 +125,7 @@ export const MasterProjectList: React.FC<MasterProjectListProps> = ({ projects, 
                     </div>
                     <ProgressBar value={p.progressPct} label="التقدم" />
                     <div className="flex items-center justify-between text-[10px]">
-                      <span className="text-gray-500 dark:text-slate-400">{projectForms.length} نموذج</span>
+                      <span className="text-gray-500 dark:text-slate-400">{p.legacy ? (PROJECT_TYPES.find(t => t.key === p.projectType)?.label || 'مشروع سابق') : `${projectForms.length} نموذج`}</span>
                       <div className="flex items-center gap-1.5">
                         {pendingCount > 0 && <Pill tone="amber">{pendingCount} معلّق</Pill>}
                         {lateCount > 0 && <Pill tone="red">{lateCount} متأخر</Pill>}
@@ -215,6 +215,47 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({ project, user, use
       return [{ code, def, records }];
     });
   }, [projectForms, activePhase]);
+
+  if (project.legacy) {
+    const typeLabel = PROJECT_TYPES.find(t => t.key === project.projectType)?.label || project.projectType || '—';
+    return (
+      <div dir="rtl" className="space-y-4">
+        <button onClick={onBack} className="text-xs font-bold text-[#4A1F66] dark:text-purple-300 hover:underline flex items-center gap-1"><ArrowLeft className="w-4 h-4" /> العودة لقائمة المشاريع</button>
+        <div className="rounded-2xl p-6 text-white shadow-lg bg-gradient-to-l from-[#4A1F66] via-[#6B3D87] to-[#56B894]">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div>
+              <p className="text-xs text-white/70">{project.projectId}</p>
+              <h1 className="text-2xl font-bold mt-1">{project.beneficiaryName}</h1>
+              <p className="text-white/80 text-sm mt-1 flex items-center gap-2"><MapPin className="w-4 h-4" /> {project.city} {project.neighborhood ? `· ${project.neighborhood}` : ''}</p>
+            </div>
+            <div className="text-right">
+              <div className="flex items-center justify-end gap-2">
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-white/20 text-white"><Archive className="w-3 h-3" /> مشروع سابق</span>
+                <ProjectActionsMenu project={project} user={user} context={context} />
+              </div>
+              {project.completedAt && <p className="text-xs text-white/70 mt-2">تاريخ الإنجاز {new Date(project.completedAt).toLocaleDateString('ar-SA')}</p>}
+            </div>
+          </div>
+        </div>
+
+        <Card title="بيانات المشروع السابق" icon={Archive} accent="purple">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+            <div><p className="text-xs font-bold text-gray-500 dark:text-slate-400 mb-0.5">نوع المشروع</p><p className="font-bold">{typeLabel}</p></div>
+            <div><p className="text-xs font-bold text-gray-500 dark:text-slate-400 mb-0.5">تاريخ الإنجاز</p><p className="font-bold">{project.completedAt ? new Date(project.completedAt).toLocaleDateString('ar-SA') : '—'}</p></div>
+            <div><p className="text-xs font-bold text-gray-500 dark:text-slate-400 mb-0.5">الجهة الداعمة/الشريك</p><p className="font-bold">{project.partnerEntity || '—'}</p></div>
+            <div><p className="text-xs font-bold text-gray-500 dark:text-slate-400 mb-0.5">التكلفة</p><p className="font-bold flex items-center gap-1">{project.awardedPrice ? Number(project.awardedPrice).toLocaleString() : '—'}{project.awardedPrice ? <SaudiRiyalGlassIcon className="w-4 h-4 inline" /> : null}</p></div>
+          </div>
+          {project.legacyNote && (
+            <div className="mt-3">
+              <p className="text-xs font-bold text-gray-500 dark:text-slate-400 mb-1">ملاحظات</p>
+              <div className="bg-gray-50 dark:bg-slate-800 rounded-lg p-3 text-sm border border-gray-200 dark:border-slate-700 whitespace-pre-wrap">{project.legacyNote}</div>
+            </div>
+          )}
+          <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-3">سجلّ تاريخي مُسجَّل يدوياً — لا يتضمّن مسار النماذج.</p>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div dir="rtl" className="space-y-4">

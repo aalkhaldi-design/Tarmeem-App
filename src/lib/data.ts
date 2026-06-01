@@ -469,10 +469,8 @@ export const portalAccessForRole = (role: RoleKey): DepartmentKey[] => {
    ────────────────────────────────────────────────────────────────── */
 
 export const PROJECT_TYPES: { key: string; label: string }[] = [
-  { key: 'restoration', label: 'ترميم' },
-  { key: 'maintenance', label: 'صيانة' },
-  { key: 'furnishing', label: 'تأثيث' },
-  { key: 'other', label: 'أخرى' },
+  { key: 'restoration', label: 'مشروع ترميم' },
+  { key: 'maintenance', label: 'مشروع صيانة' },
 ];
 
 export const formatProjectId = (year: number, serial: number) =>

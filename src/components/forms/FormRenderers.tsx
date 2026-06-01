@@ -2087,7 +2087,7 @@ export const F14Creator: FormCreator = ({ user, api, context, onClose }) => {
 };
 
 type F14Room = { id: string; name: string; pct: string; note: string; images: TitledFile[] };
-type F14DeployItem = { id: string; label: string; qty: string; deployed: boolean; deployedQty: string; note: string };
+type F14DeployItem = { id: string; label: string; qty: string; deployed: boolean; deployedQty: string; note: string; lockedQty?: string };
 type F14Deploy = { furniture: F14DeployItem[]; appliances: F14DeployItem[]; materials: F14DeployItem[] };
 
 export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
@@ -2112,7 +2112,7 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
   const extractDeploy = (): F14Deploy => {
     const f21 = api.forms.find(f => f.code === 'F-21' && f.projectRefId === rec.projectRefId);
     const sec = (f21?.data?.f21_sections as any) || {};
-    const conv = (s: any): F14DeployItem[] => (((s?.rows as any[]) || [])).map((r: any) => ({ id: String(r.id), label: r.label || '', qty: String(r.qty || ''), deployed: false, deployedQty: '', note: '' }));
+    const conv = (s: any): F14DeployItem[] => (((s?.rows as any[]) || [])).map((r: any) => ({ id: String(r.id), label: r.label || '', qty: String(r.qty || ''), deployed: false, deployedQty: '', note: '', lockedQty: '0' }));
     return { furniture: conv(sec.furniture), appliances: conv(sec.appliances), materials: conv(sec.materials) };
   };
   const [deploy, setDeploy] = useState<F14Deploy>(() => {
@@ -2220,7 +2220,11 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
         f14_history: [...history, snapshot],
         f14_prev: { rooms: Object.fromEntries(rooms.map(r => [r.id, r.pct])), overallPct },
         f14_rooms: resetRooms,
-        f14_deploy: deploy,
+        f14_deploy: {
+          furniture: deploy.furniture.map(it => ({ ...it, lockedQty: String(Math.min(Number(it.qty || 0), Number(it.lockedQty || 0) + (it.deployed ? (Number(it.deployedQty || 0) || Number(it.qty || 0)) : 0))), deployed: false, deployedQty: '', note: '' })),
+          appliances: deploy.appliances.map(it => ({ ...it, lockedQty: String(Math.min(Number(it.qty || 0), Number(it.lockedQty || 0) + (it.deployed ? (Number(it.deployedQty || 0) || Number(it.qty || 0)) : 0))), deployed: false, deployedQty: '', note: '' })),
+          materials: deploy.materials.map(it => ({ ...it, lockedQty: String(Math.min(Number(it.qty || 0), Number(it.lockedQty || 0) + (it.deployed ? (Number(it.deployedQty || 0) || Number(it.qty || 0)) : 0))), deployed: false, deployedQty: '', note: '' })),
+        },
         f14_overallPct: '',
         f14_recommendation: '',
         requestScopeChange: false,
@@ -2313,23 +2317,42 @@ export const F14Renderer: FormRenderer = ({ rec, user, api }) => {
               deploy[cat].length === 0 ? null : (
                 <div key={cat} className="space-y-2">
                   <p className="text-xs font-bold text-fg-muted border-r-2 border-[#43bba1] pr-2">{title}</p>
-                  {deploy[cat].map(it => (
-                    <div key={it.id} className="p-2.5 rounded-xl border border-subtle bg-surface-up space-y-2">
-                      <label className="flex items-center gap-2 cursor-pointer select-none">
-                        <input type="checkbox" checked={it.deployed} disabled={!canEdit} onChange={e => updateDeployItem(cat, it.id, 'deployed', e.target.checked)} className="w-4 h-4 accent-[#43bba1]" />
-                        <span className="flex-1 text-sm font-bold">{it.label || '—'}</span>
-                        <span className="text-xs text-fg-muted">الكمية: {it.qty || '—'}</span>
-                      </label>
-                      {it.deployed && (
-                        <div className="flex items-center gap-2 flex-wrap pr-6">
-                          {Number(it.qty || 0) > 1 && (
-                            <label className="text-xs text-fg-muted">المُنفَّذ <input type="number" min="0" max={Number(it.qty || 0)} value={it.deployedQty} disabled={!canEdit} onChange={e => updateDeployItem(cat, it.id, 'deployedQty', e.target.value)} className="w-16 mr-1 px-2 py-1 rounded border border-subtle bg-surface text-xs" /></label>
-                          )}
-                          <input placeholder="ملاحظة (اختياري)" value={it.note} disabled={!canEdit} onChange={e => updateDeployItem(cat, it.id, 'note', e.target.value)} className="flex-1 min-w-[50%] px-2 py-1 rounded border border-subtle bg-surface text-xs" />
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                  {deploy[cat].map(it => {
+                    const locked = Number(it.lockedQty || 0);
+                    const total = Number(it.qty || 0);
+                    const remaining = Math.max(0, total - locked);
+                    const fullyDone = total > 0 && remaining === 0;
+                    return (
+                      <div key={it.id} className={`p-2.5 rounded-xl border border-subtle ${fullyDone ? 'bg-surface-up opacity-70' : 'bg-surface-up'} space-y-2`}>
+                        {locked > 0 && (
+                          <p className="text-[10px] text-fg-faint">مُنفَّذ سابقاً: {locked} من {it.qty || '—'}{fullyDone ? ' — مكتمل ✓' : ''}</p>
+                        )}
+                        {fullyDone ? (
+                          <div className="flex items-center gap-2">
+                            <span className="w-4 h-4 rounded-sm bg-[#43bba1]/40 flex items-center justify-center text-[10px] text-white">✓</span>
+                            <span className="flex-1 text-sm font-bold text-fg-muted">{it.label || '—'}</span>
+                            <span className="text-xs text-fg-faint">الكمية: {it.qty || '—'}</span>
+                          </div>
+                        ) : (
+                          <>
+                            <label className="flex items-center gap-2 cursor-pointer select-none">
+                              <input type="checkbox" checked={it.deployed} disabled={!canEdit} onChange={e => updateDeployItem(cat, it.id, 'deployed', e.target.checked)} className="w-4 h-4 accent-[#43bba1]" />
+                              <span className="flex-1 text-sm font-bold">{it.label || '—'}</span>
+                              <span className="text-xs text-fg-muted">{locked > 0 ? `المتبقي: ${remaining}` : `الكمية: ${it.qty || '—'}`}</span>
+                            </label>
+                            {it.deployed && (
+                              <div className="flex items-center gap-2 flex-wrap pr-6">
+                                {remaining > 1 && (
+                                  <label className="text-xs text-fg-muted">المُنفَّذ <input type="number" min="0" max={remaining} value={it.deployedQty} disabled={!canEdit} onChange={e => updateDeployItem(cat, it.id, 'deployedQty', e.target.value)} className="w-16 mr-1 px-2 py-1 rounded border border-subtle bg-surface text-xs" /></label>
+                                )}
+                                <input placeholder="ملاحظة (اختياري)" value={it.note} disabled={!canEdit} onChange={e => updateDeployItem(cat, it.id, 'note', e.target.value)} className="flex-1 min-w-[50%] px-2 py-1 rounded border border-subtle bg-surface text-xs" />
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )
             ))}

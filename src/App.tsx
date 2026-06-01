@@ -5,7 +5,7 @@ import {
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
   collection, onSnapshot, doc, updateDoc, addDoc, runTransaction,
-  query, where, orderBy, limit, writeBatch, serverTimestamp, arrayUnion, getDocs, deleteDoc,
+  query, where, orderBy, limit, writeBatch, serverTimestamp, arrayUnion, getDocs, getDoc, deleteDoc,
 } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
 import { getUserProfile, AuthScreen, type UserProfile } from './components/Auth';
@@ -162,7 +162,31 @@ function App() {
         meta: n.meta || {},
       });
     } catch (e) { console.error('Error dispatching notification:', e); }
-  }, []);
+
+    // Best-effort email layer — only if admin enabled it and a sender is configured. Never blocks the in-app notification.
+    try {
+      const cfgSnap = await getDoc(doc(db, 'config', 'notifications'));
+      const cfg = cfgSnap.data() as { enabled?: boolean; senderName?: string; senderEmail?: string } | undefined;
+      if (!cfg?.enabled || !cfg.senderEmail) return;
+      const ids = n.recipients || [];
+      const emails = Array.from(new Set(ids
+        .map(id => users.find(u => u.id === id)?.email)
+        .filter((e): e is string => !!e)));
+      if (emails.length === 0) return;
+      await fetch('/.netlify/functions/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: emails,
+          subject: n.subject || n.text.slice(0, 80),
+          text: n.text,
+          senderName: cfg.senderName || 'جمعية ترميم',
+          senderEmail: cfg.senderEmail,
+          link: n.link || null,
+        }),
+      });
+    } catch (e) { console.error('Email notification skipped:', e); }
+  }, [users]);
 
   const markNotificationRead = useCallback(async (notifId: string, userId: string) => {
     try {
